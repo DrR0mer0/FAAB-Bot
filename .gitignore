@@ -1,0 +1,14 @@
+# Yahoo OAuth secrets -- never commit
+.env
+yahoo_token.json
+
+# Regeneratable / binary artifacts -- not version-controlled
+*.db
+nflverse_raw/
+*.joblib
+
+# Real Yahoo league data, once that access comes through -- local-only
+league_data/
+
+# Python bytecode cache
+__pycache__/
