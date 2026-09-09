@@ -22,6 +22,10 @@ This is an active personal project, not a public product or service. It's built 
 
 Python, SQLite, XGBoost.
 
+## Project history
+
+An earlier, abandoned attempt at this project (mostly unimplemented placeholder scripts) is kept for historical context in [`legacy/`](legacy/).
+
 ---
 
 *Personal side project. Not affiliated with, endorsed by, or sponsored by the NFL, Yahoo, or any fantasy sports platform.*
