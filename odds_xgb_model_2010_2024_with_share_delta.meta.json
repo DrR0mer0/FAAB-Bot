@@ -1,0 +1,46 @@
+{
+  "model_file": "odds_xgb_model_2010_2024_with_share_delta.joblib",
+  "train_seasons": [
+    2010,
+    2011,
+    2012,
+    2013,
+    2014,
+    2015,
+    2016,
+    2017,
+    2018,
+    2020,
+    2021,
+    2022,
+    2023,
+    2024
+  ],
+  "feature_cols": [
+    "trailing_touches_avg",
+    "trailing_touches_trend",
+    "trailing_team_touch_share",
+    "opponent_position_matchup",
+    "experience_seasons",
+    "games_played_this_season",
+    "is_short_week",
+    "is_home",
+    "is_bye_return",
+    "starter_absent_proxy",
+    "share_delta_vs_prior_season"
+  ],
+  "hyperparameters": {
+    "objective": "binary:logistic",
+    "eval_metric": "aucpr",
+    "n_estimators": 200,
+    "max_depth": 4,
+    "learning_rate": 0.1,
+    "importance_type": "gain",
+    "random_state": 42,
+    "scale_pos_weight": 20.13
+  },
+  "trained_at": "2026-09-12T22:34:55.725105+00:00",
+  "git_commit": "262a04fda4a39cb4c16e568f1d28034a399169e7",
+  "role": "rejected_candidate",
+  "description": "share_delta_vs_prior_season candidate; beat baseline on 2023 (+0.033 P@10) but lost on the 2025 held-out test (0.2667 vs 0.2833 P@10) -- rejected, kept as the record"
+}

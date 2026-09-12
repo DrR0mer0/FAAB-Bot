@@ -19,6 +19,8 @@ import pandas as pd
 from sklearn.metrics import average_precision_score, f1_score, precision_score, recall_score
 from xgboost import XGBClassifier
 
+from model_metadata import write_metadata
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MODEL_PATH = str(REPO_ROOT / "odds_xgb_model.joblib")
 
@@ -170,6 +172,12 @@ def main():
         MODEL_PATH,
     )
     print(f"\n[SAVED] model persisted to {MODEL_PATH}")
+
+    meta_path, meta = write_metadata(
+        MODEL_PATH, REPO_ROOT, FEATURE_COLS, MODEL_PARAMS, winner_spw, FULL_TRAIN_SEASONS,
+        extra={"role": "validation", "description": "2010-2022-trained / 2023-2024-tested validation record; not used for live scoring"},
+    )
+    print(f"[SAVED] metadata sidecar written to {meta_path} (git_commit={meta['git_commit']})")
 
 
 if __name__ == "__main__":

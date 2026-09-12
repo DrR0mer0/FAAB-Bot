@@ -14,6 +14,7 @@ from xgboost import XGBClassifier
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "model"))
 from features_lib import FEATURE_COLS
+from model_metadata import write_metadata
 
 TRAIN_SEASONS = [s for s in range(2010, 2025) if s != 2019]  # 2010-2024, no 2019
 TEST_SEASONS = [2025]
@@ -106,6 +107,14 @@ def main():
         str(model_path),
     )
     print(f"\n[SAVED] {model_path}")
+
+    meta_path, meta = write_metadata(
+        model_path, REPO_ROOT, FEATURE_COLS, MODEL_PARAMS, SCALE_POS_WEIGHT, TRAIN_SEASONS,
+        extra={"role": "rejected_candidate",
+               "description": "share_delta_vs_prior_season candidate; beat baseline on 2023 (+0.033 P@10) "
+                               "but lost on the 2025 held-out test (0.2667 vs 0.2833 P@10) -- rejected, kept as the record"},
+    )
+    print(f"[SAVED] metadata sidecar written to {meta_path} (git_commit={meta['git_commit']})")
 
 
 if __name__ == "__main__":

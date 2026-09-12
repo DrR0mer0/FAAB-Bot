@@ -17,14 +17,17 @@ separately as a watch list, not folded into the ranking.
 """
 import argparse
 import csv
+import json
 import os
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 import joblib
 import numpy as np
 
 from features_lib import FEATURE_COLS, FeatureEngine
+from model_metadata import read_metadata
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -96,6 +99,7 @@ def main():
     ap.add_argument("--week", type=int, required=True)
     ap.add_argument("--top", type=int, default=25)
     ap.add_argument("--roster", default=None, help="defaults to nflverse_raw/roster_<season>.csv if present")
+    ap.add_argument("--json-out", default=None, help="if set, write the full scoring output (top N, scored pool, both watch lists, model identity) as JSON to this path")
     args = ap.parse_args()
 
     roster_path = args.roster or str(REPO_ROOT / "nflverse_raw" / f"roster_{args.season}.csv")
@@ -117,6 +121,11 @@ def main():
     unknown = set(feature_cols) - set(FEATURE_COLS)
     assert not unknown, f"saved model uses unknown feature columns: {unknown}"
     print(f"[INFO] model uses {len(feature_cols)} feature(s): {feature_cols}")
+
+    model_meta = read_metadata(args.model)
+    model_commit = model_meta.get("git_commit") if model_meta else None
+    print(f"[INFO] model identity: {Path(args.model).name}"
+          + (f" (git_commit={model_commit})" if model_commit else " (no metadata sidecar found -- commit hash unknown)"))
 
     con = sqlite3.connect(args.db)
     con.row_factory = sqlite3.Row
@@ -272,6 +281,86 @@ def main():
                 why = "prod+draft" if (via_prod and via_draft) else ("draft" if via_draft else "prod")
                 comp_strs.append(f"{names.get(c, c)} [{why}]")
             print(f"{display:24.24} {feat['_pos']:4} {team:5} {', '.join(comp_strs)}")
+
+    if args.json_out:
+        def player_record(pid, feat, score=None):
+            return {
+                "player_id": pid, "name": names.get(pid, pid),
+                "pos": feat["_pos"], "team": feat["_team"],
+                "score": float(score) if score is not None else None,
+            }
+
+        ranked_records = []
+        for rank, ((pid, feat), score) in enumerate(ranked, start=1):
+            rec = player_record(pid, feat, score)
+            rec["rank"] = rank
+            ranked_records.append(rec)
+
+        scored_pool_records = [
+            player_record(pid, feat, s)
+            for (pid, feat), s in sorted(zip(stable, proba), key=lambda x: x[1], reverse=True)
+        ]
+
+        team_changed_records = []
+        for pid, feat, old_team, new_team, corrected in team_changed_list:
+            team_changed_records.append({
+                "player_id": pid, "name": names.get(pid, pid), "pos": feat["_pos"],
+                "old_team": old_team, "new_team": new_team,
+                "reason": TEAM_CHANGE_REASON,
+                "corrected_features": {
+                    "opponent": corrected["_opp"], "is_home": corrected["is_home"],
+                    "is_short_week": corrected["is_short_week"],
+                    "starter_absent_proxy": corrected["starter_absent_proxy"],
+                    "opponent_position_matchup": corrected["opponent_position_matchup"],
+                },
+            })
+
+        new_competitor_records = []
+        for pid, feat, team, competitors in new_competitor_list:
+            comp_details = []
+            for c in competitors:
+                _, via_prod, via_draft = meaningful_threat(c, feat["_pos"])
+                comp_details.append({
+                    "player_id": c, "name": names.get(c, c),
+                    "via_production": via_prod, "via_draft_capital": via_draft,
+                })
+            new_competitor_records.append({
+                "player_id": pid, "name": names.get(pid, pid), "pos": feat["_pos"], "team": team,
+                "reason": NEW_COMPETITOR_REASON,
+                "new_competitors": comp_details,
+            })
+
+        output = {
+            "season": args.season,
+            "week": args.week,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "model": {
+                "path": str(Path(args.model).resolve()),
+                "filename": Path(args.model).name,
+                "git_commit": model_commit,
+                "role": model_meta.get("role") if model_meta else None,
+            },
+            "counts": {
+                "total_eligible": all_eligible_count,
+                "after_position_filter": len(candidates),
+                "stable_scored": len(stable),
+                "team_changed_suppressed": len(team_changed_list),
+                "new_competitor_suppressed": len(new_competitor_list),
+                "new_competitor_via_production_only": n_via_production_only,
+                "new_competitor_via_draft_only": n_via_draft_only,
+                "new_competitor_via_both": n_via_both,
+            },
+            "top": ranked_records,
+            "scored_pool": scored_pool_records,
+            "team_changed_watch_list": team_changed_records,
+            "new_competitor_watch_list": new_competitor_records,
+        }
+
+        json_out_path = Path(args.json_out)
+        json_out_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(json_out_path, "w", encoding="utf-8") as f:
+            json.dump(output, f, indent=2)
+        print(f"\n[SAVED] full scoring output written to {json_out_path}")
 
     con.close()
 

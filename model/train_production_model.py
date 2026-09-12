@@ -14,6 +14,8 @@ import joblib
 import pandas as pd
 from xgboost import XGBClassifier
 
+from model_metadata import write_metadata
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MODEL_PATH = str(REPO_ROOT / "odds_xgb_model_production.joblib")
 SCALE_POS_WEIGHT = 20.13  # validated in tune_and_finalize_xgboost.py
@@ -75,6 +77,12 @@ def main():
         MODEL_PATH,
     )
     print(f"\n[SAVED] production model persisted to {MODEL_PATH}")
+
+    meta_path, meta = write_metadata(
+        MODEL_PATH, REPO_ROOT, FEATURE_COLS, MODEL_PARAMS, SCALE_POS_WEIGHT, seasons,
+        extra={"role": "production", "description": "Live-scoring model used by score_week.py"},
+    )
+    print(f"[SAVED] metadata sidecar written to {meta_path} (git_commit={meta['git_commit']})")
 
 
 if __name__ == "__main__":
