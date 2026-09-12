@@ -6,13 +6,16 @@ features_lib.FeatureEngine, not by checking labels_player_week row existence.
 """
 import argparse
 import sqlite3
+from pathlib import Path
 
 from features_lib import FEATURE_COLS, FeatureEngine
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default="faab_history_core_v0_1.db")
+    ap.add_argument("--db", default=str(REPO_ROOT / "faab_history_core_v0_1.db"))
     args = ap.parse_args()
 
     con = sqlite3.connect(args.db)

@@ -15,6 +15,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 # spike_flag thresholds
 SPIKE_MULTIPLIER = 1.5
 SPIKE_MIN_POINTS = 10.0
@@ -90,7 +92,7 @@ def compute_points(rules, row):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default="faab_history_core_v0_1.db")
+    ap.add_argument("--db", default=str(REPO_ROOT / "faab_history_core_v0_1.db"))
     ap.add_argument("--seasons", nargs="+", type=int, default=[2022])
     ap.add_argument("--profile", default=HALF12_PROFILE_ID)
     args = ap.parse_args()

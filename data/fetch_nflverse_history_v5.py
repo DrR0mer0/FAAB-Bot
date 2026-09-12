@@ -14,6 +14,8 @@ from pathlib import Path
 
 import requests
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 
 def fetch(url):
     r = requests.get(url, timeout=60)
@@ -34,8 +36,8 @@ def maybe_gunzip_to(bytes_in, out_path: Path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seasons", nargs="+", type=int, required=True)
-    ap.add_argument("--manifest", default="manifest_nflverse.json")
-    ap.add_argument("--outdir", default="nflverse_raw")
+    ap.add_argument("--manifest", default=str(REPO_ROOT / "manifest_nflverse.json"))
+    ap.add_argument("--outdir", default=str(REPO_ROOT / "nflverse_raw"))
     args = ap.parse_args()
 
     out = Path(args.outdir)

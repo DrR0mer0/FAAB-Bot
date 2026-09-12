@@ -11,6 +11,7 @@ set is touched only here, once.
 """
 import argparse
 import sqlite3
+from pathlib import Path
 
 import joblib
 import numpy as np
@@ -18,7 +19,8 @@ import pandas as pd
 from sklearn.metrics import average_precision_score, f1_score, precision_score, recall_score
 from xgboost import XGBClassifier
 
-MODEL_PATH = "odds_xgb_model.joblib"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+MODEL_PATH = str(REPO_ROOT / "odds_xgb_model.joblib")
 
 TRAIN_SUB_SEASONS = list(range(2010, 2022))   # 2010-2021
 VAL_SEASONS = [2022]
@@ -69,7 +71,7 @@ def mean_precision_at_k(df, k):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default="faab_history_core_v0_1.db")
+    ap.add_argument("--db", default=str(REPO_ROOT / "faab_history_core_v0_1.db"))
     args = ap.parse_args()
 
     con = sqlite3.connect(args.db)

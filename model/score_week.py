@@ -19,11 +19,14 @@ import argparse
 import csv
 import os
 import sqlite3
+from pathlib import Path
 
 import joblib
 import numpy as np
 
 from features_lib import FEATURE_COLS, FeatureEngine
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Only these statuses represent a confirmed, current team assignment. CUT/RET/
 # EXE players aren't actually on the team a roster file last associated them
@@ -87,15 +90,15 @@ def load_roster_records(path, season):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default="faab_history_core_v0_1.db")
-    ap.add_argument("--model", default="odds_xgb_model_production.joblib")
+    ap.add_argument("--db", default=str(REPO_ROOT / "faab_history_core_v0_1.db"))
+    ap.add_argument("--model", default=str(REPO_ROOT / "odds_xgb_model_production.joblib"))
     ap.add_argument("--season", type=int, required=True)
     ap.add_argument("--week", type=int, required=True)
     ap.add_argument("--top", type=int, default=25)
     ap.add_argument("--roster", default=None, help="defaults to nflverse_raw/roster_<season>.csv if present")
     args = ap.parse_args()
 
-    roster_path = args.roster or f"nflverse_raw/roster_{args.season}.csv"
+    roster_path = args.roster or str(REPO_ROOT / "nflverse_raw" / f"roster_{args.season}.csv")
     roster_team_of, team_pos_roster, draft_pick_of = {}, {}, {}
     if os.path.exists(roster_path):
         roster_team_of, team_pos_roster, draft_pick_of = load_roster_records(roster_path, args.season)
@@ -162,7 +165,7 @@ def main():
     # half12 scoring profile) -- read them from the raw fetched prior-season
     # CSV instead of extending the core schema for one threshold check.
     qb_attempts_2025 = {}
-    raw_2025_path = f"nflverse_raw/stats_player_week_{prior_season}.csv"
+    raw_2025_path = str(REPO_ROOT / "nflverse_raw" / f"stats_player_week_{prior_season}.csv")
     if os.path.exists(raw_2025_path):
         with open(raw_2025_path, encoding="utf-8") as f:
             for r in csv.DictReader(f):

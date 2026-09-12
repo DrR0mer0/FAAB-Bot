@@ -4,11 +4,13 @@ import argparse
 import sqlite3
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default="faab_history_core_v0_1.db")
-    ap.add_argument("--schema", default="_init_schema.sql")
+    ap.add_argument("--db", default=str(REPO_ROOT / "faab_history_core_v0_1.db"))
+    ap.add_argument("--schema", default=str(Path(__file__).resolve().parent / "_init_schema.sql"))
     args = ap.parse_args()
 
     schema_sql = Path(args.schema).read_text(encoding="utf-8")

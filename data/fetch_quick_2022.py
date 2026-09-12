@@ -4,6 +4,8 @@ import json, sys, os, gzip, shutil
 from pathlib import Path
 import argparse, requests
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 def fetch(url):
     r = requests.get(url, timeout=60); r.raise_for_status(); return r.content
 
@@ -16,8 +18,8 @@ def maybe_gunzip_to(bytes_in, out_path: Path):
 
 def main():
     ap = argparse.ArgumentParser(description="Minimal fetcher for 2022 using manifest")
-    ap.add_argument("--manifest", default="manifest_nflverse.json")
-    ap.add_argument("--outdir", default="nflverse_raw")
+    ap.add_argument("--manifest", default=str(REPO_ROOT / "manifest_nflverse.json"))
+    ap.add_argument("--outdir", default=str(REPO_ROOT / "nflverse_raw"))
     ap.add_argument("--year", type=int, default=2022)
     args = ap.parse_args()
 

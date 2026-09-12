@@ -4,11 +4,14 @@
 eval_share_delta_on_2025.py, for a direct side-by-side comparison.
 """
 import sqlite3
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from sklearn.metrics import average_precision_score, f1_score, precision_score, recall_score
 from xgboost import XGBClassifier
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 BASE_FEATURE_COLS = [
     "trailing_touches_avg", "trailing_touches_trend", "trailing_team_touch_share",
@@ -49,7 +52,7 @@ def mean_precision_at_k(df, k):
 
 def main():
     seasons = TRAIN_SEASONS + TEST_SEASONS
-    con = sqlite3.connect("faab_history_core_v0_1.db")
+    con = sqlite3.connect(str(REPO_ROOT / "faab_history_core_v0_1.db"))
     ph = ",".join("?" * len(seasons))
     df = pd.read_sql_query(
         f"""SELECT f.season, f.week, f.player_id, {", ".join("f." + c for c in BASE_FEATURE_COLS)}, l.spike_flag
@@ -101,11 +104,12 @@ def main():
         print(f"  {name}: {imp:.4f}")
 
     import joblib
+    model_path = REPO_ROOT / "odds_xgb_model_production.joblib"
     joblib.dump(
         {"model": model, "feature_cols": BASE_FEATURE_COLS, "scale_pos_weight": SCALE_POS_WEIGHT, "train_seasons": TRAIN_SEASONS},
-        "odds_xgb_model_production.joblib",
+        str(model_path),
     )
-    print("\n[SAVED] this baseline model persisted as odds_xgb_model_production.joblib (winner on 2025 P@10)")
+    print(f"\n[SAVED] this baseline model persisted as {model_path} (winner on 2025 P@10)")
 
 
 if __name__ == "__main__":

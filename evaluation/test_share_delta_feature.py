@@ -4,12 +4,16 @@ baseline (9 features) vs candidate (9 + new feature) on 2010-2022, compare
 mean precision@10 on 2023 only. 2024 and 2025 are left untouched.
 """
 import sqlite3
+import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from sklearn.metrics import average_precision_score
 from xgboost import XGBClassifier
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "model"))
 from features_lib import FeatureEngine
 
 # NOTE: this experiment already won and share_delta_vs_prior_season was
@@ -48,7 +52,7 @@ def mean_precision_at_k(df, k):
 
 def main():
     seasons = TRAIN_SEASONS + [TEST_SEASON]
-    con = sqlite3.connect("faab_history_core_v0_1.db")
+    con = sqlite3.connect(str(REPO_ROOT / "faab_history_core_v0_1.db"))
     con.row_factory = sqlite3.Row
     ph = ",".join("?" * len(seasons))
     df = pd.read_sql_query(

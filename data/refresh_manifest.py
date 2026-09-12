@@ -5,7 +5,9 @@ refresh_manifest.py  (v3 — uses GitHub Releases)
 Builds a manifest of player-week and schedules CSVs from nflverse/nflverse-data Releases.
 """
 import argparse, json, os, sys, requests
+from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
 REPO = "nflverse/nflverse-data"
 TAGS = {
     "player_stats": "player_stats",   # assets like stats_player_week_YYYY.csv
@@ -21,7 +23,7 @@ def get_release_by_tag(tag, headers):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="manifest_nflverse.json")
+    ap.add_argument("--out", default=str(REPO_ROOT / "manifest_nflverse.json"))
     ap.add_argument("--token", default=os.environ.get("GITHUB_TOKEN"))
     args = ap.parse_args()
 

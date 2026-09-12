@@ -1,7 +1,9 @@
 
 import argparse, sqlite3, os, sys
+from pathlib import Path
+REPO_ROOT = Path(__file__).resolve().parent.parent
 ap = argparse.ArgumentParser()
-ap.add_argument("--db", default="faab_history_core_v0_1.db")
+ap.add_argument("--db", default=str(REPO_ROOT / "faab_history_core_v0_1.db"))
 args = ap.parse_args()
 
 exists = os.path.exists(args.db)

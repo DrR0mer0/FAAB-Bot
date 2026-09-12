@@ -8,12 +8,14 @@ is left untouched as the validation record -- it is not used for scoring.
 """
 import argparse
 import sqlite3
+from pathlib import Path
 
 import joblib
 import pandas as pd
 from xgboost import XGBClassifier
 
-MODEL_PATH = "odds_xgb_model_production.joblib"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+MODEL_PATH = str(REPO_ROOT / "odds_xgb_model_production.joblib")
 SCALE_POS_WEIGHT = 20.13  # validated in tune_and_finalize_xgboost.py
 
 FEATURE_COLS = [
@@ -42,7 +44,7 @@ MODEL_PARAMS = dict(
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default="faab_history_core_v0_1.db")
+    ap.add_argument("--db", default=str(REPO_ROOT / "faab_history_core_v0_1.db"))
     args = ap.parse_args()
 
     con = sqlite3.connect(args.db)

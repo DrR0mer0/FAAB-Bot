@@ -10,6 +10,8 @@ import csv
 import sqlite3
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 
 def to_float(v):
     if v is None or v == "":
@@ -120,8 +122,8 @@ def load_nfl_games(con, folder: Path, season: int):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default="faab_history_core_v0_1.db")
-    ap.add_argument("--folder", default="nflverse_raw")
+    ap.add_argument("--db", default=str(REPO_ROOT / "faab_history_core_v0_1.db"))
+    ap.add_argument("--folder", default=str(REPO_ROOT / "nflverse_raw"))
     ap.add_argument("--seasons", nargs="+", type=int, default=[2022])
     args = ap.parse_args()
 

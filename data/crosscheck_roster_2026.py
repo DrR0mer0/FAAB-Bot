@@ -11,10 +11,14 @@ silently overwrite the label.
 import argparse
 import csv
 import sqlite3
+import sys
+from pathlib import Path
 
 import joblib
 import numpy as np
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "model"))
 from features_lib import FeatureEngine
 from score_week import get_eligible_candidates
 
@@ -42,9 +46,9 @@ def load_roster_team_map(path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default="faab_history_core_v0_1.db")
-    ap.add_argument("--model", default="odds_xgb_model_production.joblib")
-    ap.add_argument("--roster", default="nflverse_raw/roster_2026.csv")
+    ap.add_argument("--db", default=str(REPO_ROOT / "faab_history_core_v0_1.db"))
+    ap.add_argument("--model", default=str(REPO_ROOT / "odds_xgb_model_production.joblib"))
+    ap.add_argument("--roster", default=str(REPO_ROOT / "nflverse_raw" / "roster_2026.csv"))
     ap.add_argument("--season", type=int, default=2026)
     ap.add_argument("--week", type=int, default=1)
     ap.add_argument("--top", type=int, default=25)

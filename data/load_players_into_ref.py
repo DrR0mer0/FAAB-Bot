@@ -5,6 +5,8 @@ import csv
 import sqlite3
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 
 def to_int(v):
     if v is None or v == "":
@@ -17,8 +19,8 @@ def to_int(v):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default="faab_history_core_v0_1.db")
-    ap.add_argument("--csv", default="nflverse_raw/players.csv")
+    ap.add_argument("--db", default=str(REPO_ROOT / "faab_history_core_v0_1.db"))
+    ap.add_argument("--csv", default=str(REPO_ROOT / "nflverse_raw" / "players.csv"))
     args = ap.parse_args()
 
     path = Path(args.csv)
