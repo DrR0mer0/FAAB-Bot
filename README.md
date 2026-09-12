@@ -56,6 +56,8 @@ model/score_week.py --season Y --week W # score an upcoming week
 
 **Scoring is data-driven.** League scoring rules live in a `scoring_profiles` table as JSON, so re-scoring history under different league settings needs no code changes.
 
+**Training isn't bit-reproducible.** XGBoost's histogram-building isn't strictly deterministic across runs even with a fixed `random_state`, so retraining from a model's metadata sidecar reproduces the same architecture, hyperparameters, and data — not the same scores. Committed prediction artifacts under `predictions/` are the authoritative record of what a given model actually predicted; a regenerated model is not expected to reproduce them exactly.
+
 ## What didn't work
 
 Kept deliberately, because the failures were as informative as the wins.

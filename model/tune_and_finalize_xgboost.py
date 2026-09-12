@@ -24,9 +24,9 @@ from model_metadata import write_metadata
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MODEL_PATH = str(REPO_ROOT / "odds_xgb_model.joblib")
 
-TRAIN_SUB_SEASONS = list(range(2010, 2022))   # 2010-2021
+TRAIN_SUB_SEASONS = [s for s in range(2010, 2022) if s != 2019]   # 2010-2021, excl. missing 2019
 VAL_SEASONS = [2022]
-FULL_TRAIN_SEASONS = list(range(2010, 2023))  # 2010-2022
+FULL_TRAIN_SEASONS = [s for s in range(2010, 2023) if s != 2019]  # 2010-2022, excl. missing 2019
 TEST_SEASONS = [2023, 2024]
 
 CANDIDATE_SPW = [1, 5, 10, None, 30]  # None -> filled in with the actual imbalance ratio

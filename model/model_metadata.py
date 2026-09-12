@@ -4,6 +4,15 @@
 the sidecar is a small, committed JSON file, so provenance -- training
 seasons, feature list, hyperparameters, and the exact code commit that
 produced the model -- survives even though the model artifact doesn't.
+
+Important: this metadata describes how a model was trained, not a
+guarantee that rerunning the same code reproduces the same model.
+XGBoost's histogram-building isn't strictly deterministic across runs
+even with a fixed random_state, so re-training from this metadata will
+give a model with the same architecture/hyperparameters/data but not
+bit-identical scores. Committed prediction artifacts (predictions/*.json)
+are the authoritative record of what a given model actually predicted --
+never assume a regenerated model will reproduce them exactly.
 """
 import json
 import subprocess

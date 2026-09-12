@@ -10,7 +10,6 @@
     2016,
     2017,
     2018,
-    2019,
     2020,
     2021,
     2022
@@ -37,8 +36,8 @@
     "random_state": 42,
     "scale_pos_weight": 20.129276105060857
   },
-  "trained_at": "2026-09-12T22:34:46.075638+00:00",
-  "git_commit": "262a04fda4a39cb4c16e568f1d28034a399169e7",
+  "trained_at": "2026-09-12T22:43:05.079302+00:00",
+  "git_commit": "cecaa725d44af6d87747959b9f91833b29532c50",
   "role": "validation",
   "description": "2010-2022-trained / 2023-2024-tested validation record; not used for live scoring"
 }
