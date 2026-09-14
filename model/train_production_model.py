@@ -14,24 +14,12 @@ import joblib
 import pandas as pd
 from xgboost import XGBClassifier
 
+from features_lib import PRODUCTION_FEATURE_COLS
 from model_metadata import write_metadata
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MODEL_PATH = str(REPO_ROOT / "odds_xgb_model_production.joblib")
 SCALE_POS_WEIGHT = 20.13  # validated in tune_and_finalize_xgboost.py
-
-FEATURE_COLS = [
-    "trailing_touches_avg",
-    "trailing_touches_trend",
-    "trailing_team_touch_share",
-    "opponent_position_matchup",
-    "experience_seasons",
-    "games_played_this_season",
-    "is_short_week",
-    "is_home",
-    "is_bye_return",
-    "starter_absent_proxy",
-]
 
 MODEL_PARAMS = dict(
     objective="binary:logistic",
@@ -51,7 +39,7 @@ def main():
 
     con = sqlite3.connect(args.db)
     df = pd.read_sql_query(
-        f"""SELECT f.season, f.week, f.player_id, {", ".join("f." + c for c in FEATURE_COLS)}, l.spike_flag
+        f"""SELECT f.season, f.week, f.player_id, {", ".join("f." + c for c in PRODUCTION_FEATURE_COLS)}, l.spike_flag
            FROM player_week_features f
            JOIN labels_player_week l
              ON f.season=l.season AND f.week=l.week AND f.player_id=l.player_id""",
@@ -63,23 +51,23 @@ def main():
     print(f"Training rows: {len(df)}, seasons: {seasons}")
     print(f"Spike rate: {df['spike_flag'].mean():.4f}")
 
-    X, y = df[FEATURE_COLS], df["spike_flag"]
+    X, y = df[PRODUCTION_FEATURE_COLS], df["spike_flag"]
     model = XGBClassifier(scale_pos_weight=SCALE_POS_WEIGHT, **MODEL_PARAMS)
     model.fit(X, y)
 
     print("\n=== Feature importances (gain) ===")
-    for name, imp in sorted(zip(FEATURE_COLS, model.feature_importances_), key=lambda x: x[1], reverse=True):
+    for name, imp in sorted(zip(PRODUCTION_FEATURE_COLS, model.feature_importances_), key=lambda x: x[1], reverse=True):
         print(f"  {name}: {imp:.4f}")
 
     joblib.dump(
-        {"model": model, "feature_cols": FEATURE_COLS, "scale_pos_weight": SCALE_POS_WEIGHT,
+        {"model": model, "feature_cols": PRODUCTION_FEATURE_COLS, "scale_pos_weight": SCALE_POS_WEIGHT,
          "train_seasons": seasons, "model_params": MODEL_PARAMS},
         MODEL_PATH,
     )
     print(f"\n[SAVED] production model persisted to {MODEL_PATH}")
 
     meta_path, meta = write_metadata(
-        MODEL_PATH, REPO_ROOT, FEATURE_COLS, MODEL_PARAMS, SCALE_POS_WEIGHT, seasons,
+        MODEL_PATH, REPO_ROOT, PRODUCTION_FEATURE_COLS, MODEL_PARAMS, SCALE_POS_WEIGHT, seasons,
         extra={"role": "production", "description": "Live-scoring model used by score_week.py"},
     )
     print(f"[SAVED] metadata sidecar written to {meta_path} (git_commit={meta['git_commit']})")

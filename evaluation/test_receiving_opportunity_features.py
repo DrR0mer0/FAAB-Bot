@@ -22,20 +22,13 @@ from xgboost import XGBClassifier
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "model"))
-from features_lib import FeatureEngine, RECEIVING_OPPORTUNITY_FEATURES
+from features_lib import PRODUCTION_FEATURE_COLS, FeatureEngine, RECEIVING_OPPORTUNITY_FEATURES
 
-# Current production feature set (train_production_model.py / the metadata
-# sidecar of odds_xgb_model_production.joblib) -- deliberately NOT
-# features_lib.FEATURE_COLS, which still carries share_delta_vs_prior_season:
-# that feature won its 2023 validation slice but lost the 2025 held-out test
-# and was never actually adopted into the production model (see CLAUDE.md
-# "Methodology rules" and evaluation/eval_share_delta_on_2025.py's
-# "rejected_candidate" metadata).
-BASE_FEATURE_COLS = [
-    "trailing_touches_avg", "trailing_touches_trend", "trailing_team_touch_share",
-    "opponent_position_matchup", "experience_seasons", "games_played_this_season",
-    "is_short_week", "is_home", "is_bye_return", "starter_absent_proxy",
-]
+# Current production feature set (features_lib.PRODUCTION_FEATURE_COLS --
+# what train_production_model.py actually trains on). Deliberately NOT
+# features_lib.PERSISTED_FEATURE_COLS, which also carries the rejected
+# share_delta_vs_prior_season (see features_lib.py for why the two differ).
+BASE_FEATURE_COLS = PRODUCTION_FEATURE_COLS
 CANDIDATE_FEATURES = RECEIVING_OPPORTUNITY_FEATURES
 ALL_COLS = BASE_FEATURE_COLS + CANDIDATE_FEATURES
 

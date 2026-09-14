@@ -13,7 +13,7 @@ from xgboost import XGBClassifier
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "model"))
-from features_lib import FEATURE_COLS
+from features_lib import PERSISTED_FEATURE_COLS as FEATURE_COLS  # this evaluation deliberately uses the full share_delta-inclusive set
 from model_metadata import write_metadata
 
 TRAIN_SEASONS = [s for s in range(2010, 2025) if s != 2019]  # 2010-2024, no 2019

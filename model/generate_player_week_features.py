@@ -8,7 +8,7 @@ import argparse
 import sqlite3
 from pathlib import Path
 
-from features_lib import FEATURE_COLS, FeatureEngine
+from features_lib import PERSISTED_FEATURE_COLS, FeatureEngine
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -33,12 +33,12 @@ def main():
             feat = engine.compute_features(season, week, pid)
             if feat is None:
                 continue
-            to_insert.append((season, week, pid, *[feat[c] for c in FEATURE_COLS]))
+            to_insert.append((season, week, pid, *[feat[c] for c in PERSISTED_FEATURE_COLS]))
 
     ph = ",".join("?" * len(seasons))
     con.execute(f"DELETE FROM player_week_features WHERE season IN ({ph})", seasons)
-    cols_sql = ", ".join(FEATURE_COLS)
-    placeholders = ",".join("?" * (3 + len(FEATURE_COLS)))
+    cols_sql = ", ".join(PERSISTED_FEATURE_COLS)
+    placeholders = ",".join("?" * (3 + len(PERSISTED_FEATURE_COLS)))
     con.executemany(
         f"""INSERT OR REPLACE INTO player_week_features
            (season, week, player_id, {cols_sql})
@@ -52,8 +52,8 @@ def main():
     # ---- validation report ----
     total = len(to_insert)
     print(f"\nNULL rates per feature (n={total}):")
-    for c in FEATURE_COLS:
-        idx = 3 + FEATURE_COLS.index(c)
+    for c in PERSISTED_FEATURE_COLS:
+        idx = 3 + PERSISTED_FEATURE_COLS.index(c)
         n_null = sum(1 for row in to_insert if row[idx] is None)
         pct = 100.0 * n_null / total if total else 0.0
         print(f"  {c}: {n_null} NULL ({pct:.2f}%)")

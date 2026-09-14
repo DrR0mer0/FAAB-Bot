@@ -26,7 +26,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 
-from features_lib import FEATURE_COLS, FeatureEngine
+from features_lib import PERSISTED_FEATURE_COLS, FeatureEngine
 from model_metadata import read_metadata
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -114,11 +114,12 @@ def main():
     bundle = joblib.load(args.model)
     model = bundle["model"]
     feature_cols = bundle["feature_cols"]
-    # The saved model may use any subset of what compute_features() returns
-    # (e.g. the production model can be the 9-feature baseline while
-    # features_lib computes 10) -- just check it's a real subset, not an
-    # exact match against whatever features_lib currently computes.
-    unknown = set(feature_cols) - set(FEATURE_COLS)
+    # The saved model may use any subset of PERSISTED_FEATURE_COLS (e.g. the
+    # production model trains on features_lib.PRODUCTION_FEATURE_COLS, a
+    # strict subset that excludes the rejected share_delta_vs_prior_season --
+    # see features_lib.py for why) -- just check it's a real subset, not an
+    # exact match.
+    unknown = set(feature_cols) - set(PERSISTED_FEATURE_COLS)
     assert not unknown, f"saved model uses unknown feature columns: {unknown}"
     print(f"[INFO] model uses {len(feature_cols)} feature(s): {feature_cols}")
 

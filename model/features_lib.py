@@ -41,7 +41,18 @@ def linreg_slope(ys):
     return num / den if den else 0.0
 
 
-FEATURE_COLS = [
+# Every feature persisted into player_week_features -- the complete
+# historical record. This legitimately includes share_delta_vs_prior_season:
+# that feature won its 2023 validation slice, got folded in here and trained
+# into a real candidate model, then lost the 2025 held-out test and was
+# rejected (see CLAUDE.md "Methodology rules" and
+# evaluation/eval_share_delta_on_2025.py's "rejected_candidate" metadata).
+# It stays in the persisted table (a historical record) and in the rejected
+# candidate's own joblib, but the *production* model never trained on it --
+# hence PRODUCTION_FEATURE_COLS below, a strict subset. This split is
+# intentional, not drift: don't merge them back into one list, and don't
+# "fix" PRODUCTION_FEATURE_COLS by adding share_delta back to it.
+PERSISTED_FEATURE_COLS = [
     "trailing_touches_avg",
     "trailing_touches_trend",
     "trailing_team_touch_share",
@@ -55,10 +66,15 @@ FEATURE_COLS = [
     "share_delta_vs_prior_season",
 ]
 
+# What the live-scoring production model actually trains and scores on
+# (train_production_model.py / odds_xgb_model_production.joblib) --
+# PERSISTED_FEATURE_COLS minus the rejected share_delta_vs_prior_season.
+PRODUCTION_FEATURE_COLS = [c for c in PERSISTED_FEATURE_COLS if c != "share_delta_vs_prior_season"]
+
 # Group 1 hypothesis: receiving-opportunity features, computed by
-# compute_features() but NOT part of FEATURE_COLS -- not yet adopted into
-# any persisted table or production model. See evaluation/ for the group's
-# held-out test.
+# compute_features() but NOT part of PERSISTED_FEATURE_COLS or
+# PRODUCTION_FEATURE_COLS -- not yet adopted into any persisted table or
+# production model. See evaluation/ for the group's held-out test.
 RECEIVING_OPPORTUNITY_FEATURES = [
     "trailing_target_share",
     "trailing_air_yards_share",
@@ -342,11 +358,12 @@ class FeatureEngine:
         }
 
     def compute_features(self, season, week, player_id):
-        """Returns a dict of FEATURE_COLS plus RECEIVING_OPPORTUNITY_FEATURES
-        (the latter not yet part of any persisted table or production
-        model -- see RECEIVING_OPPORTUNITY_FEATURES), or None if the player
-        isn't eligible (<3 prior games, respecting season-gap boundaries) as
-        of (season, week). Uses only data strictly before (season, week)."""
+        """Returns a dict of PERSISTED_FEATURE_COLS plus
+        RECEIVING_OPPORTUNITY_FEATURES (the latter not yet part of any
+        persisted table or production model -- see
+        RECEIVING_OPPORTUNITY_FEATURES), or None if the player isn't
+        eligible (<3 prior games, respecting season-gap boundaries) as of
+        (season, week). Uses only data strictly before (season, week)."""
         window = self._touches_window(player_id, season, week)
         if len(window) < MIN_PRIOR_GAMES:
             return None
