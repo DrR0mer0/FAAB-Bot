@@ -21,7 +21,22 @@ def main():
 
         # CREATE TABLE IF NOT EXISTS won't add a column to an already-existing
         # table, so reconcile columns for tables that pre-date a schema change.
-        for table, col, coltype in [("player_week_features", "share_delta_vs_prior_season", "REAL")]:
+        for table, col, coltype in [
+            ("player_week_features", "share_delta_vs_prior_season", "REAL"),
+            ("player_week_stats", "attempts", "REAL"),
+            ("player_week_stats", "completions", "REAL"),
+            ("player_week_stats", "passing_air_yards", "REAL"),
+            ("player_week_stats", "receiving_air_yards", "REAL"),
+            ("player_week_stats", "target_share", "REAL"),
+            ("player_week_stats", "air_yards_share", "REAL"),
+            ("player_week_stats", "racr", "REAL"),
+            ("player_week_stats", "pacr", "REAL"),
+            ("player_week_stats", "wopr", "REAL"),
+            ("player_week_stats", "passing_epa", "REAL"),
+            ("player_week_stats", "rushing_epa", "REAL"),
+            ("player_week_stats", "receiving_epa", "REAL"),
+            ("player_week_stats", "passing_cpoe", "REAL"),
+        ]:
             existing_cols = {row[1] for row in con.execute(f"PRAGMA table_info({table})")}
             if existing_cols and col not in existing_cols:
                 con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}")

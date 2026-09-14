@@ -30,6 +30,12 @@ CREATE TABLE IF NOT EXISTS player_week_stats (
   fg_made REAL, fg_att REAL, xp_made REAL, xp_att REAL,
   def_sacks REAL, def_int REAL, def_td REAL, def_pa REAL, def_ya REAL,
   snaps_off REAL, snaps_def REAL, snaps_st REAL,
+  attempts REAL, completions REAL,
+  passing_air_yards REAL, receiving_air_yards REAL,
+  target_share REAL, air_yards_share REAL,
+  racr REAL, pacr REAL, wopr REAL,
+  passing_epa REAL, rushing_epa REAL, receiving_epa REAL,
+  passing_cpoe REAL,
   PRIMARY KEY (season, week, player_id)
 );
 
