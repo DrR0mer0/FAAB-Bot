@@ -55,6 +55,16 @@ FEATURE_COLS = [
     "share_delta_vs_prior_season",
 ]
 
+# Group 1 hypothesis: receiving-opportunity features, computed by
+# compute_features() but NOT part of FEATURE_COLS -- not yet adopted into
+# any persisted table or production model. See evaluation/ for the group's
+# held-out test.
+RECEIVING_OPPORTUNITY_FEATURES = [
+    "trailing_target_share",
+    "trailing_air_yards_share",
+    "trailing_adot",
+]
+
 
 class FeatureEngine:
     def __init__(self, con: sqlite3.Connection):
@@ -158,6 +168,20 @@ class FeatureEngine:
             pid: fs for pid, fs in con.execute("SELECT player_id, first_season FROM ref_players")
         }
 
+        # recv_game_stats[(player_id, season, week)] = (target_share, air_yards_share,
+        # receiving_air_yards, rec_tgt) for that single game -- source for the
+        # Group 1 receiving-opportunity features. Not playoff-filtered here;
+        # only ever looked up via a window already built from player_history,
+        # which is.
+        self.recv_game_stats = {
+            (r["player_id"], r["season"], r["week"]): (
+                r["target_share"], r["air_yards_share"], r["receiving_air_yards"], r["rec_tgt"],
+            )
+            for r in con.execute(
+                "SELECT season, week, player_id, target_share, air_yards_share, receiving_air_yards, rec_tgt FROM player_week_stats"
+            )
+        }
+
         # actual_team_pos[(season,week,player_id)] = (team, pos) as recorded for
         # that exact week -- ground truth when the week has already been played
         # (e.g. after a trade). Only a future, not-yet-played week has to fall
@@ -239,6 +263,40 @@ class FeatureEngine:
                 shares.append(t / team_total)
         return (sum(shares) / len(shares)) if shares else None
 
+    def _trailing_receiving_opportunity(self, player_id, season, week, pos, window):
+        """Group 1 hypothesis features: trailing_target_share,
+        trailing_air_yards_share, trailing_adot -- averaged over the exact
+        same last-3-eligible-game window as the touches-based features
+        (caller has already confirmed len(window) >= MIN_PRIOR_GAMES).
+
+        NULL computed directly for QB rows, not computed then overridden --
+        a QB's target share is structurally meaningless the same way touch
+        share is for K/P elsewhere in this file. Per-game aDOT
+        (receiving_air_yards / rec_tgt) is undefined for a zero-target game
+        and excluded from its own average; if none of the 3 games have a
+        defined aDOT, trailing_adot is None."""
+        if pos == "QB":
+            return None, None, None
+
+        last3 = window[-MIN_PRIOR_GAMES:]
+        ts_vals, ays_vals, adot_vals = [], [], []
+        for (s, w, _tm, _pos, _t) in last3:
+            rec = self.recv_game_stats.get((player_id, s, w))
+            if rec is None:
+                continue
+            target_share, air_yards_share, receiving_air_yards, targets = rec
+            if target_share is not None:
+                ts_vals.append(target_share)
+            if air_yards_share is not None:
+                ays_vals.append(air_yards_share)
+            if targets and receiving_air_yards is not None:
+                adot_vals.append(receiving_air_yards / targets)
+
+        trailing_target_share = (sum(ts_vals) / len(ts_vals)) if ts_vals else None
+        trailing_air_yards_share = (sum(ays_vals) / len(ays_vals)) if ays_vals else None
+        trailing_adot = (sum(adot_vals) / len(adot_vals)) if adot_vals else None
+        return trailing_target_share, trailing_air_yards_share, trailing_adot
+
     def compute_schedule_dependent_features(self, season, week, team, pos, player_id):
         """The 4 features that depend on which team the player is actually on
         this week (opponent, home/away, short week, presumed-starter check),
@@ -284,9 +342,11 @@ class FeatureEngine:
         }
 
     def compute_features(self, season, week, player_id):
-        """Returns a dict of the 10 features, or None if the player isn't
-        eligible (<3 prior games, respecting season-gap boundaries) as of
-        (season, week). Uses only data strictly before (season, week)."""
+        """Returns a dict of FEATURE_COLS plus RECEIVING_OPPORTUNITY_FEATURES
+        (the latter not yet part of any persisted table or production
+        model -- see RECEIVING_OPPORTUNITY_FEATURES), or None if the player
+        isn't eligible (<3 prior games, respecting season-gap boundaries) as
+        of (season, week). Uses only data strictly before (season, week)."""
         window = self._touches_window(player_id, season, week)
         if len(window) < MIN_PRIOR_GAMES:
             return None
@@ -330,6 +390,10 @@ class FeatureEngine:
         else:
             share_delta_vs_prior_season = touch_share - prior_season_avg_share
 
+        trailing_target_share, trailing_air_yards_share, trailing_adot = self._trailing_receiving_opportunity(
+            player_id, season, week, pos, window
+        )
+
         return {
             "trailing_touches_avg": avg_touches,
             "trailing_touches_trend": trend,
@@ -342,6 +406,9 @@ class FeatureEngine:
             "is_bye_return": is_bye_return,
             "starter_absent_proxy": starter_absent_proxy,
             "share_delta_vs_prior_season": share_delta_vs_prior_season,
+            "trailing_target_share": trailing_target_share,
+            "trailing_air_yards_share": trailing_air_yards_share,
+            "trailing_adot": trailing_adot,
             "_team": team,
             "_pos": pos,
             "_opp": opp,
