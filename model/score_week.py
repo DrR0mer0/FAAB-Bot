@@ -12,8 +12,18 @@ candidates are cross-referenced against it. A confirmed offseason team change
 dependent features (opponent matchup, home/away, short week, presumed-starter
 check) recomputed for the corrected team -- but the model score is suppressed
 entirely, since usage features (touches, touch share) still reflect the old
-team and there's no real data yet for the new one. Those players are reported
-separately as a watch list, not folded into the ranking.
+team and there's no real data yet for the new one. A meaningful new
+same-position competitor (judged from 2025 production or 2026 draft capital)
+suppresses the incumbent's score the same way, on the theory that their
+trailing touch share predates the competition. Those players are reported
+separately as watch lists, not folded into the ranking.
+
+Both suppressions are released automatically, and identically, once a player
+has >= features_lib.MIN_PRIOR_GAMES games in the CURRENT season: at that
+point their trailing window (used for touches/touch-share/etc.) is built
+entirely from this season's real data, so no stale prior-season usage feeds
+any feature and the offseason concern no longer applies -- regardless of
+what the static roster/production checks would otherwise say.
 """
 import argparse
 import csv
@@ -26,7 +36,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 
-from features_lib import PERSISTED_FEATURE_COLS, FeatureEngine
+from features_lib import MIN_PRIOR_GAMES, PERSISTED_FEATURE_COLS, FeatureEngine
 from model_metadata import read_metadata
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -69,6 +79,41 @@ def get_eligible_candidates(engine, season, week):
             continue
         candidates.append((pid, feat))
     return candidates
+
+
+def render_markdown_report(output):
+    """Renders the same content already written to --json-out as a
+    markdown report, matching the style of evaluation/verify_week.py's
+    _verified.md reports so prediction and verification files read
+    consistently. Takes exactly the dict shape written as JSON (or one
+    read back from a previously-written file, e.g. model/render_prediction_
+    report.py), so a report can be (re)rendered without recomputing or
+    altering the JSON itself."""
+    counts = output["counts"]
+    model = output.get("model") or {}
+    lines = [
+        f"# Predictions: {output['season']} week {output['week']}",
+        "",
+        f"Model: `{model.get('filename')}` (commit `{model.get('git_commit')}`)",
+        "",
+        f"Generated: {output.get('generated_at')}",
+        "",
+        f"- Total eligible: {counts['total_eligible']}",
+        f"- After position filter (QB/RB/WR/TE): {counts['after_position_filter']}",
+        f"- Stable scored: {counts['stable_scored']}"
+        + (f" ({counts['released_from_offseason_suppression']} released from offseason suppression this week)"
+           if counts.get("released_from_offseason_suppression") is not None else ""),
+        f"- Team-changed suppressed: {counts['team_changed_suppressed']}",
+        f"- New-competitor suppressed: {counts['new_competitor_suppressed']} "
+        f"({counts['new_competitor_via_production_only']} via production, "
+        f"{counts['new_competitor_via_draft_only']} via draft, {counts['new_competitor_via_both']} via both)",
+        "",
+        "| Rank | Name | Pos | Team | Score |",
+        "|---:|---|---|---|---:|",
+    ]
+    for r in output["top"]:
+        lines.append(f"| {r['rank']} | {r['name']} | {r['pos']} | {r['team']} | {r['score']:.4f} |")
+    return "\n".join(lines) + "\n"
 
 
 def load_roster_records(path, season):
@@ -201,7 +246,21 @@ def main():
 
     stable, team_changed_list, new_competitor_list = [], [], []
     n_via_production_only = n_via_draft_only = n_via_both = 0
+    n_released_by_recency = 0
     for pid, feat in candidates:
+        # Release both offseason suppressions once this player's trailing
+        # window is built entirely from current-season games -- see the
+        # module docstring. games_played_this_season already counts real
+        # games strictly before this week, so >= MIN_PRIOR_GAMES here means
+        # the last MIN_PRIOR_GAMES window (what every trailing feature
+        # actually uses) can no longer reach back into stale prior-season
+        # data, independent of what the static roster/production checks
+        # below would otherwise conclude.
+        if feat["games_played_this_season"] >= MIN_PRIOR_GAMES:
+            stable.append((pid, feat))
+            n_released_by_recency += 1
+            continue
+
         inferred_team = feat["_team"]
         roster_team = roster_team_of.get(pid)
 
@@ -236,7 +295,8 @@ def main():
         else:
             stable.append((pid, feat))
 
-    print(f"[INFO] {len(stable)} stable candidates scored; "
+    print(f"[INFO] {len(stable)} stable candidates scored ({n_released_by_recency} of those released from "
+          f"offseason suppression this week, having reached {MIN_PRIOR_GAMES}+ current-season games); "
           f"{len(team_changed_list)} team-changed (score suppressed); "
           f"{len(new_competitor_list)} with a meaningful new same-position competitor this offseason (score suppressed)")
     print(f"[INFO]   of those {len(new_competitor_list)}: {n_via_production_only} via prior-production threshold only, "
@@ -345,6 +405,7 @@ def main():
                 "total_eligible": all_eligible_count,
                 "after_position_filter": len(candidates),
                 "stable_scored": len(stable),
+                "released_from_offseason_suppression": n_released_by_recency,
                 "team_changed_suppressed": len(team_changed_list),
                 "new_competitor_suppressed": len(new_competitor_list),
                 "new_competitor_via_production_only": n_via_production_only,
@@ -362,6 +423,10 @@ def main():
         with open(json_out_path, "w", encoding="utf-8") as f:
             json.dump(output, f, indent=2)
         print(f"\n[SAVED] full scoring output written to {json_out_path}")
+
+        md_out_path = json_out_path.with_suffix(".md")
+        md_out_path.write_text(render_markdown_report(output), encoding="utf-8")
+        print(f"[SAVED] markdown report written to {md_out_path}")
 
     con.close()
 
