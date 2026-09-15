@@ -81,6 +81,16 @@ RECEIVING_OPPORTUNITY_FEATURES = [
     "trailing_adot",
 ]
 
+# Group 2 hypothesis: QB volume + team pass-catcher mix, computed by
+# compute_features() but NOT part of PERSISTED_FEATURE_COLS or
+# PRODUCTION_FEATURE_COLS -- not yet adopted into any persisted table or
+# production model. See evaluation/ for the group's held-out test.
+QB_VOLUME_FEATURES = [
+    "trailing_pass_attempts",
+    "trailing_pass_air_yards",
+    "trailing_team_wr_target_rate",
+]
+
 
 class FeatureEngine:
     def __init__(self, con: sqlite3.Connection):
@@ -198,6 +208,30 @@ class FeatureEngine:
             )
         }
 
+        # qb_game_stats[(player_id, season, week)] = (attempts, passing_air_yards)
+        # for that single game -- source for the Group 2 QB-volume features.
+        # Same lookup pattern as recv_game_stats.
+        self.qb_game_stats = {
+            (r["player_id"], r["season"], r["week"]): (r["attempts"], r["passing_air_yards"])
+            for r in con.execute("SELECT season, week, player_id, attempts, passing_air_yards FROM player_week_stats")
+        }
+
+        # team_week_wr_targets / team_week_rb_targets[(season,week,team)] =
+        # total targets that week to players at that position on that team --
+        # source for the Group 2 trailing_team_wr_target_rate feature.
+        # Playoff-filtered like team_week_touches, since it's only ever
+        # looked up via a window already built from player_history.
+        self.team_week_wr_targets = {}
+        self.team_week_rb_targets = {}
+        for r in con.execute("SELECT season, week, team, pos, rec_tgt FROM player_week_stats"):
+            if (r["season"], r["week"], r["team"]) in self._playoff_team_weeks:
+                continue
+            if r["pos"] not in ("WR", "RB"):
+                continue
+            k = (r["season"], r["week"], r["team"])
+            bucket = self.team_week_wr_targets if r["pos"] == "WR" else self.team_week_rb_targets
+            bucket[k] = bucket.get(k, 0) + (r["rec_tgt"] or 0)
+
         # actual_team_pos[(season,week,player_id)] = (team, pos) as recorded for
         # that exact week -- ground truth when the week has already been played
         # (e.g. after a trade). Only a future, not-yet-played week has to fall
@@ -313,6 +347,48 @@ class FeatureEngine:
         trailing_adot = (sum(adot_vals) / len(adot_vals)) if adot_vals else None
         return trailing_target_share, trailing_air_yards_share, trailing_adot
 
+    def _trailing_qb_volume(self, player_id, pos, last3):
+        """Group 2 hypothesis features: trailing_pass_attempts,
+        trailing_pass_air_yards -- averaged over the exact same
+        last-3-eligible-game window as the touches-based features (caller
+        has already confirmed eligibility).
+
+        NULL computed directly for non-QB rows, not computed then
+        overridden -- pass volume is structurally meaningless for a player
+        who doesn't throw the ball, the same pattern used for the Group 1
+        features and the K/P no-touch-signal gate elsewhere in this file."""
+        if pos != "QB":
+            return None, None
+
+        att_vals, ay_vals = [], []
+        for (s, w, _tm, _pos, _t) in last3:
+            rec = self.qb_game_stats.get((player_id, s, w))
+            if rec is None:
+                continue
+            attempts, passing_air_yards = rec
+            if attempts is not None:
+                att_vals.append(attempts)
+            if passing_air_yards is not None:
+                ay_vals.append(passing_air_yards)
+
+        trailing_pass_attempts = (sum(att_vals) / len(att_vals)) if att_vals else None
+        trailing_pass_air_yards = (sum(ay_vals) / len(ay_vals)) if ay_vals else None
+        return trailing_pass_attempts, trailing_pass_air_yards
+
+    def _trailing_team_wr_target_rate(self, last3):
+        """Group 2 hypothesis feature: trailing_team_wr_target_rate --
+        ratio of (summed WR targets) to (summed WR+RB targets) for the
+        player's own team across the exact same last-3-eligible-game
+        window as the touches-based features (ratio-of-sums, same pattern
+        as _trailing_touch_share). Not position-gated: it describes the
+        offense the player is part of, not the player themselves, so it
+        applies at every position, including the QB throwing those
+        targets."""
+        wr_sum = sum(self.team_week_wr_targets.get((s, w, tm), 0) for (s, w, tm, _, _) in last3)
+        rb_sum = sum(self.team_week_rb_targets.get((s, w, tm), 0) for (s, w, tm, _, _) in last3)
+        denom = wr_sum + rb_sum
+        return (wr_sum / denom) if denom else None
+
     def compute_schedule_dependent_features(self, season, week, team, pos, player_id):
         """The 4 features that depend on which team the player is actually on
         this week (opponent, home/away, short week, presumed-starter check),
@@ -359,11 +435,11 @@ class FeatureEngine:
 
     def compute_features(self, season, week, player_id):
         """Returns a dict of PERSISTED_FEATURE_COLS plus
-        RECEIVING_OPPORTUNITY_FEATURES (the latter not yet part of any
-        persisted table or production model -- see
-        RECEIVING_OPPORTUNITY_FEATURES), or None if the player isn't
-        eligible (<3 prior games, respecting season-gap boundaries) as of
-        (season, week). Uses only data strictly before (season, week)."""
+        RECEIVING_OPPORTUNITY_FEATURES and QB_VOLUME_FEATURES (neither
+        group is yet part of any persisted table or production model --
+        see their definitions above), or None if the player isn't eligible
+        (<3 prior games, respecting season-gap boundaries) as of (season,
+        week). Uses only data strictly before (season, week)."""
         window = self._touches_window(player_id, season, week)
         if len(window) < MIN_PRIOR_GAMES:
             return None
@@ -411,6 +487,9 @@ class FeatureEngine:
             player_id, season, week, pos, window
         )
 
+        trailing_pass_attempts, trailing_pass_air_yards = self._trailing_qb_volume(player_id, pos, last3)
+        trailing_team_wr_target_rate = self._trailing_team_wr_target_rate(last3)
+
         return {
             "trailing_touches_avg": avg_touches,
             "trailing_touches_trend": trend,
@@ -426,6 +505,9 @@ class FeatureEngine:
             "trailing_target_share": trailing_target_share,
             "trailing_air_yards_share": trailing_air_yards_share,
             "trailing_adot": trailing_adot,
+            "trailing_pass_attempts": trailing_pass_attempts,
+            "trailing_pass_air_yards": trailing_pass_air_yards,
+            "trailing_team_wr_target_rate": trailing_team_wr_target_rate,
             "_team": team,
             "_pos": pos,
             "_opp": opp,
