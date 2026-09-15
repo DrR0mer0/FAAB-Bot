@@ -1,0 +1,29 @@
+{
+  "weeks": [
+    {
+      "season": 2026,
+      "week": 1,
+      "verified_at": "2026-09-15T15:24:37.621870+00:00",
+      "prediction_file": "predictions\\2026_week01.json",
+      "model": {
+        "path": "C:\\FAAB\\history\\odds_xgb_model_production.joblib",
+        "filename": "odds_xgb_model_production.joblib",
+        "git_commit": "262a04fda4a39cb4c16e568f1d28034a399169e7",
+        "role": "production"
+      },
+      "precision_at_10": {
+        "hits": 0,
+        "n": 10,
+        "precision": 0.0
+      },
+      "precision_at_25": {
+        "hits": 3,
+        "n": 25,
+        "precision": 0.12
+      },
+      "base_rate": 0.04938271604938271,
+      "n_dnp": 8,
+      "n_no_label": 0
+    }
+  ]
+}

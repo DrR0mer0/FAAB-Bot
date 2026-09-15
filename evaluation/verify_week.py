@@ -20,8 +20,15 @@ baseline, which is exactly the thing a "spike" is defined relative to.
 import argparse
 import json
 import sqlite3
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Windows' default console codepage (cp1252) can't encode the checkmark/cross
+# status marks printed below; without this, the script dies partway through
+# the per-player table -- before the log and markdown report are written.
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PREDICTIONS_DIR = REPO_ROOT / "predictions"
