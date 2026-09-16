@@ -50,8 +50,17 @@ def linreg_slope(ys):
 # It stays in the persisted table (a historical record) and in the rejected
 # candidate's own joblib, but the *production* model never trained on it --
 # hence PRODUCTION_FEATURE_COLS below, a strict subset. This split is
-# intentional, not drift: don't merge them back into one list, and don't
-# "fix" PRODUCTION_FEATURE_COLS by adding share_delta back to it.
+# intentional, not drift: don't merge share_delta back into
+# PRODUCTION_FEATURE_COLS.
+#
+# trailing_target_share / trailing_air_yards_share / trailing_adot are the
+# Group 1 (receiving-opportunity) features: tested against the 10-feature
+# production baseline on 2024 and promoted after a per-position re-test
+# showed a genuine, position-appropriate win (WR +0.10 P@10, TE +0.033),
+# not a QB-reallocation artifact -- see evaluation/test_receiving_
+# opportunity_features.py (kept as the historical record of that test) and
+# RECEIVING_OPPORTUNITY_FEATURES below. Unlike share_delta, these ARE part
+# of PRODUCTION_FEATURE_COLS.
 PERSISTED_FEATURE_COLS = [
     "trailing_touches_avg",
     "trailing_touches_trend",
@@ -64,17 +73,22 @@ PERSISTED_FEATURE_COLS = [
     "is_bye_return",
     "starter_absent_proxy",
     "share_delta_vs_prior_season",
+    "trailing_target_share",
+    "trailing_air_yards_share",
+    "trailing_adot",
 ]
 
 # What the live-scoring production model actually trains and scores on
 # (train_production_model.py / odds_xgb_model_production.joblib) --
 # PERSISTED_FEATURE_COLS minus the rejected share_delta_vs_prior_season.
+# 13 features as of the Group 1 promotion (10 original + the 3 above).
 PRODUCTION_FEATURE_COLS = [c for c in PERSISTED_FEATURE_COLS if c != "share_delta_vs_prior_season"]
 
-# Group 1 hypothesis: receiving-opportunity features, computed by
-# compute_features() but NOT part of PERSISTED_FEATURE_COLS or
-# PRODUCTION_FEATURE_COLS -- not yet adopted into any persisted table or
-# production model. See evaluation/ for the group's held-out test.
+# Group 1 (receiving-opportunity features): promoted into
+# PERSISTED_FEATURE_COLS and PRODUCTION_FEATURE_COLS above. Kept as its own
+# named list only because evaluation/test_receiving_opportunity_features.py
+# (the historical record of the hypothesis test that got it promoted) still
+# imports it -- not a separate candidate group anymore.
 RECEIVING_OPPORTUNITY_FEATURES = [
     "trailing_target_share",
     "trailing_air_yards_share",

@@ -245,6 +245,10 @@ def main():
           f"-- both counted as non-hits in precision@k above, not silently dropped from the denominator")
 
     print(f"\n=== Per-position precision@{PER_POSITION_K} (from the full scored pool) ===")
+    print("(base rate below is each position's OWN spike rate among all eligible players at that")
+    print(" position -- a different, position-specific denominator from the pooled base rate above.")
+    print(" Not directly comparable across positions or against the pooled figure; each row's lift")
+    print(" is only meaningful against that row's own base rate.)")
     for pos in POSITIONS:
         print("  " + fmt_metric(per_pos[pos], pos))
 
@@ -308,6 +312,11 @@ def main():
         + f", P@25 {cum_hits25}/{cum_n25}" + (f" = {cum_p25:.4f}" if cum_p25 is not None else ""),
         "",
         f"## Per-position precision@{PER_POSITION_K} (from the full scored pool)",
+        "",
+        "*Base rate is each position's own spike rate among all eligible players at that position -- "
+        "a different, position-specific denominator from the pooled base rate above. Not directly "
+        "comparable across positions or against the pooled figure; each row's lift is only meaningful "
+        "against that row's own base rate.*",
         "",
         "| Pos | Hits/N | Precision | Base rate | Lift |",
         "|---|---:|---:|---:|---:|",

@@ -1,9 +1,26 @@
 {
+  "model_changes": [
+    {
+      "changed_at": "2026-09-16T03:42:49.972430+00:00",
+      "note": "Production model promoted from 10 features to 13 (Group 1: trailing_target_share, trailing_air_yards_share, trailing_adot added). Weeks verified with a \"model.git_commit\" of previous_model_git_commit below (or earlier) used the 10-feature model -- see odds_xgb_model_production_10feature.meta.json, preserved on disk for comparison. Weeks with new_model_git_commit (or later) use the 13-feature model. The production filename (odds_xgb_model_production.joblib) is unchanged across this boundary, so do not use it alone to tell old vs new predictions apart -- use git_commit. Do not average cumulative precision across this boundary without accounting for the model change.",
+      "previous_model_file": "odds_xgb_model_production_10feature.joblib",
+      "previous_model_git_commit": "262a04fda4a39cb4c16e568f1d28034a399169e7",
+      "previous_model_feature_count": 10,
+      "new_model_file": "odds_xgb_model_production.joblib",
+      "new_model_git_commit": "7f21e5c966e0d82d049181e3965d661425e01643",
+      "new_model_feature_count": 13,
+      "new_features_added": [
+        "trailing_target_share",
+        "trailing_air_yards_share",
+        "trailing_adot"
+      ]
+    }
+  ],
   "weeks": [
     {
       "season": 2026,
       "week": 1,
-      "verified_at": "2026-09-16T01:20:15.090768+00:00",
+      "verified_at": "2026-09-16T03:44:07.690815+00:00",
       "prediction_file": "predictions\\2026_week01.json",
       "model": {
         "path": "C:\\FAAB\\history\\odds_xgb_model_production.joblib",

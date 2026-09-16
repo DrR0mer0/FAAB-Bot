@@ -11,6 +11,8 @@ Model: `odds_xgb_model_production.joblib` (commit `262a04fda4a39cb4c16e568f1d280
 
 ## Per-position precision@10 (from the full scored pool)
 
+*Base rate is each position's own spike rate among all eligible players at that position -- a different, position-specific denominator from the pooled base rate above. Not directly comparable across positions or against the pooled figure; each row's lift is only meaningful against that row's own base rate.*
+
 | Pos | Hits/N | Precision | Base rate | Lift |
 |---|---:|---:|---:|---:|
 | QB | 2/10 | 0.2000 | 0.2500 | 0.8x |

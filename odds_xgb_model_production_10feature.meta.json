@@ -1,5 +1,5 @@
 {
-  "model_file": "odds_xgb_model_production.joblib",
+  "model_file": "odds_xgb_model_production_10feature.joblib",
   "train_seasons": [
     2010,
     2011,
@@ -27,10 +27,7 @@
     "is_short_week",
     "is_home",
     "is_bye_return",
-    "starter_absent_proxy",
-    "trailing_target_share",
-    "trailing_air_yards_share",
-    "trailing_adot"
+    "starter_absent_proxy"
   ],
   "hyperparameters": {
     "objective": "binary:logistic",
@@ -42,8 +39,8 @@
     "random_state": 42,
     "scale_pos_weight": 20.13
   },
-  "trained_at": "2026-09-16T03:42:09.491490+00:00",
-  "git_commit": "7f21e5c966e0d82d049181e3965d661425e01643",
-  "role": "production",
-  "description": "Live-scoring model used by score_week.py. 13 features -- promoted with Group 1 (trailing_target_share, trailing_air_yards_share, trailing_adot) added to the prior 10-feature set. The superseded 10-feature model is preserved as odds_xgb_model_production_10feature.joblib for comparison."
+  "trained_at": "2026-09-12T22:34:36.559387+00:00",
+  "git_commit": "262a04fda4a39cb4c16e568f1d28034a399169e7",
+  "role": "superseded_production",
+  "description": "Pre-Group1 production model (10 features, no receiving-opportunity features). Was the live-scoring model used by score_week.py for 2026 weeks 1-2; superseded by odds_xgb_model_production.joblib (13 features) when Group 1 was promoted. Kept on disk under this filename for comparison against the promoted model."
 }

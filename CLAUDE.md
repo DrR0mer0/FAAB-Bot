@@ -8,6 +8,8 @@ A personal Fantasy Football analysis assistant, built for one person's 12-team Y
 
 Honest performance, from a strict out-of-time test (trained 2010–2024, evaluated once on 2025): **precision@10 ≈ 28%**, against a base spike rate of **≈4.3%** — roughly a 6–7x lift over random. That's a useful weekly signal, not a predictor of individual outcomes. It's a **ranking** tool: it will be wrong most of the time, by design.
 
+That number describes the **10-feature** model actually used for that held-out test. The current production model has since been promoted to **13 features** (Group 1 — see Methodology rules) and trained on 2010–2025; it has not yet had a genuine held-out test of its own (see Backlog), so treat its real-world precision as unconfirmed until a future season settles it.
+
 A weekly league recap layer (Yahoo Fantasy API, read-only) is planned but not yet built, pending API access approval.
 
 ## League settings
@@ -56,7 +58,7 @@ The SQLite database, `nflverse_raw/`, and all `.joblib` model files are gitignor
 
 ## Known model limitations
 
-- **QB scores are unreliable.** The dominant feature, touch share (carries + receptions), measures only rushing volume for a QB — a proxy for mobility, not for role or passing workload. A passing-volume feature is on the backlog, not yet built.
+- **QB scores are unreliable.** The dominant feature, touch share (carries + receptions), measures only rushing volume for a QB — a proxy for mobility, not for role or passing workload. A simple passing-volume feature (Group 2: trailing pass attempts, trailing pass air yards) was tried and **rejected** — see Methodology rules — so this limitation stands; a richer, play-by-play-derived version remains on the backlog.
 - **No concept of teammates competing.** Touch share is computed per player, so two backs splitting one backfield can both rank highly without the model registering that they're taking carries from each other.
 - **Offseason staleness is handled by suppression, not guessing.** Before a player has games on a new roster, usage features describe a role that no longer exists. `score_week.py` detects this (confirmed team change, or a meaningful new same-position competitor added this offseason — judged by prior-season production or early-round draft capital) and excludes the player from ranking with `score: null` and a reason, rather than publishing a number built on stale data.
 
@@ -77,7 +79,11 @@ The SQLite database, `nflverse_raw/`, and all `.joblib` model files are gitignor
 - A test set is used **once**, then considered closed. Don't re-run comparisons against an already-closed test year.
 - A new feature is adopted only if it **wins on held-out data against a pre-registered metric** — never because the theory behind it sounds right.
 
-Two features were built, tested, and **rejected** by this discipline: a usage-trend feature (negligible importance) and a season-over-season touch-share delta (won on a 2023 validation slice, then lost on the 2025 held-out test — the result that actually decided it). `evaluation/` holds that record; don't re-litigate a rejected feature without a genuinely new held-out test.
+Three feature candidates have been **rejected** by this discipline: a usage-trend feature (negligible importance); a season-over-season touch-share delta (won on a 2023 validation slice, then lost on the 2025 held-out test — the result that actually decided it); and Group 2, QB volume (trailing pass attempts, trailing pass air yards, team WR-target rate) — it won pooled precision@10 on a 2024 re-test, but a per-position re-evaluation showed that win traced entirely to the model reallocating picks toward QBs (a ~4x higher base rate than the pooled population), with essentially no movement at RB, WR, or TE. Pooled precision@k alone can't be trusted to catch this; per-position precision (`evaluation/metrics.py`) is now checked on every feature-group test for exactly this reason.
+
+One candidate has been **adopted**: Group 1, receiving opportunity (`trailing_target_share`, `trailing_air_yards_share`, `trailing_adot`; NULL for QB rows). The same per-position re-test confirmed a genuine, position-appropriate win — WR +0.10 precision@10, TE +0.033 — not a reallocation artifact, and it's now part of `PRODUCTION_FEATURE_COLS` (13 features total). The production model trained on 2010–2025 with this set is `odds_xgb_model_production.joblib`; the superseded 10-feature model is preserved as `odds_xgb_model_production_10feature.joblib` for comparison. `predictions/verification_log.json` carries an explicit `model_changes` marker at this boundary — the production filename didn't change, so `git_commit` (not the filename) is what distinguishes weeks scored before vs. after this promotion.
+
+`evaluation/` holds the record of all four tests; don't re-litigate a rejected feature without a genuinely new held-out test.
 
 ## Data sources
 
@@ -90,6 +96,7 @@ XGBoost training is **not bit-reproducible** across runs, even with a fixed `ran
 
 ## Backlog
 
-- Play-by-play-derived features: an O-line quality proxy, red-zone touch/target share, QB aDOT and passing volume (to address the QB-unreliability limitation above)
-- A positional leaderboard split (separate rankings per position, rather than one pooled ranking)
+- Play-by-play-derived features: an O-line quality proxy, red-zone touch/target share, true QB aDOT and passing volume (a simpler passing-volume version was tried as Group 2 and rejected — see Methodology rules; this play-by-play version is a different, richer attempt at the same QB-unreliability limitation)
+- A positional leaderboard split (separate rankings per position, rather than one pooled ranking) — the evaluation layer already does this (`evaluation/metrics.py` per-position precision); the live weekly ranking in `score_week.py` still pools everything into one list
 - Weekly narrative/newsletter layer, once Yahoo API access is approved
+- A genuine held-out test for the 13-feature production model — 2024 was reused for its promotion (not virgin), so its real out-of-time performance isn't confirmed yet; the last honest, fully-held-out number on record is the 10-feature model's 2025 result

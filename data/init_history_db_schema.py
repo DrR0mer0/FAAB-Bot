@@ -36,6 +36,9 @@ def main():
             ("player_week_stats", "rushing_epa", "REAL"),
             ("player_week_stats", "receiving_epa", "REAL"),
             ("player_week_stats", "passing_cpoe", "REAL"),
+            ("player_week_features", "trailing_target_share", "REAL"),
+            ("player_week_features", "trailing_air_yards_share", "REAL"),
+            ("player_week_features", "trailing_adot", "REAL"),
         ]:
             existing_cols = {row[1] for row in con.execute(f"PRAGMA table_info({table})")}
             if existing_cols and col not in existing_cols:

@@ -92,5 +92,8 @@ CREATE TABLE IF NOT EXISTS player_week_features (
   is_bye_return INTEGER,
   starter_absent_proxy INTEGER,
   share_delta_vs_prior_season REAL,
+  trailing_target_share REAL,
+  trailing_air_yards_share REAL,
+  trailing_adot REAL,
   PRIMARY KEY (season, week, player_id)
 );
