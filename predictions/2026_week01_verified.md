@@ -3,11 +3,20 @@
 Model: `odds_xgb_model_production.joblib` (commit `262a04fda4a39cb4c16e568f1d28034a399169e7`)
 
 - Week base rate: 48/972 eligible players spiked (0.0494)
-- Precision@10: 0/10 = 0.0000 (0.0x base rate)
-- Precision@25: 3/25 = 0.1200 (2.4x base rate)
+- Precision@10 (pooled): 0/10 = 0.0000
+- Precision@25 (pooled): 3/25 = 0.1200  (2.4x base rate)
 - Of the top 25: 3 actually spiked
 - DNP: 8, no label produced: 0 -- both counted as non-hits above, not dropped from the denominator
 - Cumulative across 1 verified week(s): P@10 0/10 = 0.0000, P@25 3/25 = 0.1200
+
+## Per-position precision@10 (from the full scored pool)
+
+| Pos | Hits/N | Precision | Base rate | Lift |
+|---|---:|---:|---:|---:|
+| QB | 2/10 | 0.2000 | 0.2500 | 0.8x |
+| RB | 2/10 | 0.2000 | 0.1600 | 1.2x |
+| WR | 1/10 | 0.1000 | 0.1339 | 0.7x |
+| TE | 1/10 | 0.1000 | 0.1449 | 0.7x |
 
 | Rank | Name | Pos | Team | Predicted | Actual | Baseline | Threshold | Status |
 |---:|---|---|---|---:|---:|---:|---:|:---:|

@@ -2,10 +2,14 @@
 """Test Group 2 (QB volume + team pass-catcher mix) features:
 trailing_pass_attempts, trailing_pass_air_yards, trailing_team_wr_target_rate.
 Train baseline (current production feature set) vs candidate (baseline + these
-3) on 2010-2023, compare mean precision@10 on 2024 -- both overall and,
-separately, precision restricted to QB rows within each model's own top 25,
-since these features are meant to sharpen QB scores specifically (the third
-feature aside, which applies to every position).
+3) on 2010-2023, compare mean precision@10 on 2024 -- pooled, QB-only within
+each model's own top 25, AND per-position precision@10 (RB/WR/TE primary, QB
+secondary) via the shared evaluation/metrics.py helper used identically by
+verify_week.py. The per-position breakdown is the important one here: this
+group's first pass won on pooled precision@10 largely by reallocating picks
+toward QBs, a ~4x-higher-base-rate position -- that inflates a pooled metric
+without necessarily improving discrimination, which is exactly what
+RB/WR/TE-specific numbers are for catching.
 
 NOTE: 2024 is being reused as a validation slice here, exactly as in
 evaluation/test_receiving_opportunity_features.py -- it already appeared as
@@ -26,6 +30,7 @@ from xgboost import XGBClassifier
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "model"))
 from features_lib import FeatureEngine, PRODUCTION_FEATURE_COLS, QB_VOLUME_FEATURES
+from metrics import POSITIONS, mean_precision_at_k, per_position_report
 
 BASE_FEATURE_COLS = PRODUCTION_FEATURE_COLS
 CANDIDATE_FEATURES = QB_VOLUME_FEATURES
@@ -45,14 +50,6 @@ MODEL_PARAMS = dict(
     importance_type="gain",
     random_state=42,
 )
-
-
-def mean_precision_at_k(df, k):
-    precs = []
-    for (season, week), grp in df.groupby(["season", "week"]):
-        top = grp.sort_values("proba", ascending=False).head(k)
-        precs.append(top["spike_flag"].sum() / len(top))
-    return sum(precs) / len(precs)
 
 
 def qb_precision_within_topk(df, k):
@@ -129,6 +126,7 @@ def main():
 
     results = {}
     qb_results = {}
+    per_pos_results = {}
     models = {}
     for label, cols in [("baseline (10 features)", BASE_FEATURE_COLS),
                          ("candidate (10 + QB-volume)", ALL_COLS)]:
@@ -146,6 +144,7 @@ def main():
         prauc = average_precision_score(y_test, proba)
         results[label] = (p10, p25, prauc)
         qb_results[label] = qb_precision_within_topk(test_scored, TOP_K_FOR_QB_BREAKDOWN)
+        per_pos_results[label] = per_position_report(test_scored, test_scored, k=10, positions=POSITIONS)
         models[label] = model
 
     print(f"\n{'model':30} {'P@10 (2024)':>12} {'P@25 (2024)':>12} {'PR-AUC (2024)':>14}")
@@ -156,17 +155,31 @@ def main():
     base_p10 = results["baseline (10 features)"][0]
     cand_p10 = results["candidate (10 + QB-volume)"][0]
     delta = cand_p10 - base_p10
-    print(f"\nDelta P@10 (candidate - baseline): {delta:+.4f}")
+    print(f"\nDelta P@10 pooled (candidate - baseline): {delta:+.4f}")
     if delta > 0.005:
-        print("VERDICT: candidate beats baseline on 2024 precision@10.")
+        print("Pooled VERDICT: candidate beats baseline on 2024 precision@10.")
     else:
-        print("VERDICT: candidate does NOT meaningfully beat baseline on 2024 precision@10.")
+        print("Pooled VERDICT: candidate does NOT meaningfully beat baseline on 2024 precision@10.")
 
     print(f"\n=== QB-only precision within each model's own top {TOP_K_FOR_QB_BREAKDOWN} (2024) ===")
     print("(how often a QB the model ranked into its own top 25 actually spiked)")
     for label, (hits, n, p) in qb_results.items():
         p_str = f"{p:.4f}" if p is not None else "n/a (0 QB rows in top 25)"
         print(f"  {label:30} {hits}/{n} = {p_str}")
+
+    print(f"\n=== Per-position precision@10 (2024) -- RB/WR/TE primary, QB secondary ===")
+    print("(this is the corrected read: does the group win where the league's decisions actually happen?)")
+    print(f"{'pos':4} {'baseline':>18} {'candidate':>18} {'delta':>9}   base rate")
+    print("-" * 68)
+    for pos in ("RB", "WR", "TE", "QB"):
+        b = per_pos_results["baseline (10 features)"][pos]
+        c = per_pos_results["candidate (10 + QB-volume)"][pos]
+        b_s = f"{b['hits']}/{b['n']}={b['precision']:.4f}" if b["precision"] is not None else "n/a"
+        c_s = f"{c['hits']}/{c['n']}={c['precision']:.4f}" if c["precision"] is not None else "n/a"
+        d_s = f"{c['precision']-b['precision']:+.4f}" if (b["precision"] is not None and c["precision"] is not None) else "n/a"
+        br_s = f"{c['base_rate']:.4f}" if c["base_rate"] is not None else "n/a"
+        tag = "  <-- primary" if pos != "QB" else "  (secondary)"
+        print(f"{pos:4} {b_s:>18} {c_s:>18} {d_s:>9}   {br_s}{tag}")
 
     print("\n=== Candidate model feature importances (gain) ===")
     cand_model = models["candidate (10 + QB-volume)"]

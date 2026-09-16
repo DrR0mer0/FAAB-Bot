@@ -2,12 +2,16 @@
 """Test Group 1 (receiving-opportunity) features: trailing_target_share,
 trailing_air_yards_share, trailing_adot. Train baseline (current production
 feature set) vs candidate (baseline + these 3) on 2010-2023, compare mean
-precision@10 on 2024.
+precision@10 on 2024 -- pooled AND per-position (RB/WR/TE primary, QB
+secondary), via the shared evaluation/metrics.py helper used identically by
+verify_week.py, since a pooled win can be a reallocation-toward-one-position
+artifact rather than genuine discrimination (see test_qb_volume_features.py's
+Group 2 result, retested here for comparability).
 
 NOTE: 2024 is being reused as a validation slice here. It already appeared
 as training data in evaluation/eval_share_delta_on_2025.py's final 2010-2024
 train / 2025 test pair, so it is not a virgin test year -- 2025 is closed
-(that already-decided test), and 2026 has only one played week, so 2024 is
+(that already-decided test), and 2026 has only two played weeks, so 2024 is
 the least-bad option available for this group's hypothesis test. If Group 1
 looks promising here, it still needs a genuine held-out year before
 adoption, not just a repeat of 2024.
@@ -23,6 +27,7 @@ from xgboost import XGBClassifier
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "model"))
 from features_lib import PRODUCTION_FEATURE_COLS, FeatureEngine, RECEIVING_OPPORTUNITY_FEATURES
+from metrics import POSITIONS, mean_precision_at_k, per_position_report
 
 # Current production feature set (features_lib.PRODUCTION_FEATURE_COLS --
 # what train_production_model.py actually trains on). Deliberately NOT
@@ -45,14 +50,6 @@ MODEL_PARAMS = dict(
     importance_type="gain",
     random_state=42,
 )
-
-
-def mean_precision_at_k(df, k):
-    precs = []
-    for (season, week), grp in df.groupby(["season", "week"]):
-        top = grp.sort_values("proba", ascending=False).head(k)
-        precs.append(top["spike_flag"].sum() / len(top))
-    return sum(precs) / len(precs)
 
 
 def main():
@@ -88,9 +85,9 @@ def main():
             feat = engine.compute_features(season, week, pid)
             if feat is None:
                 continue
-            rows.append((season, week, pid, label, *[feat[c] for c in ALL_COLS]))
+            rows.append((season, week, pid, feat["_pos"], label, *[feat[c] for c in ALL_COLS]))
 
-    df = pd.DataFrame(rows, columns=["season", "week", "player_id", "spike_flag", *ALL_COLS])
+    df = pd.DataFrame(rows, columns=["season", "week", "player_id", "pos", "spike_flag", *ALL_COLS])
     print(f"[INFO] {n_checked} non-playoff player-weeks checked across seasons {seasons[0]}-{seasons[-1]} "
           f"(excl. 2019), {n_no_label} with no label row, {len(df)} eligible+labeled rows")
 
@@ -112,6 +109,7 @@ def main():
     print("A positive result here is a green light to test further, not a green light to adopt.")
 
     results = {}
+    per_pos_results = {}
     models = {}
     for label, cols in [("baseline (10 features)", BASE_FEATURE_COLS),
                          ("candidate (10 + receiving-opportunity)", ALL_COLS)]:
@@ -128,6 +126,7 @@ def main():
         p25 = mean_precision_at_k(test_scored, 25)
         prauc = average_precision_score(y_test, proba)
         results[label] = (p10, p25, prauc)
+        per_pos_results[label] = per_position_report(test_scored, test_scored, k=10, positions=POSITIONS)
         models[label] = model
 
     print(f"\n{'model':42} {'P@10 (2024)':>12} {'P@25 (2024)':>12} {'PR-AUC (2024)':>14}")
@@ -138,11 +137,24 @@ def main():
     base_p10 = results["baseline (10 features)"][0]
     cand_p10 = results["candidate (10 + receiving-opportunity)"][0]
     delta = cand_p10 - base_p10
-    print(f"\nDelta P@10 (candidate - baseline): {delta:+.4f}")
+    print(f"\nDelta P@10 pooled (candidate - baseline): {delta:+.4f}")
     if delta > 0.005:
-        print("VERDICT: candidate beats baseline on 2024 precision@10.")
+        print("Pooled VERDICT: candidate beats baseline on 2024 precision@10.")
     else:
-        print("VERDICT: candidate does NOT meaningfully beat baseline on 2024 precision@10.")
+        print("Pooled VERDICT: candidate does NOT meaningfully beat baseline on 2024 precision@10.")
+
+    print(f"\n=== Per-position precision@10 (2024) -- RB/WR/TE primary, QB secondary ===")
+    print(f"{'pos':4} {'baseline':>18} {'candidate':>18} {'delta':>9}   base rate")
+    print("-" * 68)
+    for pos in ("RB", "WR", "TE", "QB"):
+        b = per_pos_results["baseline (10 features)"][pos]
+        c = per_pos_results["candidate (10 + receiving-opportunity)"][pos]
+        b_s = f"{b['hits']}/{b['n']}={b['precision']:.4f}" if b["precision"] is not None else "n/a"
+        c_s = f"{c['hits']}/{c['n']}={c['precision']:.4f}" if c["precision"] is not None else "n/a"
+        d_s = f"{c['precision']-b['precision']:+.4f}" if (b["precision"] is not None and c["precision"] is not None) else "n/a"
+        br_s = f"{c['base_rate']:.4f}" if c["base_rate"] is not None else "n/a"
+        tag = "  <-- primary" if pos != "QB" else "  (secondary)"
+        print(f"{pos:4} {b_s:>18} {c_s:>18} {d_s:>9}   {br_s}{tag}")
 
     print("\n=== Candidate model feature importances (gain) ===")
     cand_model = models["candidate (10 + receiving-opportunity)"]

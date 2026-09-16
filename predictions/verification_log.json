@@ -3,7 +3,7 @@
     {
       "season": 2026,
       "week": 1,
-      "verified_at": "2026-09-15T15:24:37.621870+00:00",
+      "verified_at": "2026-09-16T01:20:15.090768+00:00",
       "prediction_file": "predictions\\2026_week01.json",
       "model": {
         "path": "C:\\FAAB\\history\\odds_xgb_model_production.joblib",
@@ -22,6 +22,49 @@
         "precision": 0.12
       },
       "base_rate": 0.04938271604938271,
+      "per_position": {
+        "k": 10,
+        "QB": {
+          "k": 10,
+          "hits": 2,
+          "n": 10,
+          "precision": 0.2,
+          "base_rate": 0.25,
+          "n_eligible": 36,
+          "n_spiked": 9,
+          "lift": 0.8
+        },
+        "RB": {
+          "k": 10,
+          "hits": 2,
+          "n": 10,
+          "precision": 0.2,
+          "base_rate": 0.16,
+          "n_eligible": 75,
+          "n_spiked": 12,
+          "lift": 1.25
+        },
+        "WR": {
+          "k": 10,
+          "hits": 1,
+          "n": 10,
+          "precision": 0.1,
+          "base_rate": 0.13385826771653545,
+          "n_eligible": 127,
+          "n_spiked": 17,
+          "lift": 0.7470588235294118
+        },
+        "TE": {
+          "k": 10,
+          "hits": 1,
+          "n": 10,
+          "precision": 0.1,
+          "base_rate": 0.14492753623188406,
+          "n_eligible": 69,
+          "n_spiked": 10,
+          "lift": 0.6900000000000001
+        }
+      },
       "n_dnp": 8,
       "n_no_label": 0
     }

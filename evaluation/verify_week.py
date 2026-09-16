@@ -13,6 +13,13 @@ threshold shown in the report ARE recomputed here (they aren't persisted
 anywhere), mirroring generate_labels_and_breakouts.py's own gap-aware
 windowing logic exactly, for display purposes only.
 
+Reports both the original pooled precision@10/@25 (from the committed
+top-N list, unchanged so already-logged weeks stay comparable) and
+per-position precision@10 (from the full scored_pool, via
+evaluation/metrics.py -- the same shared logic the feature-group
+hypothesis tests use), since a pooled metric can be dominated by whichever
+position the model happens to rank highest that week.
+
 Fails fast if the labels pipeline hasn't been run for this week yet --
 verification against raw points would silently ignore each player's own
 baseline, which is exactly the thing a "spike" is defined relative to.
@@ -24,14 +31,19 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pandas as pd
+
 # Windows' default console codepage (cp1252) can't encode the checkmark/cross
 # status marks printed below; without this, the script dies partway through
 # the per-player table -- before the log and markdown report are written.
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
 
+from metrics import POSITIONS, pooled_report, per_position_report
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PREDICTIONS_DIR = REPO_ROOT / "predictions"
+PER_POSITION_K = 10
 
 # Must match generate_labels_and_breakouts.py exactly -- these are the rules
 # a "spike" was actually labeled under, reproduced here only to show the
@@ -80,11 +92,15 @@ def trailing_baseline(con, player_id, season, week, loaded_seasons):
     return baseline, threshold
 
 
-def precision_at(rows_out, k):
-    subset = [r for r in rows_out if r["rank"] <= k]
-    hits = sum(1 for r in subset if r["hit"])
-    n = len(subset)
-    return hits, n, (hits / n if n else None)
+def resolve_status(label_row):
+    """label_row is (fantasy_points_half, spike_flag) or None (no row at
+    all for this player-week -- DNP). Returns (status, actual_pts, hit)."""
+    if label_row is None:
+        return "DNP", None, False
+    actual_pts, spike_flag = label_row
+    if spike_flag is None:
+        return "NO_LABEL", actual_pts, False
+    return ("HIT", actual_pts, True) if spike_flag == 1 else ("MISS", actual_pts, False)
 
 
 def load_or_init_log(log_path):
@@ -92,6 +108,16 @@ def load_or_init_log(log_path):
         with open(log_path, encoding="utf-8") as f:
             return json.load(f)
     return {"weeks": []}
+
+
+def fmt_metric(m, label):
+    """m: a dict from pooled_report/per_position_report's per-k or
+    per-position entry -- {hits, n, precision, base_rate, lift, ...}."""
+    if m["precision"] is None:
+        return f"{label}: n/a (0 candidates)"
+    lift_s = f"  ({m['lift']:.1f}x base rate)" if m["lift"] else ""
+    hits_s = f"{m['hits']}/{m['n']}" if m["hits"] is not None else f"n={m['n']}"
+    return f"{label}: {hits_s} = {m['precision']:.4f}{lift_s}"
 
 
 def main():
@@ -133,60 +159,94 @@ def main():
 
     loaded_seasons = [r[0] for r in con.execute("SELECT DISTINCT season FROM labels_player_week ORDER BY season")]
 
-    base_row = con.execute(
-        """SELECT COUNT(*), SUM(CASE WHEN spike_flag=1 THEN 1 ELSE 0 END)
-           FROM labels_player_week WHERE season=? AND week=? AND spike_flag IS NOT NULL""",
-        (args.season, args.week),
-    ).fetchone()
-    n_eligible_week, n_spiked_week = base_row
-    base_rate = (n_spiked_week / n_eligible_week) if n_eligible_week else None
+    # One label lookup for the whole week, reused for both the committed
+    # top-N display rows and the full scored_pool (avoids N individual
+    # queries against a pool that can run into the hundreds).
+    labels_this_week = {
+        r["player_id"]: (r["fantasy_points_half"], r["spike_flag"])
+        for r in con.execute(
+            "SELECT player_id, fantasy_points_half, spike_flag FROM labels_player_week WHERE season=? AND week=?",
+            (args.season, args.week),
+        )
+    }
 
+    # Base-rate population: every eligible, labeled player that week,
+    # regardless of whether the model actually scored them -- population-
+    # wide, matching the pooled base rate's existing definition, now with
+    # position attached for the per-position breakdown.
+    base_rate_df = pd.DataFrame([
+        {"season": args.season, "week": args.week, "pos": r["pos"], "proba": 0.0, "spike_flag": r["spike_flag"]}
+        for r in con.execute(
+            """SELECT s.pos, l.spike_flag FROM labels_player_week l
+               JOIN player_week_stats s ON l.season=s.season AND l.week=s.week AND l.player_id=s.player_id
+               WHERE l.season=? AND l.week=? AND l.spike_flag IS NOT NULL""",
+            (args.season, args.week),
+        )
+    ])
+    n_eligible_week = len(base_rate_df)
+    n_spiked_week = int(base_rate_df["spike_flag"].sum()) if n_eligible_week else 0
+    base_rate_val = (n_spiked_week / n_eligible_week) if n_eligible_week else None
+
+    # ---- committed top-N rows (unchanged pooled precision source) ----
     rows_out = []
     for entry in predictions["top"]:
         pid = entry["player_id"]
-        label_row = con.execute(
-            "SELECT fantasy_points_half, spike_flag FROM labels_player_week WHERE player_id=? AND season=? AND week=?",
-            (pid, args.season, args.week),
-        ).fetchone()
+        status, actual_pts, hit = resolve_status(labels_this_week.get(pid))
         baseline, threshold = trailing_baseline(con, pid, args.season, args.week, loaded_seasons)
-
-        if label_row is None:
-            status, actual_pts, hit = "DNP", None, False
-        else:
-            actual_pts, spike_flag = label_row
-            if spike_flag is None:
-                status, hit = "NO_LABEL", False
-            elif spike_flag == 1:
-                status, hit = "HIT", True
-            else:
-                status, hit = "MISS", False
-
         rows_out.append({
             "rank": entry["rank"], "player_id": pid, "name": entry["name"],
             "pos": entry["pos"], "team": entry["team"], "predicted_score": entry["score"],
             "actual_fantasy_points_half": actual_pts, "trailing_baseline": baseline,
             "spike_threshold": threshold, "status": status, "hit": hit,
         })
+    top_df = pd.DataFrame([
+        {"season": args.season, "week": args.week, "pos": r["pos"],
+         "proba": r["predicted_score"], "spike_flag": 1 if r["hit"] else 0}
+        for r in rows_out
+    ])
 
-    hits10, n10, p10 = precision_at(rows_out, 10)
-    hits25, n25, p25 = precision_at(rows_out, 25)
-    n_dnp = sum(1 for r in rows_out if r["status"] == "DNP")
-    n_no_label = sum(1 for r in rows_out if r["status"] == "NO_LABEL")
+    # ---- full scored pool (source for per-position precision@10) ----
+    pool_rows = []
+    for entry in predictions.get("scored_pool", []):
+        pid = entry["player_id"]
+        _status, _actual_pts, hit = resolve_status(labels_this_week.get(pid))
+        pool_rows.append({
+            "season": args.season, "week": args.week, "pos": entry["pos"],
+            "proba": entry["score"], "spike_flag": 1 if hit else 0,
+        })
+    pool_df = pd.DataFrame(pool_rows)
 
     con.close()
+
+    pooled = pooled_report(top_df, base_rate_df, ks=(10, 25), use_mean=False)
+    per_pos = per_position_report(pool_df, base_rate_df, k=PER_POSITION_K, positions=POSITIONS) if len(pool_df) else {
+        p: {"k": PER_POSITION_K, "hits": 0, "n": 0, "precision": None, "base_rate": None,
+            "n_eligible": 0, "n_spiked": 0, "lift": None}
+        for p in POSITIONS
+    }
+
+    n_dnp = sum(1 for r in rows_out if r["status"] == "DNP")
+    n_no_label = sum(1 for r in rows_out if r["status"] == "NO_LABEL")
 
     # ---- console report ----
     print(f"[INFO] loaded {pred_path}")
     print(f"[INFO] model: {predictions.get('model', {}).get('filename')} "
           f"(git_commit={predictions.get('model', {}).get('git_commit')})")
+    if not predictions.get("scored_pool"):
+        print("[WARN] no scored_pool in this prediction file -- per-position metrics will be empty "
+              "(predates score_week.py writing scored_pool, or nothing was scored that week)")
     print(f"\n=== Verification: {args.season} week {args.week} ===")
     print(f"Week base rate: {n_spiked_week}/{n_eligible_week} eligible players spiked "
-          f"({base_rate:.4f})" if base_rate is not None else "Week base rate: unavailable")
-    print(f"Precision@10: {hits10}/{n10} = {p10:.4f}" + (f"  ({p10/base_rate:.1f}x base rate)" if base_rate else ""))
-    print(f"Precision@25: {hits25}/{n25} = {p25:.4f}" + (f"  ({p25/base_rate:.1f}x base rate)" if base_rate else ""))
+          f"({base_rate_val:.4f})" if base_rate_val is not None else "Week base rate: unavailable")
+    print(fmt_metric(pooled[10], "Precision@10 (pooled)"))
+    print(fmt_metric(pooled[25], "Precision@25 (pooled)"))
     print(f"Of the top 25: {sum(1 for r in rows_out if r['status']=='HIT')} actually spiked")
     print(f"DNP (didn't play): {n_dnp}; no label produced (ineligible despite playing): {n_no_label} "
           f"-- both counted as non-hits in precision@k above, not silently dropped from the denominator")
+
+    print(f"\n=== Per-position precision@{PER_POSITION_K} (from the full scored pool) ===")
+    for pos in POSITIONS:
+        print("  " + fmt_metric(per_pos[pos], pos))
 
     print(f"\n{'Rk':3} {'Name':22} {'Pos':4} {'Team':5} {'Pred':>6} {'Actual':>7} {'Baseline':>9} {'Threshold':>10} {'Status'}")
     print("-" * 90)
@@ -207,9 +267,10 @@ def main():
         "verified_at": datetime.now(timezone.utc).isoformat(),
         "prediction_file": str(pred_path.relative_to(REPO_ROOT)),
         "model": predictions.get("model"),
-        "precision_at_10": {"hits": hits10, "n": n10, "precision": p10},
-        "precision_at_25": {"hits": hits25, "n": n25, "precision": p25},
-        "base_rate": base_rate,
+        "precision_at_10": {"hits": pooled[10]["hits"], "n": pooled[10]["n"], "precision": pooled[10]["precision"]},
+        "precision_at_25": {"hits": pooled[25]["hits"], "n": pooled[25]["n"], "precision": pooled[25]["precision"]},
+        "base_rate": base_rate_val,
+        "per_position": {"k": PER_POSITION_K, **{pos: per_pos[pos] for pos in POSITIONS}},
         "n_dnp": n_dnp, "n_no_label": n_no_label,
     })
     log["weeks"].sort(key=lambda w: (w["season"], w["week"]))
@@ -237,14 +298,29 @@ def main():
         f"(commit `{predictions.get('model', {}).get('git_commit')}`)",
         "",
         f"- Week base rate: {n_spiked_week}/{n_eligible_week} eligible players spiked"
-        + (f" ({base_rate:.4f})" if base_rate is not None else ""),
-        f"- Precision@10: {hits10}/{n10} = {p10:.4f}" + (f" ({p10/base_rate:.1f}x base rate)" if base_rate else ""),
-        f"- Precision@25: {hits25}/{n25} = {p25:.4f}" + (f" ({p25/base_rate:.1f}x base rate)" if base_rate else ""),
+        + (f" ({base_rate_val:.4f})" if base_rate_val is not None else ""),
+        f"- {fmt_metric(pooled[10], 'Precision@10 (pooled)')}",
+        f"- {fmt_metric(pooled[25], 'Precision@25 (pooled)')}",
         f"- Of the top 25: {sum(1 for r in rows_out if r['status']=='HIT')} actually spiked",
         f"- DNP: {n_dnp}, no label produced: {n_no_label} -- both counted as non-hits above, not dropped from the denominator",
         f"- Cumulative across {len(log['weeks'])} verified week(s): "
         f"P@10 {cum_hits10}/{cum_n10}" + (f" = {cum_p10:.4f}" if cum_p10 is not None else "")
         + f", P@25 {cum_hits25}/{cum_n25}" + (f" = {cum_p25:.4f}" if cum_p25 is not None else ""),
+        "",
+        f"## Per-position precision@{PER_POSITION_K} (from the full scored pool)",
+        "",
+        "| Pos | Hits/N | Precision | Base rate | Lift |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for pos in POSITIONS:
+        m = per_pos[pos]
+        if m["precision"] is None:
+            lines.append(f"| {pos} | -- | n/a | -- | -- |")
+        else:
+            br_s = f"{m['base_rate']:.4f}" if m["base_rate"] is not None else "n/a"
+            lift_s = f"{m['lift']:.1f}x" if m["lift"] else "n/a"
+            lines.append(f"| {pos} | {m['hits']}/{m['n']} | {m['precision']:.4f} | {br_s} | {lift_s} |")
+    lines += [
         "",
         "| Rank | Name | Pos | Team | Predicted | Actual | Baseline | Threshold | Status |",
         "|---:|---|---|---|---:|---:|---:|---:|:---:|",
