@@ -20,7 +20,8 @@
     {
       "season": 2026,
       "week": 1,
-      "verified_at": "2026-09-16T03:44:07.690815+00:00",
+      "verified_at": "2026-09-16T04:16:29.376012+00:00",
+      "base_rate": 0.04938271604938271,
       "prediction_file": "predictions\\2026_week01.json",
       "model": {
         "path": "C:\\FAAB\\history\\odds_xgb_model_production.joblib",
@@ -38,7 +39,6 @@
         "n": 25,
         "precision": 0.12
       },
-      "base_rate": 0.04938271604938271,
       "per_position": {
         "k": 10,
         "QB": {

@@ -20,6 +20,15 @@ evaluation/metrics.py -- the same shared logic the feature-group
 hypothesis tests use), since a pooled metric can be dominated by whichever
 position the model happens to rank highest that week.
 
+If a matching shadow file (predictions/<season>_week<NN>_shadow.json,
+written by score_week.py's shadow scoring) exists alongside the production
+one, it's verified the same way and reported side by side -- production
+and shadow are scored against the exact same actual outcomes, so this is a
+direct head-to-head. Both get recorded in verification_log.json (shadow
+under a "shadow" key on the same week entry) so the head-to-head
+accumulates week over week; a week with no shadow file just has no
+"shadow" key, same as every week logged before shadow scoring existed.
+
 Fails fast if the labels pipeline hasn't been run for this week yet --
 verification against raw points would silently ignore each player's own
 baseline, which is exactly the thing a "spike" is defined relative to.
@@ -120,6 +129,146 @@ def fmt_metric(m, label):
     return f"{label}: {hits_s} = {m['precision']:.4f}{lift_s}"
 
 
+def verify_prediction_file(pred_path, labels_this_week, base_rate_df, loaded_seasons, con, args):
+    """Loads and scores ONE committed prediction file (production or
+    shadow) against labels_this_week/base_rate_df. Returns a result dict,
+    or None if pred_path doesn't exist (the caller decides whether that's
+    fatal -- required for production, optional for shadow)."""
+    if not pred_path.exists():
+        return None
+    with open(pred_path, encoding="utf-8") as f:
+        predictions = json.load(f)
+
+    rows_out = []
+    for entry in predictions["top"]:
+        pid = entry["player_id"]
+        status, actual_pts, hit = resolve_status(labels_this_week.get(pid))
+        baseline, threshold = trailing_baseline(con, pid, args.season, args.week, loaded_seasons)
+        rows_out.append({
+            "rank": entry["rank"], "player_id": pid, "name": entry["name"],
+            "pos": entry["pos"], "team": entry["team"], "predicted_score": entry["score"],
+            "actual_fantasy_points_half": actual_pts, "trailing_baseline": baseline,
+            "spike_threshold": threshold, "status": status, "hit": hit,
+        })
+    top_df = pd.DataFrame([
+        {"season": args.season, "week": args.week, "pos": r["pos"],
+         "proba": r["predicted_score"], "spike_flag": 1 if r["hit"] else 0}
+        for r in rows_out
+    ])
+
+    pool_rows = []
+    for entry in predictions.get("scored_pool", []):
+        pid = entry["player_id"]
+        _status, _actual_pts, hit = resolve_status(labels_this_week.get(pid))
+        pool_rows.append({
+            "season": args.season, "week": args.week, "pos": entry["pos"],
+            "proba": entry["score"], "spike_flag": 1 if hit else 0,
+        })
+    pool_df = pd.DataFrame(pool_rows)
+
+    pooled = pooled_report(top_df, base_rate_df, ks=(10, 25), use_mean=False)
+    per_pos = per_position_report(pool_df, base_rate_df, k=PER_POSITION_K, positions=POSITIONS) if len(pool_df) else {
+        p: {"k": PER_POSITION_K, "hits": 0, "n": 0, "precision": None, "base_rate": None,
+            "n_eligible": 0, "n_spiked": 0, "lift": None}
+        for p in POSITIONS
+    }
+
+    n_dnp = sum(1 for r in rows_out if r["status"] == "DNP")
+    n_no_label = sum(1 for r in rows_out if r["status"] == "NO_LABEL")
+
+    return {
+        "pred_path": pred_path, "predictions": predictions, "rows_out": rows_out,
+        "pooled": pooled, "per_pos": per_pos, "n_dnp": n_dnp, "n_no_label": n_no_label,
+        "has_scored_pool": bool(predictions.get("scored_pool")),
+    }
+
+
+def print_result(result, label):
+    predictions = result["predictions"]
+    model = predictions.get("model", {})
+    print(f"\n--- {label}: {model.get('filename')} (git_commit={model.get('git_commit')}) ---")
+    if not result["has_scored_pool"]:
+        print("[WARN] no scored_pool in this prediction file -- per-position metrics will be empty "
+              "(predates score_week.py writing scored_pool, or nothing was scored that week)")
+    print(fmt_metric(result["pooled"][10], "Precision@10 (pooled)"))
+    print(fmt_metric(result["pooled"][25], "Precision@25 (pooled)"))
+    print(f"Of the top 25: {sum(1 for r in result['rows_out'] if r['status']=='HIT')} actually spiked")
+    print(f"DNP (didn't play): {result['n_dnp']}; no label produced (ineligible despite playing): {result['n_no_label']} "
+          f"-- both counted as non-hits in precision@k above, not silently dropped from the denominator")
+
+    print(f"Per-position precision@{PER_POSITION_K} (base rate is each position's OWN rate -- not "
+          f"comparable to the pooled figure or across positions):")
+    for pos in POSITIONS:
+        print("  " + fmt_metric(result["per_pos"][pos], pos))
+
+    print(f"\n{'Rk':3} {'Name':22} {'Pos':4} {'Team':5} {'Pred':>6} {'Actual':>7} {'Baseline':>9} {'Threshold':>10} {'Status'}")
+    print("-" * 90)
+    for r in result["rows_out"]:
+        actual_s = f"{r['actual_fantasy_points_half']:.1f}" if r["actual_fantasy_points_half"] is not None else "  --"
+        base_s = f"{r['trailing_baseline']:.2f}" if r["trailing_baseline"] is not None else "  N/A"
+        thr_s = f"{r['spike_threshold']:.2f}" if r["spike_threshold"] is not None else "  N/A"
+        mark = {"HIT": "✓", "MISS": "✗", "DNP": "DNP", "NO_LABEL": "N/A"}[r["status"]]
+        print(f"{r['rank']:3d} {r['name']:22.22} {r['pos']:4} {r['team']:5} {r['predicted_score']:6.4f} "
+              f"{actual_s:>7} {base_s:>9} {thr_s:>10} {mark}")
+
+
+def markdown_for_result(result, label):
+    predictions = result["predictions"]
+    model = predictions.get("model", {})
+    pooled, per_pos = result["pooled"], result["per_pos"]
+    lines = [
+        f"## {label}: `{model.get('filename')}` (commit `{model.get('git_commit')}`)",
+        "",
+        f"- {fmt_metric(pooled[10], 'Precision@10 (pooled)')}",
+        f"- {fmt_metric(pooled[25], 'Precision@25 (pooled)')}",
+        f"- Of the top 25: {sum(1 for r in result['rows_out'] if r['status']=='HIT')} actually spiked",
+        f"- DNP: {result['n_dnp']}, no label produced: {result['n_no_label']} -- both counted as non-hits above, not dropped from the denominator",
+        "",
+        f"*Per-position base rate is each position's own spike rate among all eligible players at that "
+        f"position -- a different, position-specific denominator from the pooled base rate above. Not "
+        f"directly comparable across positions or against the pooled figure; each row's lift is only "
+        f"meaningful against that row's own base rate.*",
+        "",
+        "| Pos | Hits/N | Precision | Base rate | Lift |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for pos in POSITIONS:
+        m = per_pos[pos]
+        if m["precision"] is None:
+            lines.append(f"| {pos} | -- | n/a | -- | -- |")
+        else:
+            br_s = f"{m['base_rate']:.4f}" if m["base_rate"] is not None else "n/a"
+            lift_s = f"{m['lift']:.1f}x" if m["lift"] else "n/a"
+            lines.append(f"| {pos} | {m['hits']}/{m['n']} | {m['precision']:.4f} | {br_s} | {lift_s} |")
+    lines += [
+        "",
+        "| Rank | Name | Pos | Team | Predicted | Actual | Baseline | Threshold | Status |",
+        "|---:|---|---|---|---:|---:|---:|---:|:---:|",
+    ]
+    for r in result["rows_out"]:
+        actual_s = f"{r['actual_fantasy_points_half']:.1f}" if r["actual_fantasy_points_half"] is not None else "--"
+        base_s = f"{r['trailing_baseline']:.2f}" if r["trailing_baseline"] is not None else "N/A"
+        thr_s = f"{r['spike_threshold']:.2f}" if r["spike_threshold"] is not None else "N/A"
+        mark = {"HIT": "✓", "MISS": "✗", "DNP": "DNP", "NO_LABEL": "N/A"}[r["status"]]
+        lines.append(
+            f"| {r['rank']} | {r['name']} | {r['pos']} | {r['team']} | {r['predicted_score']:.4f} | "
+            f"{actual_s} | {base_s} | {thr_s} | {mark} |"
+        )
+    return lines
+
+
+def log_entry_for(result):
+    pooled, per_pos = result["pooled"], result["per_pos"]
+    return {
+        "prediction_file": str(result["pred_path"].relative_to(REPO_ROOT)),
+        "model": result["predictions"].get("model"),
+        "precision_at_10": {"hits": pooled[10]["hits"], "n": pooled[10]["n"], "precision": pooled[10]["precision"]},
+        "precision_at_25": {"hits": pooled[25]["hits"], "n": pooled[25]["n"], "precision": pooled[25]["precision"]},
+        "per_position": {"k": PER_POSITION_K, **{pos: per_pos[pos] for pos in POSITIONS}},
+        "n_dnp": result["n_dnp"], "n_no_label": result["n_no_label"],
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default=str(REPO_ROOT / "faab_history_core_v0_1.db"))
@@ -130,13 +279,12 @@ def main():
     args = ap.parse_args()
 
     pred_path = Path(args.predictions_dir) / f"{args.season}_week{args.week:02d}.json"
+    shadow_path = Path(args.predictions_dir) / f"{args.season}_week{args.week:02d}_shadow.json"
     if not pred_path.exists():
         raise SystemExit(
             f"[ERROR] No committed prediction file at {pred_path}. "
             f"Nothing to verify -- run model/score_week.py --json-out for this week first, and commit it."
         )
-    with open(pred_path, encoding="utf-8") as f:
-        predictions = json.load(f)
 
     con = sqlite3.connect(args.db)
     con.row_factory = sqlite3.Row
@@ -159,9 +307,9 @@ def main():
 
     loaded_seasons = [r[0] for r in con.execute("SELECT DISTINCT season FROM labels_player_week ORDER BY season")]
 
-    # One label lookup for the whole week, reused for both the committed
-    # top-N display rows and the full scored_pool (avoids N individual
-    # queries against a pool that can run into the hundreds).
+    # One label lookup for the whole week, reused across both prediction
+    # files and their full scored pools (avoids per-player queries against
+    # pools that can run into the hundreds).
     labels_this_week = {
         r["player_id"]: (r["fantasy_points_half"], r["spike_flag"])
         for r in con.execute(
@@ -171,9 +319,9 @@ def main():
     }
 
     # Base-rate population: every eligible, labeled player that week,
-    # regardless of whether the model actually scored them -- population-
-    # wide, matching the pooled base rate's existing definition, now with
-    # position attached for the per-position breakdown.
+    # regardless of whether either model actually scored them --
+    # population-wide, and identical for production and shadow (the actual
+    # world outcome doesn't depend on which model predicted it).
     base_rate_df = pd.DataFrame([
         {"season": args.season, "week": args.week, "pos": r["pos"], "proba": 0.0, "spike_flag": r["spike_flag"]}
         for r in con.execute(
@@ -187,96 +335,36 @@ def main():
     n_spiked_week = int(base_rate_df["spike_flag"].sum()) if n_eligible_week else 0
     base_rate_val = (n_spiked_week / n_eligible_week) if n_eligible_week else None
 
-    # ---- committed top-N rows (unchanged pooled precision source) ----
-    rows_out = []
-    for entry in predictions["top"]:
-        pid = entry["player_id"]
-        status, actual_pts, hit = resolve_status(labels_this_week.get(pid))
-        baseline, threshold = trailing_baseline(con, pid, args.season, args.week, loaded_seasons)
-        rows_out.append({
-            "rank": entry["rank"], "player_id": pid, "name": entry["name"],
-            "pos": entry["pos"], "team": entry["team"], "predicted_score": entry["score"],
-            "actual_fantasy_points_half": actual_pts, "trailing_baseline": baseline,
-            "spike_threshold": threshold, "status": status, "hit": hit,
-        })
-    top_df = pd.DataFrame([
-        {"season": args.season, "week": args.week, "pos": r["pos"],
-         "proba": r["predicted_score"], "spike_flag": 1 if r["hit"] else 0}
-        for r in rows_out
-    ])
-
-    # ---- full scored pool (source for per-position precision@10) ----
-    pool_rows = []
-    for entry in predictions.get("scored_pool", []):
-        pid = entry["player_id"]
-        _status, _actual_pts, hit = resolve_status(labels_this_week.get(pid))
-        pool_rows.append({
-            "season": args.season, "week": args.week, "pos": entry["pos"],
-            "proba": entry["score"], "spike_flag": 1 if hit else 0,
-        })
-    pool_df = pd.DataFrame(pool_rows)
+    prod_result = verify_prediction_file(pred_path, labels_this_week, base_rate_df, loaded_seasons, con, args)
+    shadow_result = verify_prediction_file(shadow_path, labels_this_week, base_rate_df, loaded_seasons, con, args)
 
     con.close()
 
-    pooled = pooled_report(top_df, base_rate_df, ks=(10, 25), use_mean=False)
-    per_pos = per_position_report(pool_df, base_rate_df, k=PER_POSITION_K, positions=POSITIONS) if len(pool_df) else {
-        p: {"k": PER_POSITION_K, "hits": 0, "n": 0, "precision": None, "base_rate": None,
-            "n_eligible": 0, "n_spiked": 0, "lift": None}
-        for p in POSITIONS
-    }
-
-    n_dnp = sum(1 for r in rows_out if r["status"] == "DNP")
-    n_no_label = sum(1 for r in rows_out if r["status"] == "NO_LABEL")
-
     # ---- console report ----
-    print(f"[INFO] loaded {pred_path}")
-    print(f"[INFO] model: {predictions.get('model', {}).get('filename')} "
-          f"(git_commit={predictions.get('model', {}).get('git_commit')})")
-    if not predictions.get("scored_pool"):
-        print("[WARN] no scored_pool in this prediction file -- per-position metrics will be empty "
-              "(predates score_week.py writing scored_pool, or nothing was scored that week)")
+    print(f"[INFO] production file: {pred_path}")
+    print(f"[INFO] shadow file: {shadow_path}" + ("" if shadow_result else " (not found -- shadow verification skipped)"))
     print(f"\n=== Verification: {args.season} week {args.week} ===")
-    print(f"Week base rate: {n_spiked_week}/{n_eligible_week} eligible players spiked "
+    print(f"Week base rate (shared by production and shadow -- same actual outcomes): "
+          f"{n_spiked_week}/{n_eligible_week} eligible players spiked "
           f"({base_rate_val:.4f})" if base_rate_val is not None else "Week base rate: unavailable")
-    print(fmt_metric(pooled[10], "Precision@10 (pooled)"))
-    print(fmt_metric(pooled[25], "Precision@25 (pooled)"))
-    print(f"Of the top 25: {sum(1 for r in rows_out if r['status']=='HIT')} actually spiked")
-    print(f"DNP (didn't play): {n_dnp}; no label produced (ineligible despite playing): {n_no_label} "
-          f"-- both counted as non-hits in precision@k above, not silently dropped from the denominator")
 
-    print(f"\n=== Per-position precision@{PER_POSITION_K} (from the full scored pool) ===")
-    print("(base rate below is each position's OWN spike rate among all eligible players at that")
-    print(" position -- a different, position-specific denominator from the pooled base rate above.")
-    print(" Not directly comparable across positions or against the pooled figure; each row's lift")
-    print(" is only meaningful against that row's own base rate.)")
-    for pos in POSITIONS:
-        print("  " + fmt_metric(per_pos[pos], pos))
+    print_result(prod_result, "PRODUCTION")
+    if shadow_result:
+        print_result(shadow_result, "SHADOW")
 
-    print(f"\n{'Rk':3} {'Name':22} {'Pos':4} {'Team':5} {'Pred':>6} {'Actual':>7} {'Baseline':>9} {'Threshold':>10} {'Status'}")
-    print("-" * 90)
-    for r in rows_out:
-        actual_s = f"{r['actual_fantasy_points_half']:.1f}" if r["actual_fantasy_points_half"] is not None else "  --"
-        base_s = f"{r['trailing_baseline']:.2f}" if r["trailing_baseline"] is not None else "  N/A"
-        thr_s = f"{r['spike_threshold']:.2f}" if r["spike_threshold"] is not None else "  N/A"
-        mark = {"HIT": "✓", "MISS": "✗", "DNP": "DNP", "NO_LABEL": "N/A"}[r["status"]]
-        print(f"{r['rank']:3d} {r['name']:22.22} {r['pos']:4} {r['team']:5} {r['predicted_score']:6.4f} "
-              f"{actual_s:>7} {base_s:>9} {thr_s:>10} {mark}")
-
-    # ---- cumulative log ----
+    # ---- log ----
     log_path = Path(args.log)
     log = load_or_init_log(log_path)
     log["weeks"] = [w for w in log["weeks"] if not (w["season"] == args.season and w["week"] == args.week)]
-    log["weeks"].append({
+    week_entry = {
         "season": args.season, "week": args.week,
         "verified_at": datetime.now(timezone.utc).isoformat(),
-        "prediction_file": str(pred_path.relative_to(REPO_ROOT)),
-        "model": predictions.get("model"),
-        "precision_at_10": {"hits": pooled[10]["hits"], "n": pooled[10]["n"], "precision": pooled[10]["precision"]},
-        "precision_at_25": {"hits": pooled[25]["hits"], "n": pooled[25]["n"], "precision": pooled[25]["precision"]},
         "base_rate": base_rate_val,
-        "per_position": {"k": PER_POSITION_K, **{pos: per_pos[pos] for pos in POSITIONS}},
-        "n_dnp": n_dnp, "n_no_label": n_no_label,
-    })
+        **log_entry_for(prod_result),
+    }
+    if shadow_result:
+        week_entry["shadow"] = log_entry_for(shadow_result)
+    log["weeks"].append(week_entry)
     log["weeks"].sort(key=lambda w: (w["season"], w["week"]))
     with open(log_path, "w", encoding="utf-8") as f:
         json.dump(log, f, indent=2)
@@ -288,61 +376,55 @@ def main():
     cum_n25 = sum(w["precision_at_25"]["n"] for w in log["weeks"])
     cum_p10 = cum_hits10 / cum_n10 if cum_n10 else None
     cum_p25 = cum_hits25 / cum_n25 if cum_n25 else None
-    print(f"\n=== Cumulative across {len(log['weeks'])} verified week(s) ===")
+    print(f"\n=== Cumulative PRODUCTION across {len(log['weeks'])} verified week(s) ===")
     print(f"Cumulative precision@10: {cum_hits10}/{cum_n10}" + (f" = {cum_p10:.4f}" if cum_p10 is not None else ""))
     print(f"Cumulative precision@25: {cum_hits25}/{cum_n25}" + (f" = {cum_p25:.4f}" if cum_p25 is not None else ""))
     print("(a single week is far too noisy to read on its own -- watch this cumulative figure over time)")
+
+    weeks_with_shadow = [w for w in log["weeks"] if "shadow" in w]
+    shadow_cum = None
+    if weeks_with_shadow:
+        s_hits10 = sum(w["precision_at_10"]["hits"] for w in weeks_with_shadow)
+        s_n10 = sum(w["precision_at_10"]["n"] for w in weeks_with_shadow)
+        sh_hits10 = sum(w["shadow"]["precision_at_10"]["hits"] for w in weeks_with_shadow)
+        sh_n10 = sum(w["shadow"]["precision_at_10"]["n"] for w in weeks_with_shadow)
+        s_p10 = s_hits10 / s_n10 if s_n10 else None
+        sh_p10 = sh_hits10 / sh_n10 if sh_n10 else None
+        shadow_cum = {
+            "n_weeks": len(weeks_with_shadow),
+            "production": {"hits": s_hits10, "n": s_n10, "precision": s_p10},
+            "shadow": {"hits": sh_hits10, "n": sh_n10, "precision": sh_p10},
+        }
+        print(f"\n=== Cumulative PRODUCTION vs SHADOW head-to-head, precision@10, "
+              f"{len(weeks_with_shadow)} week(s) with both ===")
+        print(f"  Production: {s_hits10}/{s_n10}" + (f" = {s_p10:.4f}" if s_p10 is not None else ""))
+        print(f"  Shadow:     {sh_hits10}/{sh_n10}" + (f" = {sh_p10:.4f}" if sh_p10 is not None else ""))
 
     # ---- markdown report ----
     md_path = Path(args.predictions_dir) / f"{args.season}_week{args.week:02d}_verified.md"
     lines = [
         f"# Verification: {args.season} week {args.week}",
         "",
-        f"Model: `{predictions.get('model', {}).get('filename')}` "
-        f"(commit `{predictions.get('model', {}).get('git_commit')}`)",
-        "",
-        f"- Week base rate: {n_spiked_week}/{n_eligible_week} eligible players spiked"
+        f"- Week base rate (shared by production and shadow): {n_spiked_week}/{n_eligible_week} eligible players spiked"
         + (f" ({base_rate_val:.4f})" if base_rate_val is not None else ""),
-        f"- {fmt_metric(pooled[10], 'Precision@10 (pooled)')}",
-        f"- {fmt_metric(pooled[25], 'Precision@25 (pooled)')}",
-        f"- Of the top 25: {sum(1 for r in rows_out if r['status']=='HIT')} actually spiked",
-        f"- DNP: {n_dnp}, no label produced: {n_no_label} -- both counted as non-hits above, not dropped from the denominator",
-        f"- Cumulative across {len(log['weeks'])} verified week(s): "
+        f"- Cumulative PRODUCTION across {len(log['weeks'])} verified week(s): "
         f"P@10 {cum_hits10}/{cum_n10}" + (f" = {cum_p10:.4f}" if cum_p10 is not None else "")
         + f", P@25 {cum_hits25}/{cum_n25}" + (f" = {cum_p25:.4f}" if cum_p25 is not None else ""),
-        "",
-        f"## Per-position precision@{PER_POSITION_K} (from the full scored pool)",
-        "",
-        "*Base rate is each position's own spike rate among all eligible players at that position -- "
-        "a different, position-specific denominator from the pooled base rate above. Not directly "
-        "comparable across positions or against the pooled figure; each row's lift is only meaningful "
-        "against that row's own base rate.*",
-        "",
-        "| Pos | Hits/N | Precision | Base rate | Lift |",
-        "|---|---:|---:|---:|---:|",
     ]
-    for pos in POSITIONS:
-        m = per_pos[pos]
-        if m["precision"] is None:
-            lines.append(f"| {pos} | -- | n/a | -- | -- |")
-        else:
-            br_s = f"{m['base_rate']:.4f}" if m["base_rate"] is not None else "n/a"
-            lift_s = f"{m['lift']:.1f}x" if m["lift"] else "n/a"
-            lines.append(f"| {pos} | {m['hits']}/{m['n']} | {m['precision']:.4f} | {br_s} | {lift_s} |")
-    lines += [
-        "",
-        "| Rank | Name | Pos | Team | Predicted | Actual | Baseline | Threshold | Status |",
-        "|---:|---|---|---|---:|---:|---:|---:|:---:|",
-    ]
-    for r in rows_out:
-        actual_s = f"{r['actual_fantasy_points_half']:.1f}" if r["actual_fantasy_points_half"] is not None else "--"
-        base_s = f"{r['trailing_baseline']:.2f}" if r["trailing_baseline"] is not None else "N/A"
-        thr_s = f"{r['spike_threshold']:.2f}" if r["spike_threshold"] is not None else "N/A"
-        mark = {"HIT": "✓", "MISS": "✗", "DNP": "DNP", "NO_LABEL": "N/A"}[r["status"]]
+    if shadow_cum:
         lines.append(
-            f"| {r['rank']} | {r['name']} | {r['pos']} | {r['team']} | {r['predicted_score']:.4f} | "
-            f"{actual_s} | {base_s} | {thr_s} | {mark} |"
+            f"- Cumulative head-to-head (precision@10, {shadow_cum['n_weeks']} week(s) with both): "
+            f"production {shadow_cum['production']['hits']}/{shadow_cum['production']['n']}"
+            + (f" = {shadow_cum['production']['precision']:.4f}" if shadow_cum['production']['precision'] is not None else "")
+            + f", shadow {shadow_cum['shadow']['hits']}/{shadow_cum['shadow']['n']}"
+            + (f" = {shadow_cum['shadow']['precision']:.4f}" if shadow_cum['shadow']['precision'] is not None else "")
         )
+    lines.append("")
+    lines += markdown_for_result(prod_result, "PRODUCTION")
+    if shadow_result:
+        lines.append("")
+        lines += markdown_for_result(shadow_result, "SHADOW")
+
     with open(md_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     print(f"[SAVED] markdown report written to {md_path}")

@@ -32,7 +32,7 @@ The small bench (4 spots) is why waiver-wire churn matters more than draft night
 | `model/` | `features_lib.py` (shared feature computation, used by both training and live scoring), label/feature generators, training scripts, `score_week.py` (live weekly scoring), `model_metadata.py` |
 | `league/` | Yahoo Fantasy API OAuth2 setup and read-only access (not yet wired to a live recap feature) |
 | `evaluation/` | Held-out model evaluation, feature experiments, `verify_week.py` (scores committed predictions against what actually happened) |
-| `predictions/` | Committed, frozen scoring output per week (JSON + markdown), plus `verification_log.json` — the running record of predicted-vs-actual |
+| `predictions/` | Committed, frozen scoring output per week (JSON + markdown) from the production model, plus a matching `_shadow` JSON + markdown pair from the shadow model (`score_week.py`'s `--shadow-model`, default `odds_xgb_model_production_10feature.joblib`) when one was generated, plus `verification_log.json` — the running record of predicted-vs-actual for both |
 | `legacy/` | Non-functional artifacts from an earlier, abandoned attempt at this project. Kept for historical context only; nothing in here is used by the current pipeline |
 
 **Pipeline run order** (from repo root):
@@ -78,6 +78,7 @@ The SQLite database, `nflverse_raw/`, and all `.joblib` model files are gitignor
 - Hyperparameters are tuned on a validation slice carved from the **training** period, never on the test set.
 - A test set is used **once**, then considered closed. Don't re-run comparisons against an already-closed test year.
 - A new feature is adopted only if it **wins on held-out data against a pre-registered metric** — never because the theory behind it sounds right.
+- **Training scripts must specify their training seasons explicitly** — never train on "whatever is in `player_week_features`." That table now grows with live in-season data (`generate_player_week_features.py` rebuilds it across every loaded season, current one included, once it's been run for a week), so an unfiltered train silently leaks current-season weeks into a model meant to score that same season live. `train_production_model.py`'s `TRAIN_SEASONS` constant is the pattern to follow — this is exactly the bug caught (and fixed) during the Group 1 promotion.
 
 Three feature candidates have been **rejected** by this discipline: a usage-trend feature (negligible importance); a season-over-season touch-share delta (won on a 2023 validation slice, then lost on the 2025 held-out test — the result that actually decided it); and Group 2, QB volume (trailing pass attempts, trailing pass air yards, team WR-target rate) — it won pooled precision@10 on a 2024 re-test, but a per-position re-evaluation showed that win traced entirely to the model reallocating picks toward QBs (a ~4x higher base rate than the pooled population), with essentially no movement at RB, WR, or TE. Pooled precision@k alone can't be trusted to catch this; per-position precision (`evaluation/metrics.py`) is now checked on every feature-group test for exactly this reason.
 

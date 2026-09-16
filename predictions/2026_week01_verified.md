@@ -1,17 +1,16 @@
 # Verification: 2026 week 1
 
-Model: `odds_xgb_model_production.joblib` (commit `262a04fda4a39cb4c16e568f1d28034a399169e7`)
+- Week base rate (shared by production and shadow): 48/972 eligible players spiked (0.0494)
+- Cumulative PRODUCTION across 1 verified week(s): P@10 0/10 = 0.0000, P@25 3/25 = 0.1200
 
-- Week base rate: 48/972 eligible players spiked (0.0494)
+## PRODUCTION: `odds_xgb_model_production.joblib` (commit `262a04fda4a39cb4c16e568f1d28034a399169e7`)
+
 - Precision@10 (pooled): 0/10 = 0.0000
 - Precision@25 (pooled): 3/25 = 0.1200  (2.4x base rate)
 - Of the top 25: 3 actually spiked
 - DNP: 8, no label produced: 0 -- both counted as non-hits above, not dropped from the denominator
-- Cumulative across 1 verified week(s): P@10 0/10 = 0.0000, P@25 3/25 = 0.1200
 
-## Per-position precision@10 (from the full scored pool)
-
-*Base rate is each position's own spike rate among all eligible players at that position -- a different, position-specific denominator from the pooled base rate above. Not directly comparable across positions or against the pooled figure; each row's lift is only meaningful against that row's own base rate.*
+*Per-position base rate is each position's own spike rate among all eligible players at that position -- a different, position-specific denominator from the pooled base rate above. Not directly comparable across positions or against the pooled figure; each row's lift is only meaningful against that row's own base rate.*
 
 | Pos | Hits/N | Precision | Base rate | Lift |
 |---|---:|---:|---:|---:|

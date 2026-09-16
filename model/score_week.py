@@ -24,6 +24,17 @@ point their trailing window (used for touches/touch-share/etc.) is built
 entirely from this season's real data, so no stale prior-season usage feeds
 any feature and the offseason concern no longer applies -- regardless of
 what the static roster/production checks would otherwise say.
+
+Shadow scoring: alongside the production model, the same candidate pool
+(same eligibility, same suppression -- neither depends on which model does
+the scoring) is ALSO scored with a second, fixed "shadow" model -- by
+default odds_xgb_model_production_10feature.joblib, the pre-Group-1
+production model -- so a head-to-head against the current production model
+accumulates week over week (see evaluation/verify_week.py). Skipped with a
+warning if the shadow model file isn't present locally (it's gitignored,
+like every .joblib). Like the production file, the shadow prediction file
+must be generated before the week is played and committed frozen -- never
+regenerated afterward, same discipline throughout this pipeline.
 """
 import argparse
 import csv
@@ -136,15 +147,120 @@ def load_roster_records(path, season):
     return team_of, team_pos_roster, draft_pick_of
 
 
+def load_and_score(model_path, label, stable):
+    """Loads a model bundle, scores the shared `stable` candidate pool with
+    it, and returns (model_commit, model_meta, feature_cols, proba, ranked)
+    -- or None if model_path doesn't exist (used for an optional shadow
+    model). `label` is only for console messages, e.g. "PRODUCTION" or
+    "SHADOW"."""
+    if not os.path.exists(model_path):
+        return None
+
+    bundle = joblib.load(model_path)
+    model = bundle["model"]
+    feature_cols = bundle["feature_cols"]
+    # The saved model may use any subset of PERSISTED_FEATURE_COLS (e.g. the
+    # production model trains on features_lib.PRODUCTION_FEATURE_COLS, a
+    # strict subset that excludes the rejected share_delta_vs_prior_season --
+    # see features_lib.py for why) -- just check it's a real subset, not an
+    # exact match.
+    unknown = set(feature_cols) - set(PERSISTED_FEATURE_COLS)
+    assert not unknown, f"saved {label} model uses unknown feature columns: {unknown}"
+    print(f"[INFO] {label} model ({Path(model_path).name}) uses {len(feature_cols)} feature(s): {feature_cols}")
+
+    model_meta = read_metadata(model_path)
+    model_commit = model_meta.get("git_commit") if model_meta else None
+    print(f"[INFO] {label} model identity: {Path(model_path).name}"
+          + (f" (git_commit={model_commit})" if model_commit else " (no metadata sidecar found -- commit hash unknown)"))
+
+    X = np.array([[c[1][col] if c[1][col] is not None else np.nan for col in feature_cols] for c in stable])
+    proba = model.predict_proba(X)[:, 1] if len(stable) else np.array([])
+    return model_commit, model_meta, feature_cols, proba
+
+
+def print_top_table(label, ranked, args, names):
+    print(f"\n[{label}] Top {len(ranked)} by predicted spike probability, {args.season} week {args.week} "
+          f"(stable candidates only, both flags clear):")
+    header = f"{'Name':24} {'Pos':4} {'Team':5} {'Score':>7}"
+    print(header)
+    print("-" * len(header))
+    for (pid, feat), score in ranked:
+        display = names.get(pid, pid)
+        print(f"{display:24.24} {feat['_pos']:4} {feat['_team']:5} {score:7.4f}")
+
+
+def write_output(model_path, model_commit, model_meta, args, names, ranked, stable, proba,
+                  all_eligible_count, n_candidates, n_released_by_recency,
+                  team_changed_records, new_competitor_records,
+                  n_via_production_only, n_via_draft_only, n_via_both, json_out_path):
+    def player_record(pid, feat, score=None):
+        return {
+            "player_id": pid, "name": names.get(pid, pid),
+            "pos": feat["_pos"], "team": feat["_team"],
+            "score": float(score) if score is not None else None,
+        }
+
+    ranked_records = []
+    for rank, ((pid, feat), score) in enumerate(ranked, start=1):
+        rec = player_record(pid, feat, score)
+        rec["rank"] = rank
+        ranked_records.append(rec)
+
+    scored_pool_records = [
+        player_record(pid, feat, s)
+        for (pid, feat), s in sorted(zip(stable, proba), key=lambda x: x[1], reverse=True)
+    ]
+
+    output = {
+        "season": args.season,
+        "week": args.week,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "model": {
+            "path": str(Path(model_path).resolve()),
+            "filename": Path(model_path).name,
+            "git_commit": model_commit,
+            "role": model_meta.get("role") if model_meta else None,
+        },
+        "counts": {
+            "total_eligible": all_eligible_count,
+            "after_position_filter": n_candidates,
+            "stable_scored": len(stable),
+            "released_from_offseason_suppression": n_released_by_recency,
+            "team_changed_suppressed": len(team_changed_records),
+            "new_competitor_suppressed": len(new_competitor_records),
+            "new_competitor_via_production_only": n_via_production_only,
+            "new_competitor_via_draft_only": n_via_draft_only,
+            "new_competitor_via_both": n_via_both,
+        },
+        "top": ranked_records,
+        "scored_pool": scored_pool_records,
+        "team_changed_watch_list": team_changed_records,
+        "new_competitor_watch_list": new_competitor_records,
+    }
+
+    json_out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(json_out_path, "w", encoding="utf-8") as f:
+        json.dump(output, f, indent=2)
+    print(f"[SAVED] scoring output written to {json_out_path}")
+
+    md_out_path = json_out_path.with_suffix(".md")
+    md_out_path.write_text(render_markdown_report(output), encoding="utf-8")
+    print(f"[SAVED] markdown report written to {md_out_path}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default=str(REPO_ROOT / "faab_history_core_v0_1.db"))
     ap.add_argument("--model", default=str(REPO_ROOT / "odds_xgb_model_production.joblib"))
+    ap.add_argument("--shadow-model", default=str(REPO_ROOT / "odds_xgb_model_production_10feature.joblib"),
+                     help="also score the same candidate pool with this model, for a head-to-head "
+                          "tracked in verify_week.py; skipped with a warning if the file isn't present locally")
+    ap.add_argument("--no-shadow", action="store_true", help="skip shadow scoring even if --shadow-model exists")
     ap.add_argument("--season", type=int, required=True)
     ap.add_argument("--week", type=int, required=True)
     ap.add_argument("--top", type=int, default=25)
     ap.add_argument("--roster", default=None, help="defaults to nflverse_raw/roster_<season>.csv if present")
-    ap.add_argument("--json-out", default=None, help="if set, write the full scoring output (top N, scored pool, both watch lists, model identity) as JSON to this path")
+    ap.add_argument("--json-out", default=None, help="if set, write the full scoring output (top N, scored pool, both watch lists, model identity) as JSON to this path, and a matching shadow file (same basename + _shadow) if shadow scoring runs")
     args = ap.parse_args()
 
     roster_path = args.roster or str(REPO_ROOT / "nflverse_raw" / f"roster_{args.season}.csv")
@@ -155,23 +271,6 @@ def main():
               f"{len(draft_pick_of)} rookies with known {args.season}-draft pick numbers")
     else:
         print(f"[INFO] no roster file at {roster_path} -- skipping offseason team-change / new-competitor cross-checks")
-
-    bundle = joblib.load(args.model)
-    model = bundle["model"]
-    feature_cols = bundle["feature_cols"]
-    # The saved model may use any subset of PERSISTED_FEATURE_COLS (e.g. the
-    # production model trains on features_lib.PRODUCTION_FEATURE_COLS, a
-    # strict subset that excludes the rejected share_delta_vs_prior_season --
-    # see features_lib.py for why) -- just check it's a real subset, not an
-    # exact match.
-    unknown = set(feature_cols) - set(PERSISTED_FEATURE_COLS)
-    assert not unknown, f"saved model uses unknown feature columns: {unknown}"
-    print(f"[INFO] model uses {len(feature_cols)} feature(s): {feature_cols}")
-
-    model_meta = read_metadata(args.model)
-    model_commit = model_meta.get("git_commit") if model_meta else None
-    print(f"[INFO] model identity: {Path(args.model).name}"
-          + (f" (git_commit={model_commit})" if model_commit else " (no metadata sidecar found -- commit hash unknown)"))
 
     con = sqlite3.connect(args.db)
     con.row_factory = sqlite3.Row
@@ -191,6 +290,7 @@ def main():
 
     if not candidates:
         print("[DONE] no eligible players -- nothing to score.")
+        con.close()
         return
 
     # A player is "on team T's 2025 roster" if they have a real 2025 game for
@@ -302,18 +402,6 @@ def main():
     print(f"[INFO]   of those {len(new_competitor_list)}: {n_via_production_only} via prior-production threshold only, "
           f"{n_via_draft_only} via draft-capital only, {n_via_both} via both")
 
-    X = np.array([[c[1][col] if c[1][col] is not None else np.nan for col in feature_cols] for c in stable])
-    proba = model.predict_proba(X)[:, 1]
-    ranked = sorted(zip(stable, proba), key=lambda x: x[1], reverse=True)[: args.top]
-
-    print(f"\nTop {len(ranked)} by predicted spike probability, {args.season} week {args.week} (stable candidates only, both flags clear):")
-    header = f"{'Name':24} {'Pos':4} {'Team':5} {'Score':>7}  team_changed  new_competitor"
-    print(header)
-    print("-" * len(header))
-    for (pid, feat), score in ranked:
-        display = names.get(pid, pid)
-        print(f"{display:24.24} {feat['_pos']:4} {feat['_team']:5} {score:7.4f}  {0:^12}  {0:^14}")
-
     if team_changed_list:
         print(f"\nWatch list -- {len(team_changed_list)} players with a confirmed offseason team change, score suppressed ({TEAM_CHANGE_REASON}):")
         header2 = f"{'Name':24} {'Pos':4} {'Old':4} {'New':4} {'Opp':4} {'Home':5} {'ShortWk':7} {'StarterAbsent':13} {'Matchup':>8}"
@@ -343,90 +431,58 @@ def main():
                 comp_strs.append(f"{names.get(c, c)} [{why}]")
             print(f"{display:24.24} {feat['_pos']:4} {team:5} {', '.join(comp_strs)}")
 
-    if args.json_out:
-        def player_record(pid, feat, score=None):
-            return {
-                "player_id": pid, "name": names.get(pid, pid),
-                "pos": feat["_pos"], "team": feat["_team"],
-                "score": float(score) if score is not None else None,
-            }
-
-        ranked_records = []
-        for rank, ((pid, feat), score) in enumerate(ranked, start=1):
-            rec = player_record(pid, feat, score)
-            rec["rank"] = rank
-            ranked_records.append(rec)
-
-        scored_pool_records = [
-            player_record(pid, feat, s)
-            for (pid, feat), s in sorted(zip(stable, proba), key=lambda x: x[1], reverse=True)
-        ]
-
-        team_changed_records = []
-        for pid, feat, old_team, new_team, corrected in team_changed_list:
-            team_changed_records.append({
-                "player_id": pid, "name": names.get(pid, pid), "pos": feat["_pos"],
-                "old_team": old_team, "new_team": new_team,
-                "reason": TEAM_CHANGE_REASON,
-                "corrected_features": {
-                    "opponent": corrected["_opp"], "is_home": corrected["is_home"],
-                    "is_short_week": corrected["is_short_week"],
-                    "starter_absent_proxy": corrected["starter_absent_proxy"],
-                    "opponent_position_matchup": corrected["opponent_position_matchup"],
-                },
-            })
-
-        new_competitor_records = []
-        for pid, feat, team, competitors in new_competitor_list:
-            comp_details = []
-            for c in competitors:
-                _, via_prod, via_draft = meaningful_threat(c, feat["_pos"])
-                comp_details.append({
-                    "player_id": c, "name": names.get(c, c),
-                    "via_production": via_prod, "via_draft_capital": via_draft,
-                })
-            new_competitor_records.append({
-                "player_id": pid, "name": names.get(pid, pid), "pos": feat["_pos"], "team": team,
-                "reason": NEW_COMPETITOR_REASON,
-                "new_competitors": comp_details,
-            })
-
-        output = {
-            "season": args.season,
-            "week": args.week,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "model": {
-                "path": str(Path(args.model).resolve()),
-                "filename": Path(args.model).name,
-                "git_commit": model_commit,
-                "role": model_meta.get("role") if model_meta else None,
+    # Watch-list JSON records are model-independent (same suppression logic
+    # regardless of which model scores the stable pool) -- built once, reused
+    # for both the production and shadow output files.
+    team_changed_records = []
+    for pid, feat, old_team, new_team, corrected in team_changed_list:
+        team_changed_records.append({
+            "player_id": pid, "name": names.get(pid, pid), "pos": feat["_pos"],
+            "old_team": old_team, "new_team": new_team,
+            "reason": TEAM_CHANGE_REASON,
+            "corrected_features": {
+                "opponent": corrected["_opp"], "is_home": corrected["is_home"],
+                "is_short_week": corrected["is_short_week"],
+                "starter_absent_proxy": corrected["starter_absent_proxy"],
+                "opponent_position_matchup": corrected["opponent_position_matchup"],
             },
-            "counts": {
-                "total_eligible": all_eligible_count,
-                "after_position_filter": len(candidates),
-                "stable_scored": len(stable),
-                "released_from_offseason_suppression": n_released_by_recency,
-                "team_changed_suppressed": len(team_changed_list),
-                "new_competitor_suppressed": len(new_competitor_list),
-                "new_competitor_via_production_only": n_via_production_only,
-                "new_competitor_via_draft_only": n_via_draft_only,
-                "new_competitor_via_both": n_via_both,
-            },
-            "top": ranked_records,
-            "scored_pool": scored_pool_records,
-            "team_changed_watch_list": team_changed_records,
-            "new_competitor_watch_list": new_competitor_records,
-        }
+        })
 
-        json_out_path = Path(args.json_out)
-        json_out_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(json_out_path, "w", encoding="utf-8") as f:
-            json.dump(output, f, indent=2)
-        print(f"\n[SAVED] full scoring output written to {json_out_path}")
+    new_competitor_records = []
+    for pid, feat, team, competitors in new_competitor_list:
+        comp_details = []
+        for c in competitors:
+            _, via_prod, via_draft = meaningful_threat(c, feat["_pos"])
+            comp_details.append({
+                "player_id": c, "name": names.get(c, c),
+                "via_production": via_prod, "via_draft_capital": via_draft,
+            })
+        new_competitor_records.append({
+            "player_id": pid, "name": names.get(pid, pid), "pos": feat["_pos"], "team": team,
+            "reason": NEW_COMPETITOR_REASON,
+            "new_competitors": comp_details,
+        })
 
-        md_out_path = json_out_path.with_suffix(".md")
-        md_out_path.write_text(render_markdown_report(output), encoding="utf-8")
-        print(f"[SAVED] markdown report written to {md_out_path}")
+    def run_pass(model_path, label, json_out_path):
+        result = load_and_score(model_path, label, stable)
+        if result is None:
+            print(f"[WARN] {label} model not found at {model_path} -- skipping {label.lower()} scoring")
+            return
+        model_commit, model_meta, feature_cols, proba = result
+        ranked = sorted(zip(stable, proba), key=lambda x: x[1], reverse=True)[: args.top]
+        print_top_table(label, ranked, args, names)
+        if json_out_path is not None:
+            write_output(model_path, model_commit, model_meta, args, names, ranked, stable, proba,
+                         all_eligible_count, len(candidates), n_released_by_recency,
+                         team_changed_records, new_competitor_records,
+                         n_via_production_only, n_via_draft_only, n_via_both, json_out_path)
+
+    json_out_path = Path(args.json_out) if args.json_out else None
+    run_pass(args.model, "PRODUCTION", json_out_path)
+
+    if not args.no_shadow:
+        shadow_json_out = json_out_path.with_name(json_out_path.stem + "_shadow" + json_out_path.suffix) if json_out_path else None
+        run_pass(args.shadow_model, "SHADOW", shadow_json_out)
 
     con.close()
 
