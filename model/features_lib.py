@@ -105,6 +105,17 @@ QB_VOLUME_FEATURES = [
     "trailing_team_wr_target_rate",
 ]
 
+# Group 3 hypothesis: teammate competition for touches at the same
+# position -- computed by compute_features() but NOT part of
+# PERSISTED_FEATURE_COLS or PRODUCTION_FEATURE_COLS -- not yet adopted
+# into any persisted table or production model. See
+# evaluation/test_teammate_competition_features.py for the group's
+# held-out test.
+TEAMMATE_COMPETITION_FEATURES = [
+    "trailing_position_group_rank",
+    "trailing_share_of_position_group",
+]
+
 
 class FeatureEngine:
     def __init__(self, con: sqlite3.Connection):
@@ -403,6 +414,48 @@ class FeatureEngine:
         denom = wr_sum + rb_sum
         return (wr_sum / denom) if denom else None
 
+    def _position_group_rank(self, season, week, team, pos, player_id, player_avg_touches):
+        """Group 3 hypothesis features: trailing_position_group_rank,
+        trailing_share_of_position_group -- the player's rank and share of
+        avg trailing touches among his own team's players at the same
+        position, all computed with the exact same eligibility/gap-aware
+        window as every other trailing feature (>=3 prior games, reset
+        across season gaps). Candidates come from the season-long roster
+        at (season, team, pos) -- same source _presumed_starter uses --
+        but each candidate's own trailing average is recomputed fresh for
+        THIS (season, week): a teammate who hasn't debuted yet by this
+        week has no window and is naturally excluded, not force-included
+        just because he's on the season's roster.
+
+        Ties: competition ranking (1224-style) -- two backs both
+        averaging 9.0 touches both rank 1, and the next-best back ranks 3,
+        not 2. Reason: rank should say "how many teammates are strictly
+        ahead of you", which is well-defined even under a tie; an
+        arbitrary tiebreak (e.g. by player_id) would imply an ordering the
+        data doesn't support.
+
+        Single-player position group (no OTHER eligible teammate): ranks
+        1 with share 1.0 -- there's no one to split touches with, not an
+        undefined construct. Only QB is NULL-gated by the caller; every
+        other position always has a defined rank/share once the player
+        himself is eligible (player_avg_touches is always a real number
+        by the time this is called)."""
+        candidates = self.roster.get((season, team, pos), set())
+        group_avgs = {player_id: player_avg_touches}
+        for pid in candidates:
+            if pid == player_id:
+                continue
+            w = self._touches_window(pid, season, week)
+            if len(w) < MIN_PRIOR_GAMES:
+                continue
+            last3 = w[-MIN_PRIOR_GAMES:]
+            group_avgs[pid] = sum(t for (_, _, _, _, t) in last3) / MIN_PRIOR_GAMES
+
+        rank = 1 + sum(1 for pid, v in group_avgs.items() if pid != player_id and v > player_avg_touches)
+        group_total = sum(group_avgs.values())
+        share = (player_avg_touches / group_total) if group_total else None
+        return rank, share
+
     def compute_schedule_dependent_features(self, season, week, team, pos, player_id):
         """The 4 features that depend on which team the player is actually on
         this week (opponent, home/away, short week, presumed-starter check),
@@ -449,9 +502,10 @@ class FeatureEngine:
 
     def compute_features(self, season, week, player_id):
         """Returns a dict of PERSISTED_FEATURE_COLS plus
-        RECEIVING_OPPORTUNITY_FEATURES and QB_VOLUME_FEATURES (neither
-        group is yet part of any persisted table or production model --
-        see their definitions above), or None if the player isn't eligible
+        RECEIVING_OPPORTUNITY_FEATURES, QB_VOLUME_FEATURES, and
+        TEAMMATE_COMPETITION_FEATURES (none of these three groups is yet
+        part of any persisted table or production model -- see their
+        definitions above), or None if the player isn't eligible
         (<3 prior games, respecting season-gap boundaries) as of (season,
         week). Uses only data strictly before (season, week)."""
         window = self._touches_window(player_id, season, week)
@@ -504,6 +558,13 @@ class FeatureEngine:
         trailing_pass_attempts, trailing_pass_air_yards = self._trailing_qb_volume(player_id, pos, last3)
         trailing_team_wr_target_rate = self._trailing_team_wr_target_rate(last3)
 
+        if pos in ("RB", "WR", "TE"):
+            trailing_position_group_rank, trailing_share_of_position_group = self._position_group_rank(
+                season, week, team, pos, player_id, avg_touches
+            )
+        else:
+            trailing_position_group_rank, trailing_share_of_position_group = None, None
+
         return {
             "trailing_touches_avg": avg_touches,
             "trailing_touches_trend": trend,
@@ -522,6 +583,8 @@ class FeatureEngine:
             "trailing_pass_attempts": trailing_pass_attempts,
             "trailing_pass_air_yards": trailing_pass_air_yards,
             "trailing_team_wr_target_rate": trailing_team_wr_target_rate,
+            "trailing_position_group_rank": trailing_position_group_rank,
+            "trailing_share_of_position_group": trailing_share_of_position_group,
             "_team": team,
             "_pos": pos,
             "_opp": opp,
