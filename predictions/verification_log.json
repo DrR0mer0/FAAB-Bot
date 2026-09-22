@@ -84,6 +84,74 @@
       },
       "n_dnp": 8,
       "n_no_label": 0
+    },
+    {
+      "season": 2026,
+      "week": 2,
+      "verified_at": "2026-09-22T15:23:19.687167+00:00",
+      "base_rate": 0.04512067156348373,
+      "prediction_file": "predictions\\2026_week02.json",
+      "model": {
+        "path": "C:\\FAAB\\history\\odds_xgb_model_production.joblib",
+        "filename": "odds_xgb_model_production.joblib",
+        "git_commit": "262a04fda4a39cb4c16e568f1d28034a399169e7",
+        "role": "production"
+      },
+      "precision_at_10": {
+        "hits": 1,
+        "n": 10,
+        "precision": 0.1
+      },
+      "precision_at_25": {
+        "hits": 6,
+        "n": 25,
+        "precision": 0.24
+      },
+      "per_position": {
+        "k": 10,
+        "QB": {
+          "k": 10,
+          "hits": 3,
+          "n": 10,
+          "precision": 0.3,
+          "base_rate": 0.2631578947368421,
+          "n_eligible": 38,
+          "n_spiked": 10,
+          "lift": 1.1400000000000001
+        },
+        "RB": {
+          "k": 10,
+          "hits": 1,
+          "n": 10,
+          "precision": 0.1,
+          "base_rate": 0.075,
+          "n_eligible": 80,
+          "n_spiked": 6,
+          "lift": 1.3333333333333335
+        },
+        "WR": {
+          "k": 10,
+          "hits": 3,
+          "n": 10,
+          "precision": 0.3,
+          "base_rate": 0.13953488372093023,
+          "n_eligible": 129,
+          "n_spiked": 18,
+          "lift": 2.15
+        },
+        "TE": {
+          "k": 10,
+          "hits": 2,
+          "n": 10,
+          "precision": 0.2,
+          "base_rate": 0.1323529411764706,
+          "n_eligible": 68,
+          "n_spiked": 9,
+          "lift": 1.511111111111111
+        }
+      },
+      "n_dnp": 4,
+      "n_no_label": 0
     }
   ]
 }
