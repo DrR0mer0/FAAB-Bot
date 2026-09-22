@@ -366,6 +366,98 @@ class FeatureEngine:
         share = (player_sum / team_sum) if team_sum else None
         return share, last3
 
+    # Group 6 hypothesis: exponential recency weighting for the trailing-
+    # window computation behind 4 EXISTING production usage features
+    # (trailing_touches_avg, trailing_team_touch_share, trailing_target_share,
+    # trailing_air_yards_share) -- this modifies HOW those features are
+    # computed, under the SAME names, rather than adding new ones, so it's
+    # tested via compute_recency_weighted_usage() below (called directly by
+    # evaluation/test_recency_decay_features.py) rather than through
+    # compute_features(), which must keep producing the unweighted
+    # production values. Decay constant: 0.5 per game further back (a
+    # 1-game half-life) for BOTH variants -- chosen because usage/role can
+    # shift quickly (a new starter, a returning injury) and a flat mean
+    # already responds slowly over a 3-game window; halving the weight each
+    # game back means the most recent game alone carries as much weight as
+    # every older game in the window combined, while still letting older
+    # games break a tie or soften one flukey game rather than a hard
+    # single-game cutoff would. Eligibility stays fixed at >=3 prior games
+    # regardless of variant, so variant B's wider window never admits a
+    # player the baseline candidate pool wouldn't already include -- only
+    # the weighting inside an already-eligible window changes.
+    RECENCY_DECAY = 0.5
+
+    def compute_recency_weighted_usage(self, season, week, player_id, pos, window_size):
+        """Recency-weighted variants of trailing_touches_avg,
+        trailing_team_touch_share, trailing_target_share, and
+        trailing_air_yards_share -- same 4 names, same >=3-prior-games
+        eligibility gate and gap-aware window as the production versions,
+        just weighted by RECENCY_DECAY**(games_ago) instead of averaged
+        flat, over the last `window_size` eligible games (3 for variant A,
+        6 for variant B -- fewer than `window_size` if the player doesn't
+        have that many prior games yet; this is a widened CEILING on the
+        window, not a stricter floor, so it never conflicts with the fixed
+        eligibility gate above).
+
+        trailing_touches_avg and trailing_team_touch_share generalize the
+        production ratio-of-SUMS pattern (_trailing_touch_share) to a
+        ratio of WEIGHTED sums: weighted_share = sum(w_i * touches_i) /
+        sum(w_i * team_touches_i), which collapses to the unweighted
+        formula when every weight is equal. trailing_target_share and
+        trailing_air_yards_share generalize the production flat MEAN of
+        per-game ratios (_trailing_receiving_opportunity) to a weighted
+        mean, with the denominator counting only the weight of games where
+        that game's own ratio is defined -- same "average over defined
+        values, None if none qualify" rule as the unweighted version, just
+        weighted. `pos` NULL-gates trailing_target_share/
+        trailing_air_yards_share for QB, matching _trailing_receiving_
+        opportunity exactly -- this test changes ONLY the weighting, not
+        which positions the feature applies to.
+
+        Returns None if the player isn't eligible (<3 prior games)."""
+        full_window = self._touches_window(player_id, season, week)
+        if len(full_window) < MIN_PRIOR_GAMES:
+            return None
+        window = full_window[-window_size:]
+        n = len(window)
+        # weights[i] pairs with window[i]; index n-1 (most recent) gets
+        # weight 1, index 0 (oldest in this window) gets the smallest.
+        weights = [self.RECENCY_DECAY ** (n - 1 - i) for i in range(n)]
+
+        w_touches = sum(w * t for w, (_, _, _, _, t) in zip(weights, window))
+        w_weight_sum = sum(weights)
+        trailing_touches_avg = w_touches / w_weight_sum
+
+        w_team_touches = sum(
+            w * self.team_week_touches.get((s, wk, tm), 0) for w, (s, wk, tm, _, _) in zip(weights, window)
+        )
+        trailing_team_touch_share = (w_touches / w_team_touches) if w_team_touches else None
+
+        if pos == "QB":
+            trailing_target_share, trailing_air_yards_share = None, None
+        else:
+            ts_num, ts_den, ays_num, ays_den = 0.0, 0.0, 0.0, 0.0
+            for w, (s, wk, _tm, _pos, _t) in zip(weights, window):
+                rec = self.recv_game_stats.get((player_id, s, wk))
+                if rec is None:
+                    continue
+                target_share, air_yards_share, _ray, _tgt = rec
+                if target_share is not None:
+                    ts_num += w * target_share
+                    ts_den += w
+                if air_yards_share is not None:
+                    ays_num += w * air_yards_share
+                    ays_den += w
+            trailing_target_share = (ts_num / ts_den) if ts_den else None
+            trailing_air_yards_share = (ays_num / ays_den) if ays_den else None
+
+        return {
+            "trailing_touches_avg": trailing_touches_avg,
+            "trailing_team_touch_share": trailing_team_touch_share,
+            "trailing_target_share": trailing_target_share,
+            "trailing_air_yards_share": trailing_air_yards_share,
+        }
+
     def _presumed_starter(self, season, week, team, pos):
         candidates = self.roster.get((season, team, pos), set())
         best_pid, best_share = None, -1.0
