@@ -6,16 +6,19 @@ Works for a not-yet-played week: eligibility and features are computed via
 features_lib.FeatureEngine using only data strictly before the target week,
 the same function used to build the historical training table.
 
-If a current-season roster file is available (nflverse_raw/roster_<season>.csv),
-candidates are cross-referenced against it. A confirmed offseason team change
-(vs. the team inferred from the player's last game) gets its schedule-
-dependent features (opponent matchup, home/away, short week, presumed-starter
-check) recomputed for the corrected team -- but the model score is suppressed
-entirely, since usage features (touches, touch share) still reflect the old
-team and there's no real data yet for the new one. A meaningful new
-same-position competitor (judged from 2025 production or 2026 draft capital)
-suppresses the incumbent's score the same way, on the theory that their
-trailing touch share predates the competition. Those players are reported
+If a current weekly roster file is available (nflverse_raw/roster_weekly_
+<season>.csv -- see load_current_roster; NOT the season-level roster_
+<season>.csv, which is stale between refreshes and only used elsewhere by
+data/crosscheck_roster_2026.py), candidates are cross-referenced against
+it. A confirmed offseason team change (vs. the team inferred from the
+player's last game) gets its schedule-dependent features (opponent
+matchup, home/away, short week, presumed-starter check) recomputed for
+the corrected team -- but the model score is suppressed entirely, since
+usage features (touches, touch share) still reflect the old team and
+there's no real data yet for the new one. A meaningful new same-position
+competitor (judged from 2025 production or 2026 draft capital) suppresses
+the incumbent's score the same way, on the theory that their trailing
+touch share predates the competition. Those players are reported
 separately as watch lists, not folded into the ranking.
 
 Both suppressions are released automatically, and identically, once a player
@@ -26,20 +29,26 @@ any feature and the offseason concern no longer applies -- regardless of
 what the static roster/production checks would otherwise say.
 
 Availability gate: a player whose most recent weekly roster status (from
-nflverse's weekly_rosters release, --weekly-roster, NOT the season-level
---roster file used for team-mapping above -- see load_weekly_roster_status)
-indicates a known long-term absence -- reserve/IR, PUP, non-football
-injury, or suspension -- is suppressed unconditionally, checked BEFORE
-anything else in the suppression loop (including the recency-release
-above -- a player accumulating real current-season games doesn't matter if
-they're currently on IR and can't play). Deliberately does NOT gate on
-game-day designations (questionable/doubtful/out, from nflverse's separate
-`injuries` release): those post through the week, often after predictions
-are generated, and players already on long-term reserve typically don't
-even appear on that report. This is kept structurally separate from the
-season-level roster file's team-mapping (a player on reserve still belongs
-to his team) -- it only decides whether to score him, not which team he's
-on.
+the same --weekly-roster file as team-mapping above, via load_current_
+roster's status_of) indicates a known long-term absence -- reserve/IR,
+PUP, non-football injury, or suspension -- is suppressed unconditionally,
+checked BEFORE anything else in the suppression loop (including the
+recency-release above -- a player accumulating real current-season games
+doesn't matter if they're currently on IR and can't play). Deliberately
+does NOT gate on game-day designations (questionable/doubtful/out, from
+nflverse's separate `injuries` release): those post through the week,
+often after predictions are generated, and players already on long-term
+reserve typically don't even appear on that report. This is a separate
+DECISION from team-mapping (a player on reserve still belongs to his
+team) even though both now read the same file -- status_of is never
+filtered the way team_of/team_pos_roster are, so it sees every status,
+not just the "confirmed" ones.
+
+check_roster_staleness() prints a loud, hard-to-miss warning (not a hard
+failure) if --weekly-roster is more than a few days old on disk, or its
+newest rows don't reach close to the week being scored -- a quiet stale
+roster file is exactly how a two-week-old snapshot went unnoticed. Run
+data/fetch_weekly_update.py before scoring each week to keep it current.
 
 Shadow scoring: alongside the production model, the same candidate pool
 (same eligibility, same suppression -- neither depends on which model does
@@ -57,6 +66,7 @@ import csv
 import json
 import os
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -161,36 +171,29 @@ def render_markdown_report(output):
     return "\n".join(lines) + "\n"
 
 
-def load_roster_records(path, season):
-    """Confirmed-status roster rows, keyed by gsis_id, plus a
-    (team, position) -> [gsis_id, ...] grouping used to find same-position
-    additions. Also returns draft_pick_of: gsis_id -> overall pick number,
-    for rookies of this draft class only (rookie_year == season)."""
-    team_of = {}
-    team_pos_roster = {}
-    draft_pick_of = {}
-    with open(path, encoding="utf-8") as f:
-        for r in csv.DictReader(f):
-            pid = r.get("gsis_id")
-            if not pid or r.get("status") not in CONFIRMED_ROSTER_STATUSES:
-                continue
-            team_of[pid] = r["team"]
-            team_pos_roster.setdefault((r["team"], r["position"]), []).append(pid)
-            if r.get("rookie_year") == str(season) and r.get("draft_number"):
-                draft_pick_of[pid] = int(r["draft_number"])
-    return team_of, team_pos_roster, draft_pick_of
+def load_current_roster(path, season, week):
+    """Reads nflverse's weekly_rosters release (roster_weekly_<season>.csv)
+    -- one row per player PER WEEK, unlike the season-level
+    roster_<season>.csv (still fetched for data/crosscheck_roster_2026.py,
+    but no longer read here) whose own `week` column means "the most
+    recent week this player's entry was touched," which is ambiguous for
+    someone quietly sitting on reserve. Filters to each player's status as
+    of the most recent available week <= the target week -- unambiguous,
+    no interpretation needed.
 
-
-def load_weekly_roster_status(path, season, week):
-    """Per-player roster `status` as of the most recent week <= the target
-    week, from nflverse's weekly_rosters release (roster_weekly_<season>.csv,
-    NOT the season-level roster_<season>.csv used for team-mapping) -- one
-    row per player PER WEEK, so a given player's status here reflects
-    exactly that week's actual roster state, not "the most recent week
-    their entry happened to be touched" (which is what the season-level
-    file's own `week` column means, and why it isn't used for this gate).
-    Returns {gsis_id: status}."""
-    latest = {}  # gsis_id -> (week, status)
+    Returns:
+      team_of: gsis_id -> team, for CONFIRMED_ROSTER_STATUSES players only
+               (team-change detection).
+      team_pos_roster: (team, position) -> [gsis_id, ...], same filter
+               (new-same-position-competitor detection).
+      draft_pick_of: gsis_id -> overall pick number, rookies of this draft
+               class only (rookie_year == season).
+      status_of: gsis_id -> status, for EVERY player with a known row --
+               deliberately NOT filtered to CONFIRMED_ROSTER_STATUSES,
+               since the availability gate needs to see RES/PUP/SUS/RSN
+               regardless of whether that status is "confirmed."
+    """
+    latest = {}  # gsis_id -> (week, row)
     with open(path, encoding="utf-8") as f:
         for r in csv.DictReader(f):
             if r.get("season") != str(season):
@@ -206,8 +209,62 @@ def load_weekly_roster_status(path, season, week):
                 continue
             prev = latest.get(pid)
             if prev is None or w > prev[0]:
-                latest[pid] = (w, r.get("status"))
-    return {pid: status for pid, (w, status) in latest.items()}
+                latest[pid] = (w, r)
+
+    team_of, team_pos_roster, draft_pick_of, status_of = {}, {}, {}, {}
+    for pid, (_w, r) in latest.items():
+        status = r.get("status")
+        status_of[pid] = status
+        if status not in CONFIRMED_ROSTER_STATUSES:
+            continue
+        team_of[pid] = r["team"]
+        team_pos_roster.setdefault((r["team"], r["position"]), []).append(pid)
+        if r.get("rookie_year") == str(season) and r.get("draft_number"):
+            draft_pick_of[pid] = int(r["draft_number"])
+    return team_of, team_pos_roster, draft_pick_of, status_of
+
+
+STALE_ROSTER_DAYS = 3
+
+
+def check_roster_staleness(path, season, week):
+    """Loud, hard-to-miss warning if roster_weekly_<season>.csv looks
+    stale -- either the file on disk hasn't been refreshed recently, or it
+    simply has no rows anywhere near the week being scored. A quiet stale
+    file is exactly how the team-changed/new-competitor checks ran on a
+    two-week-old snapshot unnoticed (see CLAUDE.md) -- this makes it
+    impossible to miss on the console, without refusing to run."""
+    if not os.path.exists(path):
+        return
+
+    age_days = (time.time() - os.path.getmtime(path)) / 86400
+    max_week_in_file = 0
+    with open(path, encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            if r.get("season") != str(season):
+                continue
+            try:
+                w = int(r.get("week") or 0)
+            except ValueError:
+                continue
+            max_week_in_file = max(max_week_in_file, w)
+
+    problems = []
+    if age_days > STALE_ROSTER_DAYS:
+        problems.append(f"file on disk is {age_days:.1f} days old (> {STALE_ROSTER_DAYS}-day threshold)")
+    if max_week_in_file < week - 1:
+        problems.append(f"newest rows in the file are for week {max_week_in_file}, but scoring week {week} "
+                         f"(expected rows at least through week {week - 1})")
+
+    if problems:
+        banner = "!" * 78
+        print(f"\n{banner}")
+        print(f"[STALE ROSTER WARNING] {path}")
+        for p in problems:
+            print(f"  - {p}")
+        print("  Team-changed / new-competitor / availability suppressions below may be WRONG.")
+        print(f"  Fix: refresh with data/fetch_weekly_update.py --season {season} before trusting this output.")
+        print(f"{banner}\n")
 
 
 def load_and_score(model_path, label, stable):
@@ -324,32 +381,26 @@ def main():
     ap.add_argument("--season", type=int, required=True)
     ap.add_argument("--week", type=int, required=True)
     ap.add_argument("--top", type=int, default=25)
-    ap.add_argument("--roster", default=None, help="defaults to nflverse_raw/roster_<season>.csv if present")
     ap.add_argument("--weekly-roster", default=None,
-                     help="defaults to nflverse_raw/roster_weekly_<season>.csv if present; source for the "
-                          "availability gate (kept separate from --roster's team-mapping)")
+                     help="defaults to nflverse_raw/roster_weekly_<season>.csv if present; single source for "
+                          "team-mapping, new-competitor detection, AND the availability gate")
     ap.add_argument("--json-out", default=None, help="if set, write the full scoring output (top N, scored pool, both watch lists, model identity) as JSON to this path, and a matching shadow file (same basename + _shadow) if shadow scoring runs")
     args = ap.parse_args()
 
-    roster_path = args.roster or str(REPO_ROOT / "nflverse_raw" / f"roster_{args.season}.csv")
-    roster_team_of, team_pos_roster, draft_pick_of = {}, {}, {}
-    if os.path.exists(roster_path):
-        roster_team_of, team_pos_roster, draft_pick_of = load_roster_records(roster_path, args.season)
-        print(f"[INFO] cross-referencing against {roster_path}: {len(roster_team_of)} players with a confirmed current team, "
-              f"{len(draft_pick_of)} rookies with known {args.season}-draft pick numbers")
-    else:
-        print(f"[INFO] no roster file at {roster_path} -- skipping offseason team-change / new-competitor cross-checks")
-
     weekly_roster_path = args.weekly_roster or str(REPO_ROOT / "nflverse_raw" / f"roster_weekly_{args.season}.csv")
-    weekly_status_of = {}
+    roster_team_of, team_pos_roster, draft_pick_of, weekly_status_of = {}, {}, {}, {}
     if os.path.exists(weekly_roster_path):
-        weekly_status_of = load_weekly_roster_status(weekly_roster_path, args.season, args.week)
-        n_flagged_in_source = sum(1 for s in weekly_status_of.values() if s in UNAVAILABLE_STATUSES)
-        print(f"[INFO] cross-referencing against {weekly_roster_path}: {len(weekly_status_of)} players with a "
-              f"known status as of week<={args.week}, {n_flagged_in_source} currently flagged long-term unavailable")
+        check_roster_staleness(weekly_roster_path, args.season, args.week)
+        roster_team_of, team_pos_roster, draft_pick_of, weekly_status_of = load_current_roster(
+            weekly_roster_path, args.season, args.week
+        )
+        n_flagged_unavailable = sum(1 for s in weekly_status_of.values() if s in UNAVAILABLE_STATUSES)
+        print(f"[INFO] cross-referencing against {weekly_roster_path}: {len(roster_team_of)} players with a "
+              f"confirmed current team, {len(draft_pick_of)} rookies with known {args.season}-draft pick numbers, "
+              f"{n_flagged_unavailable} flagged long-term unavailable")
     else:
-        print(f"[INFO] no weekly roster file at {weekly_roster_path} -- skipping availability gate "
-              f"(all candidates treated as available)")
+        print(f"[INFO] no weekly roster file at {weekly_roster_path} -- skipping offseason team-change / "
+              f"new-competitor cross-checks and the availability gate")
 
     con = sqlite3.connect(args.db)
     con.row_factory = sqlite3.Row

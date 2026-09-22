@@ -49,6 +49,8 @@ model/score_week.py --season Y --week W --json-out predictions/<Y>_week<NN>.json
 evaluation/verify_week.py --season Y --week W   # after the week completes and labels exist
 ```
 
+**Weekly in-season cycle**: run `data/fetch_weekly_update.py --season Y` first, every week, before `generate_labels_and_breakouts.py`/`generate_player_week_features.py`/`score_week.py` -- it refreshes stats, games.csv, AND both roster files (`roster_<season>.csv`, `roster_weekly_<season>.csv`) in one idempotent call. **Roster files specifically must be refreshed every week, not just stats/games**: `score_week.py`'s team-changed and new-competitor checks (and the availability gate) read `roster_weekly_<season>.csv` directly, and any cut, signing, or trade since the last fetch is invisible to them until it's refreshed -- a stale roster file silently produces wrong suppressions with no error, which is exactly what happened for two full weeks before anyone noticed. `score_week.py` now warns loudly (not silently) if that file looks stale, but the warning is a backstop, not a substitute for refreshing it.
+
 The SQLite database, `nflverse_raw/`, and all `.joblib` model files are gitignored (regeneratable/binary) — every script resolves their paths relative to the repo root via `Path(__file__).resolve().parent[.parent]`, not a bare relative string, so they work regardless of which directory a script is invoked from.
 
 ## Branches
