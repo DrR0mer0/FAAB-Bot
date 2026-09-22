@@ -132,6 +132,22 @@ VEGAS_FEATURES = [
     "team_spread",
 ]
 
+# Group 5 hypothesis: trailing per-game efficiency, computed by
+# compute_features() but NOT part of PERSISTED_FEATURE_COLS or
+# PRODUCTION_FEATURE_COLS -- not yet adopted into any persisted table or
+# production model. See evaluation/test_efficiency_features.py for the
+# group's held-out test, including its check for the specific confound
+# named going in: labels_player_week.spike_flag is defined relative to a
+# player's own trailing POINTS baseline (generate_labels_and_breakouts.py),
+# so a depressed efficiency stretch mechanically lowers that baseline and
+# can make an unrelated point total look like a "spike" without the
+# player having actually gotten more efficient or more opportunity.
+EFFICIENCY_FEATURES = [
+    "trailing_racr",
+    "trailing_receiving_epa",
+    "trailing_rushing_epa",
+]
+
 
 class FeatureEngine:
     def __init__(self, con: sqlite3.Connection):
@@ -255,6 +271,20 @@ class FeatureEngine:
         self.qb_game_stats = {
             (r["player_id"], r["season"], r["week"]): (r["attempts"], r["passing_air_yards"])
             for r in con.execute("SELECT season, week, player_id, attempts, passing_air_yards FROM player_week_stats")
+        }
+
+        # efficiency_game_stats[(player_id, season, week)] = (racr,
+        # receiving_epa, rushing_epa) for that single game -- source for the
+        # Group 5 efficiency features. Each raw column's own NULL already
+        # means "no qualifying denominator that game" -- confirmed against
+        # the DB: racr is NULL almost exactly when receiving_air_yards is 0
+        # (an undefined ratio) despite a target existing, and
+        # receiving_epa/rushing_epa are NULL almost exactly when the player
+        # had no qualifying target/carry that week -- so no extra threshold
+        # logic is needed on top of "is the raw value NULL."
+        self.efficiency_game_stats = {
+            (r["player_id"], r["season"], r["week"]): (r["racr"], r["receiving_epa"], r["rushing_epa"])
+            for r in con.execute("SELECT season, week, player_id, racr, receiving_epa, rushing_epa FROM player_week_stats")
         }
 
         # team_week_wr_targets / team_week_rb_targets[(season,week,team)] =
@@ -431,6 +461,46 @@ class FeatureEngine:
         trailing_pass_air_yards = (sum(ay_vals) / len(ay_vals)) if ay_vals else None
         return trailing_pass_attempts, trailing_pass_air_yards
 
+    def _trailing_efficiency(self, player_id, pos, last3):
+        """Group 5 hypothesis features: trailing_racr,
+        trailing_receiving_epa, trailing_rushing_epa -- averaged over the
+        exact same last-3-eligible-game window as the touches-based
+        features, using each game's own racr/receiving_epa/rushing_epa
+        value straight from player_week_stats and including it only when
+        non-NULL there (see efficiency_game_stats above for why that's
+        already the correct "qualifying denominator" check -- same
+        average-over-defined-values-else-None pattern as trailing_adot).
+
+        trailing_racr and trailing_receiving_epa are compute-NULL-directly
+        for QB -- receiving constructs; the handful of QB rows with a
+        defined value are trick-play noise (190 and 188 of 9784 QB rows in
+        the full DB), not a role QBs actually have. trailing_rushing_epa
+        is deliberately NOT position-gated: it's meaningful for anyone who
+        carries the ball, and for QB specifically it's real signal (84%
+        of QB rows have a qualifying carry) that touch share can't
+        express -- touch share for a QB measures only rushing VOLUME, a
+        mobility proxy (see CLAUDE.md "Known model limitations"), while
+        trailing_rushing_epa would measure whether those carries are any
+        good. A player with no qualifying games in the window still gets
+        None from the average itself, without needing a position gate."""
+        racr_vals, recv_epa_vals, rush_epa_vals = [], [], []
+        for (s, w, _tm, _pos, _t) in last3:
+            rec = self.efficiency_game_stats.get((player_id, s, w))
+            if rec is None:
+                continue
+            racr, receiving_epa, rushing_epa = rec
+            if pos != "QB" and racr is not None:
+                racr_vals.append(racr)
+            if pos != "QB" and receiving_epa is not None:
+                recv_epa_vals.append(receiving_epa)
+            if rushing_epa is not None:
+                rush_epa_vals.append(rushing_epa)
+
+        trailing_racr = (sum(racr_vals) / len(racr_vals)) if racr_vals else None
+        trailing_receiving_epa = (sum(recv_epa_vals) / len(recv_epa_vals)) if recv_epa_vals else None
+        trailing_rushing_epa = (sum(rush_epa_vals) / len(rush_epa_vals)) if rush_epa_vals else None
+        return trailing_racr, trailing_receiving_epa, trailing_rushing_epa
+
     def _trailing_team_wr_target_rate(self, last3):
         """Group 2 hypothesis feature: trailing_team_wr_target_rate --
         ratio of (summed WR targets) to (summed WR+RB targets) for the
@@ -550,9 +620,10 @@ class FeatureEngine:
     def compute_features(self, season, week, player_id):
         """Returns a dict of PERSISTED_FEATURE_COLS plus
         RECEIVING_OPPORTUNITY_FEATURES, QB_VOLUME_FEATURES,
-        TEAMMATE_COMPETITION_FEATURES, and VEGAS_FEATURES (none of these
-        four groups is yet part of any persisted table or production
-        model -- see their definitions above), or None if the player isn't eligible
+        TEAMMATE_COMPETITION_FEATURES, VEGAS_FEATURES, and
+        EFFICIENCY_FEATURES (none of these five groups is yet part of any
+        persisted table or production model -- see their definitions
+        above), or None if the player isn't eligible
         (<3 prior games, respecting season-gap boundaries) as of (season,
         week). Uses only data strictly before (season, week)."""
         window = self._touches_window(player_id, season, week)
@@ -614,6 +685,8 @@ class FeatureEngine:
 
         implied_team_total, game_total, team_spread = self._vegas_features(season, week, team)
 
+        trailing_racr, trailing_receiving_epa, trailing_rushing_epa = self._trailing_efficiency(player_id, pos, last3)
+
         return {
             "trailing_touches_avg": avg_touches,
             "trailing_touches_trend": trend,
@@ -637,6 +710,9 @@ class FeatureEngine:
             "implied_team_total": implied_team_total,
             "game_total": game_total,
             "team_spread": team_spread,
+            "trailing_racr": trailing_racr,
+            "trailing_receiving_epa": trailing_receiving_epa,
+            "trailing_rushing_epa": trailing_rushing_epa,
             "_team": team,
             "_pos": pos,
             "_opp": opp,
