@@ -116,6 +116,22 @@ TEAMMATE_COMPETITION_FEATURES = [
     "trailing_share_of_position_group",
 ]
 
+# Group 4 hypothesis: Vegas lines describing the player's own UPCOMING
+# game, sourced from team_week_stats (spread/total/implied_total,
+# populated 2010-2025, mostly NULL for not-yet-posted 2026 weeks) --
+# computed by compute_features() but NOT part of PERSISTED_FEATURE_COLS
+# or PRODUCTION_FEATURE_COLS -- not yet adopted. Unlike every other group
+# in this file, these are NOT a trailing window over prior games: they
+# describe the game about to be played, known before kickoff, so using
+# the CURRENT (season, week)'s own line is not leakage. See
+# evaluation/test_vegas_features.py for the group's held-out test and its
+# 2026-specific NULL-rate report.
+VEGAS_FEATURES = [
+    "implied_team_total",
+    "game_total",
+    "team_spread",
+]
+
 
 class FeatureEngine:
     def __init__(self, con: sqlite3.Connection):
@@ -264,6 +280,21 @@ class FeatureEngine:
         self.actual_team_pos = {
             (r["season"], r["week"], r["player_id"]): (r["team"], r["pos"])
             for r in con.execute("SELECT season, week, player_id, team, pos FROM player_week_stats")
+        }
+
+        # team_week_vegas[(season,week,team)] = (spread, total, implied_total)
+        # -- source for the Group 4 Vegas features. team_week_stats uses each
+        # franchise's HISTORICAL abbreviation for every season (the same
+        # convention as nfl_games), not player_week_stats' retroactive
+        # current-code convention -- confirmed against the DB: team_week_stats
+        # has 'OAK' rows through 2019, matching nfl_games, while
+        # player_week_stats already says 'LV' for those same seasons. So
+        # norm_team() is required here too, same as game_info above; without
+        # it every relocated franchise's players would silently get NULL
+        # Vegas features for their pre-move seasons.
+        self.team_week_vegas = {
+            (r["season"], r["week"], norm_team(r["team"])): (r["spread"], r["total"], r["implied_total"])
+            for r in con.execute("SELECT season, week, team, spread, total, implied_total FROM team_week_stats")
         }
 
     def _gap_after(self, target_season):
@@ -456,6 +487,22 @@ class FeatureEngine:
         share = (player_avg_touches / group_total) if group_total else None
         return rank, share
 
+    def _vegas_features(self, season, week, team):
+        """Group 4 hypothesis features: implied_team_total, game_total,
+        team_spread -- looked up directly from team_week_stats for the
+        team's own game at (season, week). Not a trailing window: this is
+        the CURRENT week's own line, which is fine because a Vegas line is
+        set and known well before kickoff, unlike a stat from the game
+        itself. NULL when no line has been posted yet for that
+        (season, week, team) -- the normal case for a future 2026 week at
+        scoring time, not a bug (see evaluation/test_vegas_features.py's
+        2026 NULL-rate report)."""
+        rec = self.team_week_vegas.get((season, week, team))
+        if rec is None:
+            return None, None, None
+        spread, total, implied_total = rec
+        return implied_total, total, spread
+
     def compute_schedule_dependent_features(self, season, week, team, pos, player_id):
         """The 4 features that depend on which team the player is actually on
         this week (opponent, home/away, short week, presumed-starter check),
@@ -502,10 +549,10 @@ class FeatureEngine:
 
     def compute_features(self, season, week, player_id):
         """Returns a dict of PERSISTED_FEATURE_COLS plus
-        RECEIVING_OPPORTUNITY_FEATURES, QB_VOLUME_FEATURES, and
-        TEAMMATE_COMPETITION_FEATURES (none of these three groups is yet
-        part of any persisted table or production model -- see their
-        definitions above), or None if the player isn't eligible
+        RECEIVING_OPPORTUNITY_FEATURES, QB_VOLUME_FEATURES,
+        TEAMMATE_COMPETITION_FEATURES, and VEGAS_FEATURES (none of these
+        four groups is yet part of any persisted table or production
+        model -- see their definitions above), or None if the player isn't eligible
         (<3 prior games, respecting season-gap boundaries) as of (season,
         week). Uses only data strictly before (season, week)."""
         window = self._touches_window(player_id, season, week)
@@ -565,6 +612,8 @@ class FeatureEngine:
         else:
             trailing_position_group_rank, trailing_share_of_position_group = None, None
 
+        implied_team_total, game_total, team_spread = self._vegas_features(season, week, team)
+
         return {
             "trailing_touches_avg": avg_touches,
             "trailing_touches_trend": trend,
@@ -585,6 +634,9 @@ class FeatureEngine:
             "trailing_team_wr_target_rate": trailing_team_wr_target_rate,
             "trailing_position_group_rank": trailing_position_group_rank,
             "trailing_share_of_position_group": trailing_share_of_position_group,
+            "implied_team_total": implied_team_total,
+            "game_total": game_total,
+            "team_spread": team_spread,
             "_team": team,
             "_pos": pos,
             "_opp": opp,
