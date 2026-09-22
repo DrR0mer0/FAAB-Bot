@@ -13,25 +13,17 @@ same as if the player were a rookie again.
 import argparse
 import json
 import sqlite3
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "data"))
+from team_crosswalk import TEAM_ALIASES, norm_team  # noqa: E402 -- shared crosswalk; see data/team_crosswalk.py
 
 # spike_flag thresholds
 SPIKE_MULTIPLIER = 1.5
 SPIKE_MIN_POINTS = 10.0
 MIN_PRIOR_GAMES = 3
-
-# nfl_games (schedules) preserves each franchise's historical abbreviation,
-# but player_week_stats retroactively uses the team's *current* code for every
-# season. Without this crosswalk, games involving a relocated franchise never
-# match between the two tables (e.g. 2016 OAK playoff games vs. LV-coded stats).
-TEAM_ALIASES = {"STL": "LA", "SD": "LAC", "OAK": "LV"}
-
-
-def norm_team(code):
-    return TEAM_ALIASES.get(code, code)
-
 
 HALF12_PROFILE_ID = "half12"
 HALF12_RULES = {
