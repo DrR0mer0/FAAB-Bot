@@ -164,6 +164,26 @@ LINE_QUALITY_FEATURES = [
     "trailing_opp_stuff_rate_generated",
 ]
 
+# Group 8 hypothesis: red-zone opportunity, sourced from
+# player_week_pbp_stats and team_week_pbp_stats (data/load_pbp_
+# aggregates.py) -- computed by compute_features() but NOT part of
+# PERSISTED_FEATURE_COLS or PRODUCTION_FEATURE_COLS -- not yet adopted.
+# Deliberately NOT position-gated: RBs get real red-zone targets and
+# rushing QBs get real red-zone carries, so an intuition-based gate (the
+# pattern used elsewhere in this file, e.g. LINE_QUALITY_FEATURES'
+# receiving-only NULL-for-QB features) would throw away real signal here.
+# player_week_pbp_stats is sparse -- a player-week with zero red-zone
+# touches has no row there at all -- so a missing lookup is treated as a
+# real 0, not skipped the way an undefined per-game ratio is elsewhere in
+# this file; see evaluation/test_red_zone_opportunity_features.py for the
+# group's held-out test and its sparsity report.
+RED_ZONE_OPPORTUNITY_FEATURES = [
+    "trailing_rz_carries",
+    "trailing_rz_targets",
+    "trailing_rz_share",
+    "trailing_team_pass_rate",
+]
+
 
 class FeatureEngine:
     def __init__(self, con: sqlite3.Connection):
@@ -367,6 +387,27 @@ class FeatureEngine:
         self.team_pbp_history = {}
         for r in con.execute("SELECT season, week, team FROM team_week_pbp_stats ORDER BY team, season, week"):
             self.team_pbp_history.setdefault(r["team"], []).append((r["season"], r["week"]))
+
+        # player_rz_stats[(player_id,season,week)] = (redzone_carries,
+        # redzone_targets) -- source for the Group 8 red-zone-opportunity
+        # features. player_week_pbp_stats is SPARSE (only players with a
+        # qualifying carry or target that week get a row), so a missing key
+        # here means a real 0, not unknown -- callers must .get(key, (0, 0)),
+        # never treat a miss as "skip this week."
+        self.player_rz_stats = {
+            (r["player_id"], r["season"], r["week"]): (r["redzone_carries"], r["redzone_targets"])
+            for r in con.execute("SELECT season, week, player_id, redzone_carries, redzone_targets FROM player_week_pbp_stats")
+        }
+
+        # team_pbp_rz_pace[(season,week,team)] = (plays_inside_20, pass_rate)
+        # -- source for the Group 8 trailing_rz_share denominator and
+        # trailing_team_pass_rate. Separate from team_pbp_metrics (Group 7)
+        # even though both read team_week_pbp_stats, to avoid touching that
+        # already-shipped lookup's shape for an unrelated consumer.
+        self.team_pbp_rz_pace = {
+            (r["season"], r["week"], r["team"]): (r["plays_inside_20"], r["pass_rate"])
+            for r in con.execute("SELECT season, week, team, plays_inside_20, pass_rate FROM team_week_pbp_stats")
+        }
 
     def _gap_after(self, target_season):
         combined = sorted(set(self.stats_seasons) | {target_season})
@@ -790,6 +831,54 @@ class FeatureEngine:
             trailing_opp_sack_rate_generated, trailing_opp_stuff_rate_generated,
         )
 
+    def _trailing_rz_opportunity(self, player_id, last3):
+        """Group 8 hypothesis features: trailing_rz_carries,
+        trailing_rz_targets, trailing_rz_share, trailing_team_pass_rate --
+        computed over the exact same last-3-eligible-game window as every
+        other trailing feature. Deliberately NOT position-gated (see
+        RED_ZONE_OPPORTUNITY_FEATURES above for why).
+
+        trailing_rz_carries/trailing_rz_targets: flat mean of
+        player_week_pbp_stats' own per-game counts, with a missing row
+        (that table is sparse) treated as a real 0 via .get(key, (0, 0)) --
+        never skipped -- so these are always defined (never None) for an
+        eligible player, even if every game in the window is a 0.
+
+        trailing_rz_share: ratio of SUMS over the window -- the player's
+        own red-zone touches (carries+targets) summed across last3,
+        divided by his team's summed plays_inside_20 over the SAME
+        weeks (using whichever team he was actually on each week, correct
+        across a mid-window trade) -- same pattern _trailing_touch_share
+        already uses, not a mean of per-game ratios, so a red-zone-less
+        game doesn't corrupt it the way averaging ratios would. None if
+        the team denominator sums to 0.
+
+        trailing_team_pass_rate: flat mean of the team's own weekly
+        pass_rate over last3 -- same averaging pattern as Group 7's
+        trailing_team_sack_rate_allowed, describing the offense the player
+        plays in rather than the player himself (same non-gating rationale
+        as Group 2's trailing_team_wr_target_rate)."""
+        carries_vals, targets_vals = [], []
+        rz_touches_sum, plays_inside_20_sum = 0, 0
+        pass_rate_vals = []
+        for (s, w, tm, _pos, _t) in last3:
+            carries, targets = self.player_rz_stats.get((player_id, s, w), (0, 0))
+            carries_vals.append(carries)
+            targets_vals.append(targets)
+            rz_touches_sum += carries + targets
+
+            plays_inside_20, pass_rate = self.team_pbp_rz_pace.get((s, w, tm), (0, None))
+            plays_inside_20_sum += plays_inside_20 or 0
+            if pass_rate is not None:
+                pass_rate_vals.append(pass_rate)
+
+        trailing_rz_carries = sum(carries_vals) / len(carries_vals)
+        trailing_rz_targets = sum(targets_vals) / len(targets_vals)
+        trailing_rz_share = (rz_touches_sum / plays_inside_20_sum) if plays_inside_20_sum else None
+        trailing_team_pass_rate = (sum(pass_rate_vals) / len(pass_rate_vals)) if pass_rate_vals else None
+
+        return trailing_rz_carries, trailing_rz_targets, trailing_rz_share, trailing_team_pass_rate
+
     def compute_schedule_dependent_features(self, season, week, team, pos, player_id):
         """The 4 features that depend on which team the player is actually on
         this week (opponent, home/away, short week, presumed-starter check),
@@ -838,9 +927,10 @@ class FeatureEngine:
         """Returns a dict of PERSISTED_FEATURE_COLS plus
         RECEIVING_OPPORTUNITY_FEATURES, QB_VOLUME_FEATURES,
         TEAMMATE_COMPETITION_FEATURES, VEGAS_FEATURES, EFFICIENCY_FEATURES,
-        and LINE_QUALITY_FEATURES (none of these six groups is yet part of
-        any persisted table or production model -- see their definitions
-        above), or None if the player isn't eligible
+        LINE_QUALITY_FEATURES, and RED_ZONE_OPPORTUNITY_FEATURES (none of
+        these seven groups is yet part of any persisted table or
+        production model -- see their definitions above), or None if the
+        player isn't eligible
         (<3 prior games, respecting season-gap boundaries) as of (season,
         week). Uses only data strictly before (season, week)."""
         window = self._touches_window(player_id, season, week)
@@ -909,6 +999,10 @@ class FeatureEngine:
             trailing_opp_sack_rate_generated, trailing_opp_stuff_rate_generated,
         ) = self._trailing_line_quality(opp, season, week, last3)
 
+        trailing_rz_carries, trailing_rz_targets, trailing_rz_share, trailing_team_pass_rate = (
+            self._trailing_rz_opportunity(player_id, last3)
+        )
+
         return {
             "trailing_touches_avg": avg_touches,
             "trailing_touches_trend": trend,
@@ -939,6 +1033,10 @@ class FeatureEngine:
             "trailing_team_stuff_rate_allowed": trailing_team_stuff_rate_allowed,
             "trailing_opp_sack_rate_generated": trailing_opp_sack_rate_generated,
             "trailing_opp_stuff_rate_generated": trailing_opp_stuff_rate_generated,
+            "trailing_rz_carries": trailing_rz_carries,
+            "trailing_rz_targets": trailing_rz_targets,
+            "trailing_rz_share": trailing_rz_share,
+            "trailing_team_pass_rate": trailing_team_pass_rate,
             "_team": team,
             "_pos": pos,
             "_opp": opp,
