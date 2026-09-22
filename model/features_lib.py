@@ -143,6 +143,27 @@ EFFICIENCY_FEATURES = [
     "trailing_rushing_epa",
 ]
 
+# Group 7 hypothesis: offensive/defensive line quality, sourced from
+# team_week_pbp_stats (data/load_pbp_aggregates.py) -- computed by
+# compute_features() but NOT part of PERSISTED_FEATURE_COLS or
+# PRODUCTION_FEATURE_COLS -- not yet adopted. All four are TEAM-level, not
+# player-level: every player on the same team (or facing the same
+# opponent) that week shares the same value, unlike every other trailing
+# feature in this file. trailing_team_* describes the player's OWN team
+# over his own trailing eligibility window (same weeks his other trailing
+# features are drawn from); trailing_opp_* describes the UPCOMING
+# opponent's own trailing form -- not tied to the player's game history at
+# all -- resolved via nfl_games the same way opponent_position_matchup is.
+# See evaluation/test_line_quality_features.py for the group's held-out
+# test, including whether the model's feature importances suggest it uses
+# a team-level, many-players-share-one-value feature at all.
+LINE_QUALITY_FEATURES = [
+    "trailing_team_sack_rate_allowed",
+    "trailing_team_stuff_rate_allowed",
+    "trailing_opp_sack_rate_generated",
+    "trailing_opp_stuff_rate_generated",
+]
+
 
 class FeatureEngine:
     def __init__(self, con: sqlite3.Connection):
@@ -322,6 +343,31 @@ class FeatureEngine:
             for r in con.execute("SELECT season, week, team, spread, total, implied_total FROM team_week_stats")
         }
 
+        # team_pbp_metrics[(season,week,team)] = (sack_rate_allowed,
+        # stuff_rate_allowed, sack_rate_generated, stuff_rate_generated) --
+        # source for the Group 7 line-quality features. team_week_pbp_stats
+        # (data/load_pbp_aggregates.py) already uses the CURRENT franchise
+        # code for every season -- confirmed empirically when that table was
+        # built -- the same convention as player_week_stats/game_info's
+        # norm_team()'d output, so no additional crosswalk is needed here.
+        self.team_pbp_metrics = {
+            (r["season"], r["week"], r["team"]): (
+                r["sack_rate_allowed"], r["stuff_rate_allowed"], r["sack_rate_generated"], r["stuff_rate_generated"],
+            )
+            for r in con.execute(
+                "SELECT season, week, team, sack_rate_allowed, stuff_rate_allowed, "
+                "sack_rate_generated, stuff_rate_generated FROM team_week_pbp_stats"
+            )
+        }
+
+        # team_pbp_history[team] = sorted [(season, week), ...] with a
+        # team_week_pbp_stats row -- source for _team_pbp_window below,
+        # which walks a TEAM's own trailing weeks (not tied to any one
+        # player's game history) for the Group 7 trailing_opp_* features.
+        self.team_pbp_history = {}
+        for r in con.execute("SELECT season, week, team FROM team_week_pbp_stats ORDER BY team, season, week"):
+            self.team_pbp_history.setdefault(r["team"], []).append((r["season"], r["week"]))
+
     def _gap_after(self, target_season):
         combined = sorted(set(self.stats_seasons) | {target_season})
         return {combined[i - 1] for i in range(1, len(combined)) if combined[i] - combined[i - 1] > 1}
@@ -349,6 +395,32 @@ class FeatureEngine:
         if window and self._crosses_gap(window[-1][0], season, gap_after):
             window = []
         return window
+
+    def _team_pbp_window(self, team, season, week):
+        """Prior team_week_pbp_stats weeks for `team` strictly before
+        (season,week), same gap-reset rule as _touches_window (reuses
+        _gap_after/_crosses_gap, which only look at the target season
+        against the loaded-season set -- team_week_pbp_stats covers the
+        identical season list as player_week_stats, so this is safe to
+        share). Unlike _touches_window, this walks the TEAM's own
+        schedule, not any one player's game history -- for Group 7's
+        trailing_opp_* features, which describe the upcoming opponent's
+        own recent form, not the scoring player's. Returns up to the last
+        MIN_PRIOR_GAMES (season, week) pairs, or fewer/empty if the team
+        doesn't have that many prior loaded weeks yet."""
+        hist = self.team_pbp_history.get(team, [])
+        prior = [h for h in hist if h < (season, week)]
+        if not prior:
+            return []
+        gap_after = self._gap_after(season)
+        window = []
+        for h in prior:
+            if window and self._crosses_gap(window[-1][0], h[0], gap_after):
+                window = []
+            window.append(h)
+        if window and self._crosses_gap(window[-1][0], season, gap_after):
+            window = []
+        return window[-MIN_PRIOR_GAMES:]
 
     def _trailing_touch_share(self, player_id, season, week):
         """Returns (share, last3_window) or (None, window) if not eligible."""
@@ -660,6 +732,64 @@ class FeatureEngine:
         spread, total, implied_total = rec
         return implied_total, total, spread
 
+    def _trailing_line_quality(self, opp, season, week, last3):
+        """Group 7 hypothesis features: trailing_team_sack_rate_allowed,
+        trailing_team_stuff_rate_allowed, trailing_opp_sack_rate_generated,
+        trailing_opp_stuff_rate_generated -- all four TEAM-level, so every
+        player sharing a team (or facing the same opponent) that week gets
+        the same value, unlike every other trailing feature in this file.
+
+        trailing_team_* uses the exact same last-3-eligible-game window as
+        the player's other trailing features, looked up against
+        team_week_pbp_stats for whichever team the player was actually ON
+        at each of those specific weeks (last3's own tm, not a single
+        fixed team -- correct across a mid-window trade the same way
+        _trailing_touch_share already is). It describes the O-line/run-
+        blocking context during the games the player's usage features are
+        already drawn from.
+
+        trailing_opp_* is different in kind: it describes the UPCOMING
+        game, so it's the opponent's own trailing 3 team-weeks (via
+        _team_pbp_window), strictly before the CURRENT (season, week) --
+        not tied to the scoring player's game history at all. None/None
+        if there's no resolved opponent (bye/unscheduled) for this week.
+
+        Average-over-defined-values-else-None throughout, same pattern as
+        every ratio-averaging trailing feature elsewhere in this file."""
+        team_sack_vals, team_stuff_vals = [], []
+        for (s, w, tm, _pos, _t) in last3:
+            rec = self.team_pbp_metrics.get((s, w, tm))
+            if rec is None:
+                continue
+            sack_allowed, stuff_allowed, _sack_gen, _stuff_gen = rec
+            if sack_allowed is not None:
+                team_sack_vals.append(sack_allowed)
+            if stuff_allowed is not None:
+                team_stuff_vals.append(stuff_allowed)
+        trailing_team_sack_rate_allowed = (sum(team_sack_vals) / len(team_sack_vals)) if team_sack_vals else None
+        trailing_team_stuff_rate_allowed = (sum(team_stuff_vals) / len(team_stuff_vals)) if team_stuff_vals else None
+
+        if opp is None:
+            trailing_opp_sack_rate_generated, trailing_opp_stuff_rate_generated = None, None
+        else:
+            opp_sack_vals, opp_stuff_vals = [], []
+            for (s, w) in self._team_pbp_window(opp, season, week):
+                rec = self.team_pbp_metrics.get((s, w, opp))
+                if rec is None:
+                    continue
+                _sack_allowed, _stuff_allowed, sack_gen, stuff_gen = rec
+                if sack_gen is not None:
+                    opp_sack_vals.append(sack_gen)
+                if stuff_gen is not None:
+                    opp_stuff_vals.append(stuff_gen)
+            trailing_opp_sack_rate_generated = (sum(opp_sack_vals) / len(opp_sack_vals)) if opp_sack_vals else None
+            trailing_opp_stuff_rate_generated = (sum(opp_stuff_vals) / len(opp_stuff_vals)) if opp_stuff_vals else None
+
+        return (
+            trailing_team_sack_rate_allowed, trailing_team_stuff_rate_allowed,
+            trailing_opp_sack_rate_generated, trailing_opp_stuff_rate_generated,
+        )
+
     def compute_schedule_dependent_features(self, season, week, team, pos, player_id):
         """The 4 features that depend on which team the player is actually on
         this week (opponent, home/away, short week, presumed-starter check),
@@ -707,9 +837,9 @@ class FeatureEngine:
     def compute_features(self, season, week, player_id):
         """Returns a dict of PERSISTED_FEATURE_COLS plus
         RECEIVING_OPPORTUNITY_FEATURES, QB_VOLUME_FEATURES,
-        TEAMMATE_COMPETITION_FEATURES, VEGAS_FEATURES, and
-        EFFICIENCY_FEATURES (none of these five groups is yet part of any
-        persisted table or production model -- see their definitions
+        TEAMMATE_COMPETITION_FEATURES, VEGAS_FEATURES, EFFICIENCY_FEATURES,
+        and LINE_QUALITY_FEATURES (none of these six groups is yet part of
+        any persisted table or production model -- see their definitions
         above), or None if the player isn't eligible
         (<3 prior games, respecting season-gap boundaries) as of (season,
         week). Uses only data strictly before (season, week)."""
@@ -774,6 +904,11 @@ class FeatureEngine:
 
         trailing_racr, trailing_receiving_epa, trailing_rushing_epa = self._trailing_efficiency(player_id, pos, last3)
 
+        (
+            trailing_team_sack_rate_allowed, trailing_team_stuff_rate_allowed,
+            trailing_opp_sack_rate_generated, trailing_opp_stuff_rate_generated,
+        ) = self._trailing_line_quality(opp, season, week, last3)
+
         return {
             "trailing_touches_avg": avg_touches,
             "trailing_touches_trend": trend,
@@ -800,6 +935,10 @@ class FeatureEngine:
             "trailing_racr": trailing_racr,
             "trailing_receiving_epa": trailing_receiving_epa,
             "trailing_rushing_epa": trailing_rushing_epa,
+            "trailing_team_sack_rate_allowed": trailing_team_sack_rate_allowed,
+            "trailing_team_stuff_rate_allowed": trailing_team_stuff_rate_allowed,
+            "trailing_opp_sack_rate_generated": trailing_opp_sack_rate_generated,
+            "trailing_opp_stuff_rate_generated": trailing_opp_stuff_rate_generated,
             "_team": team,
             "_pos": pos,
             "_opp": opp,
