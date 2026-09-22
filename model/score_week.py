@@ -25,6 +25,22 @@ entirely from this season's real data, so no stale prior-season usage feeds
 any feature and the offseason concern no longer applies -- regardless of
 what the static roster/production checks would otherwise say.
 
+Availability gate: a player whose most recent weekly roster status (from
+nflverse's weekly_rosters release, --weekly-roster, NOT the season-level
+--roster file used for team-mapping above -- see load_weekly_roster_status)
+indicates a known long-term absence -- reserve/IR, PUP, non-football
+injury, or suspension -- is suppressed unconditionally, checked BEFORE
+anything else in the suppression loop (including the recency-release
+above -- a player accumulating real current-season games doesn't matter if
+they're currently on IR and can't play). Deliberately does NOT gate on
+game-day designations (questionable/doubtful/out, from nflverse's separate
+`injuries` release): those post through the week, often after predictions
+are generated, and players already on long-term reserve typically don't
+even appear on that report. This is kept structurally separate from the
+season-level roster file's team-mapping (a player on reserve still belongs
+to his team) -- it only decides whether to score him, not which team he's
+on.
+
 Shadow scoring: alongside the production model, the same candidate pool
 (same eligibility, same suppression -- neither depends on which model does
 the scoring) is ALSO scored with a second, fixed "shadow" model -- by
@@ -58,6 +74,20 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIRMED_ROSTER_STATUSES = {"ACT", "DEV", "RES"}
 TEAM_CHANGE_REASON = "team changed this offseason — insufficient data on new team"
 NEW_COMPETITOR_REASON = "new same-position addition(s) this offseason — trailing touch share predates the competition"
+
+# Roster statuses that mean "known unavailable for an extended stretch,
+# not just this game" -- nflverse's own dictionary_roster_status.csv
+# documents RES ("reserve list"), PUP, and RSN (non-football injury
+# reserve) as separate status values, but in practice this data source
+# bundles IR/PUP/NFI all under the single coarse "RES" code (confirmed by
+# cross-referencing status_description_abbr sub-codes -- R01 dominates and
+# was confirmed, via Jordan Mason, to mean IR). SUS (suspended) is
+# included per the task; PUP/RSN are included defensively in case a future
+# pull ever reports them as distinct top-level statuses. Does NOT include
+# CUT/RET/EXE -- those are a different category (no longer on the team at
+# all, or a legal-process exemption) and out of scope for this gate.
+UNAVAILABLE_STATUSES = {"RES", "PUP", "SUS", "RSN"}
+UNAVAILABLE_REASON = "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
 
 # Fantasy-relevant offensive positions only; IDP/O-line/K/P aren't rosterable
 # in this league.
@@ -114,6 +144,10 @@ def render_markdown_report(output):
         f"- Stable scored: {counts['stable_scored']}"
         + (f" ({counts['released_from_offseason_suppression']} released from offseason suppression this week)"
            if counts.get("released_from_offseason_suppression") is not None else ""),
+    ]
+    if counts.get("unavailable_suppressed") is not None:
+        lines.append(f"- Unavailable (reserve/PUP/NFI/suspended) suppressed: {counts['unavailable_suppressed']}")
+    lines += [
         f"- Team-changed suppressed: {counts['team_changed_suppressed']}",
         f"- New-competitor suppressed: {counts['new_competitor_suppressed']} "
         f"({counts['new_competitor_via_production_only']} via production, "
@@ -145,6 +179,35 @@ def load_roster_records(path, season):
             if r.get("rookie_year") == str(season) and r.get("draft_number"):
                 draft_pick_of[pid] = int(r["draft_number"])
     return team_of, team_pos_roster, draft_pick_of
+
+
+def load_weekly_roster_status(path, season, week):
+    """Per-player roster `status` as of the most recent week <= the target
+    week, from nflverse's weekly_rosters release (roster_weekly_<season>.csv,
+    NOT the season-level roster_<season>.csv used for team-mapping) -- one
+    row per player PER WEEK, so a given player's status here reflects
+    exactly that week's actual roster state, not "the most recent week
+    their entry happened to be touched" (which is what the season-level
+    file's own `week` column means, and why it isn't used for this gate).
+    Returns {gsis_id: status}."""
+    latest = {}  # gsis_id -> (week, status)
+    with open(path, encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            if r.get("season") != str(season):
+                continue
+            try:
+                w = int(r.get("week") or 0)
+            except ValueError:
+                continue
+            if w <= 0 or w > week:
+                continue
+            pid = r.get("gsis_id")
+            if not pid:
+                continue
+            prev = latest.get(pid)
+            if prev is None or w > prev[0]:
+                latest[pid] = (w, r.get("status"))
+    return {pid: status for pid, (w, status) in latest.items()}
 
 
 def load_and_score(model_path, label, stable):
@@ -191,7 +254,7 @@ def print_top_table(label, ranked, args, names):
 
 def write_output(model_path, model_commit, model_meta, args, names, ranked, stable, proba,
                   all_eligible_count, n_candidates, n_released_by_recency,
-                  team_changed_records, new_competitor_records,
+                  team_changed_records, new_competitor_records, unavailable_records,
                   n_via_production_only, n_via_draft_only, n_via_both, json_out_path):
     def player_record(pid, feat, score=None):
         return {
@@ -226,6 +289,7 @@ def write_output(model_path, model_commit, model_meta, args, names, ranked, stab
             "after_position_filter": n_candidates,
             "stable_scored": len(stable),
             "released_from_offseason_suppression": n_released_by_recency,
+            "unavailable_suppressed": len(unavailable_records),
             "team_changed_suppressed": len(team_changed_records),
             "new_competitor_suppressed": len(new_competitor_records),
             "new_competitor_via_production_only": n_via_production_only,
@@ -234,6 +298,7 @@ def write_output(model_path, model_commit, model_meta, args, names, ranked, stab
         },
         "top": ranked_records,
         "scored_pool": scored_pool_records,
+        "unavailable_watch_list": unavailable_records,
         "team_changed_watch_list": team_changed_records,
         "new_competitor_watch_list": new_competitor_records,
     }
@@ -260,6 +325,9 @@ def main():
     ap.add_argument("--week", type=int, required=True)
     ap.add_argument("--top", type=int, default=25)
     ap.add_argument("--roster", default=None, help="defaults to nflverse_raw/roster_<season>.csv if present")
+    ap.add_argument("--weekly-roster", default=None,
+                     help="defaults to nflverse_raw/roster_weekly_<season>.csv if present; source for the "
+                          "availability gate (kept separate from --roster's team-mapping)")
     ap.add_argument("--json-out", default=None, help="if set, write the full scoring output (top N, scored pool, both watch lists, model identity) as JSON to this path, and a matching shadow file (same basename + _shadow) if shadow scoring runs")
     args = ap.parse_args()
 
@@ -271,6 +339,17 @@ def main():
               f"{len(draft_pick_of)} rookies with known {args.season}-draft pick numbers")
     else:
         print(f"[INFO] no roster file at {roster_path} -- skipping offseason team-change / new-competitor cross-checks")
+
+    weekly_roster_path = args.weekly_roster or str(REPO_ROOT / "nflverse_raw" / f"roster_weekly_{args.season}.csv")
+    weekly_status_of = {}
+    if os.path.exists(weekly_roster_path):
+        weekly_status_of = load_weekly_roster_status(weekly_roster_path, args.season, args.week)
+        n_flagged_in_source = sum(1 for s in weekly_status_of.values() if s in UNAVAILABLE_STATUSES)
+        print(f"[INFO] cross-referencing against {weekly_roster_path}: {len(weekly_status_of)} players with a "
+              f"known status as of week<={args.week}, {n_flagged_in_source} currently flagged long-term unavailable")
+    else:
+        print(f"[INFO] no weekly roster file at {weekly_roster_path} -- skipping availability gate "
+              f"(all candidates treated as available)")
 
     con = sqlite3.connect(args.db)
     con.row_factory = sqlite3.Row
@@ -344,10 +423,20 @@ def main():
         via_draft = pick is not None and pick <= DRAFT_CAPITAL_PICK_CUTOFF
         return (via_production or via_draft), via_production, via_draft
 
-    stable, team_changed_list, new_competitor_list = [], [], []
+    stable, team_changed_list, new_competitor_list, unavailable_list = [], [], [], []
     n_via_production_only = n_via_draft_only = n_via_both = 0
     n_released_by_recency = 0
     for pid, feat in candidates:
+        # Availability gate first, unconditionally -- ahead of even the
+        # recency-release below. A player on reserve who happens to have
+        # accumulated 3+ real current-season games (hurt mid-season, say)
+        # still can't play; games_played_this_season says nothing about
+        # whether he's currently allowed on the field.
+        roster_status = weekly_status_of.get(pid)
+        if roster_status in UNAVAILABLE_STATUSES:
+            unavailable_list.append((pid, feat, roster_status))
+            continue
+
         # Release both offseason suppressions once this player's trailing
         # window is built entirely from current-season games -- see the
         # module docstring. games_played_this_season already counts real
@@ -397,10 +486,20 @@ def main():
 
     print(f"[INFO] {len(stable)} stable candidates scored ({n_released_by_recency} of those released from "
           f"offseason suppression this week, having reached {MIN_PRIOR_GAMES}+ current-season games); "
+          f"{len(unavailable_list)} unavailable (reserve/PUP/NFI/suspended, score suppressed); "
           f"{len(team_changed_list)} team-changed (score suppressed); "
           f"{len(new_competitor_list)} with a meaningful new same-position competitor this offseason (score suppressed)")
     print(f"[INFO]   of those {len(new_competitor_list)}: {n_via_production_only} via prior-production threshold only, "
           f"{n_via_draft_only} via draft-capital only, {n_via_both} via both")
+
+    if unavailable_list:
+        print(f"\nWatch list -- {len(unavailable_list)} players known long-term unavailable, score suppressed ({UNAVAILABLE_REASON}):")
+        header1 = f"{'Name':24} {'Pos':4} {'Team':5} {'Status'}"
+        print(header1)
+        print("-" * len(header1))
+        for pid, feat, status in sorted(unavailable_list, key=lambda w: (w[1]["_team"], names.get(w[0], w[0]))):
+            display = names.get(pid, pid)
+            print(f"{display:24.24} {feat['_pos']:4} {feat['_team']:5} {status}")
 
     if team_changed_list:
         print(f"\nWatch list -- {len(team_changed_list)} players with a confirmed offseason team change, score suppressed ({TEAM_CHANGE_REASON}):")
@@ -434,6 +533,13 @@ def main():
     # Watch-list JSON records are model-independent (same suppression logic
     # regardless of which model scores the stable pool) -- built once, reused
     # for both the production and shadow output files.
+    unavailable_records = []
+    for pid, feat, status in unavailable_list:
+        unavailable_records.append({
+            "player_id": pid, "name": names.get(pid, pid), "pos": feat["_pos"], "team": feat["_team"],
+            "status": status, "reason": UNAVAILABLE_REASON,
+        })
+
     team_changed_records = []
     for pid, feat, old_team, new_team, corrected in team_changed_list:
         team_changed_records.append({
@@ -474,7 +580,7 @@ def main():
         if json_out_path is not None:
             write_output(model_path, model_commit, model_meta, args, names, ranked, stable, proba,
                          all_eligible_count, len(candidates), n_released_by_recency,
-                         team_changed_records, new_competitor_records,
+                         team_changed_records, new_competitor_records, unavailable_records,
                          n_via_production_only, n_via_draft_only, n_via_both, json_out_path)
 
     json_out_path = Path(args.json_out) if args.json_out else None
