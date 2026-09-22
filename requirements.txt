@@ -1,5 +1,6 @@
 requests
 pandas
+pyarrow
 numpy
 scikit-learn
 xgboost

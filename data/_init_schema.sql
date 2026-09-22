@@ -48,6 +48,51 @@ CREATE TABLE IF NOT EXISTS team_week_stats (
   PRIMARY KEY (season, week, team)
 );
 
+-- Pre-aggregated play-by-play metrics, computed from nflverse's pbp release
+-- (data/fetch_pbp_history.py, data/load_pbp_aggregates.py) -- NOT raw
+-- play-by-play, which is never persisted to this DB, only cached as
+-- parquet under gitignored nflverse_raw/. Deliberately separate from
+-- team_week_stats' own pass_rate/redzone_rate/etc. columns above, which
+-- are long-standing unpopulated placeholders for a different, unrelated
+-- data source (never loaded from anywhere) -- conflating the two would
+-- silently mix provenances under the same column name.
+--
+-- "Dropback" = qb_dropback in nflverse's pbp (pass attempts + sacks +
+-- scrambles) -- the standard sack-rate denominator, not just pass_attempt.
+-- "Rush attempt" includes qb_scramble rows (nflverse classifies a scramble
+-- as play_type='run', rush_attempt=1) -- a designed-run-only stuff rate
+-- was not what was asked for. A "stuff" is a rush_attempt row with
+-- yards_gained <= 0. Regular season only (season_type='REG' in the source
+-- file). *_allowed/*_taken are from the team's own OFFENSE (team=posteam);
+-- *_generated/opp_* are from the team's own DEFENSE (team=defteam) --
+-- e.g. NYG's sacks_taken is sacks against NYG's offense, NYG's
+-- sacks_generated is sacks by NYG's defense. Counts are stored alongside
+-- each rate so a consumer can re-aggregate correctly across weeks instead
+-- of averaging pre-computed rates.
+CREATE TABLE IF NOT EXISTS team_week_pbp_stats (
+  season INTEGER NOT NULL, week INTEGER NOT NULL, team TEXT NOT NULL,
+  dropbacks INTEGER, sacks_taken INTEGER, sack_rate_allowed REAL,
+  opp_dropbacks INTEGER, sacks_generated INTEGER, sack_rate_generated REAL,
+  rush_attempts INTEGER, rush_stuffs INTEGER, stuff_rate_allowed REAL,
+  opp_rush_attempts INTEGER, opp_rush_stuffs INTEGER, stuff_rate_generated REAL,
+  pass_plays INTEGER, run_plays INTEGER, pass_rate REAL,
+  plays_inside_20 INTEGER,
+  PRIMARY KEY (season, week, team)
+);
+
+-- Red-zone (yardline_100 <= 20) opportunity counts, one row per player who
+-- had at least one qualifying carry or target that week (sparse -- no row
+-- means 0 of both, same convention as other sparse per-player lookups in
+-- this pipeline). redzone_carries: rush_attempt=1 rows credited to
+-- rusher_player_id. redzone_targets: pass plays with a non-null
+-- receiver_player_id (excludes sacks and throwaways with no intended
+-- receiver) credited to receiver_player_id. Regular season only.
+CREATE TABLE IF NOT EXISTS player_week_pbp_stats (
+  season INTEGER NOT NULL, week INTEGER NOT NULL, player_id TEXT NOT NULL,
+  redzone_carries INTEGER, redzone_targets INTEGER,
+  PRIMARY KEY (season, week, player_id)
+);
+
 CREATE TABLE IF NOT EXISTS injury_events (
   ts TEXT NOT NULL, player_id TEXT NOT NULL,
   status TEXT, body_part TEXT, practice TEXT, expected_return TEXT,
