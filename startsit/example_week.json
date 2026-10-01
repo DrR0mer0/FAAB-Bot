@@ -1,0 +1,38 @@
+{
+  "_comment": "EXAMPLE ONLY. Projection numbers are made-up placeholders to show the format; opponent players are fictional. The Yahoo fetcher + projection models should write a file shaped like this.",
+  "schema_version": 1,
+  "season": 2026,
+  "week": 5,
+  "stage": "thursday",
+  "league": {
+    "slots": ["QB", "WR", "WR", "RB", "RB", "TE", "W/R/T", "BN", "BN", "BN", "BN", "IR"]
+  },
+  "my_team": {
+    "name": "My team",
+    "players": [
+      {"id": "maye",       "name": "D. Maye",          "pos": "QB", "team": "NE",  "p10": 11.0, "p50": 18.0, "p90": 27.0},
+      {"id": "mcmillan",   "name": "T. McMillan",      "pos": "WR", "team": "CAR", "p10": 6.0,  "p50": 13.0, "p90": 22.0},
+      {"id": "washington", "name": "P. Washington",    "pos": "WR", "team": "JAX", "p10": 3.0,  "p50": 9.0,  "p90": 17.0},
+      {"id": "mccaffrey",  "name": "C. McCaffrey",     "pos": "RB", "team": "SF",  "p10": 9.0,  "p50": 17.0, "p90": 28.0},
+      {"id": "henry",      "name": "D. Henry",         "pos": "RB", "team": "BAL", "p10": 7.0,  "p50": 15.0, "p90": 26.0},
+      {"id": "ferguson",   "name": "J. Ferguson",      "pos": "TE", "team": "DAL", "p10": 4.0,  "p50": 9.0,  "p90": 16.0},
+      {"id": "etienne",    "name": "T. Etienne Jr.",   "pos": "RB", "team": "NO",  "p10": 5.5,  "p50": 11.5, "p90": 18.5, "note": "steady volume"},
+      {"id": "dobbins",    "name": "J. Dobbins",       "pos": "RB", "team": "DEN", "p10": 3.5,  "p50": 10.5, "p90": 23.0, "note": "goal-line role"},
+      {"id": "tate",       "name": "C. Tate",          "pos": "WR", "team": "TEN", "p10": 2.0,  "p50": 7.0,  "p90": 15.0},
+      {"id": "concepcion", "name": "K. Concepcion",    "pos": "WR", "team": "CLE", "proj": 8.0},
+      {"id": "jacobs",     "name": "J. Jacobs",        "pos": "RB", "team": "GB",  "status": "EXEMPT"}
+    ]
+  },
+  "opponent": {
+    "name": "Opponent",
+    "starters": [
+      {"id": "opp_qb",   "name": "Opp QB",   "pos": "QB", "p10": 12.0, "p50": 20.0, "p90": 29.0},
+      {"id": "opp_rb1",  "name": "Opp RB1",  "pos": "RB", "p10": 8.0,  "p50": 17.0, "p90": 28.0},
+      {"id": "opp_rb2",  "name": "Opp RB2",  "pos": "RB", "p10": 6.0,  "p50": 14.0, "p90": 24.0},
+      {"id": "opp_wr1",  "name": "Opp WR1",  "pos": "WR", "p10": 7.0,  "p50": 16.0, "p90": 27.0},
+      {"id": "opp_wr2",  "name": "Opp WR2",  "pos": "WR", "p10": 5.0,  "p50": 13.0, "p90": 22.0},
+      {"id": "opp_te",   "name": "Opp TE",   "pos": "TE", "p10": 3.0,  "p50": 9.0,  "p90": 17.0},
+      {"id": "opp_flex", "name": "Opp FLEX", "pos": "WR", "p10": 5.0,  "p50": 12.0, "p90": 21.0}
+    ]
+  }
+}
