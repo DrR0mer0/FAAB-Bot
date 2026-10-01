@@ -33,7 +33,9 @@ The production model has since been promoted to **13 features** (Group 1, below)
 | `data/` | Schema, nflverse fetch/load pipeline, roster reconciliation, verification |
 | `model/` | Feature engineering, label generation, training, weekly scoring |
 | `league/` | Yahoo Fantasy API authentication (read-only) |
+| `startsit/` | Standalone start/sit lineup simulator — see below |
 | `evaluation/` | Held-out model evaluation and feature experiments |
+| `predictions/` | Committed, frozen weekly scoring output (production + shadow), plus the running verification log |
 | `legacy/` | Non-functional artifacts from an earlier attempt, kept for context |
 
 ## Pipeline order
@@ -48,7 +50,20 @@ model/generate_labels_and_breakouts.py  # spike labels
 model/generate_player_week_features.py  # feature table
 model/train_production_model.py         # train
 model/score_week.py --season Y --week W # score an upcoming week
+evaluation/verify_week.py --season Y --week W  # once the week is over and actuals exist
 ```
+
+**Every week during the season**, run `data/fetch_weekly_update.py --season Y` first — it refreshes stats, the schedule, and both roster files in one call. `score_week.py`'s suppression checks (team-changed, new-competitor, availability) read the roster file directly, so a stale one silently produces wrong results with no error.
+
+## Start/sit simulator
+
+`startsit/lineup_sim.py` picks the lineup that maximizes **win probability** against this week's opponent — not just projected points — from per-player p10/p50/p90 projections, simulating correlated outcomes (a QB and his WR booming together, two backs on the same team splitting work) and explaining the close calls.
+
+```
+python startsit/lineup_sim.py startsit/example_week.json --seed 7
+```
+
+It's standalone and model-agnostic; the full week-file contract is in `startsit/README.md`. `example_week.json` uses made-up numbers — it's waiting on the Yahoo fetcher to produce real week files once API access comes through.
 
 ## Method notes
 
@@ -72,7 +87,9 @@ Two feature groups were tested against the production baseline in the same cycle
 
 **QB volume, Group 2 (rejected).** Trailing pass attempts, trailing pass air yards, and a team-level WR-vs-RB target-rate feature, built to address the QB-unreliability limitation above. On a pooled precision@10 re-test (2010–2023 train, 2024 test) it looked like a clear win: +0.044. Splitting that result out by position told a different story: RB moved -0.006, WR +0.000, TE +0.006 — all noise — while QB alone moved +0.061. The entire pooled win was the model reallocating picks toward QBs, who spike at roughly 4x the pooled base rate in this data; RB/WR/TE, where this league's actual waiver decisions happen, saw no benefit at all. This is exactly why `evaluation/metrics.py` now reports per-position precision on every feature test, not just pooled — a pooled win can be a base-rate reallocation artifact rather than genuine discrimination, and the only way to catch that is to check.
 
-The lesson kept from all three rejections: a pooled or single-validation-year win isn't enough on its own. Holding out a truly untouched test set caught the share-delta regression; splitting precision by position caught the QB-volume reallocation. The `evaluation/` scripts and the rejected model artifacts remain in the repo as the record.
+Since then, more feature groups have been tested the same way. Teammate competition, line quality, and red-zone opportunity each won pooled precision@10 on 2024, but the per-position breakdown — the metric that actually decides adoption — didn't support it: teammate competition lost at every one of RB/WR/TE, while line quality and red-zone opportunity showed a mixed picture with RB notably weaker. Vegas lines (upcoming-game spread/total) lost on pooled precision@10 outright, and separately aren't posted far enough ahead of kickoff to be usable for most of a season. Trailing efficiency won decisively on pooled and RB/WR precision — the strongest result since Group 1 — but was traced to a labeling confound: the spike threshold is defined relative to a player's own recent points, so a cold stretch lowers the bar it has to clear, which isn't the same thing as real signal. A recency-weighted version of the existing usage features lost against the flat-average original it was meant to replace. Red-zone opportunity's initial 2024 win was then re-checked against a decision rule pre-registered for the project's one reserved second-opinion test year (2023) and failed it. None of the above were adopted; `CLAUDE.md`'s Methodology rules section has the complete, test-by-test record.
+
+The lesson kept from all these rejections: a pooled or single-validation-year win isn't enough on its own. Holding out a truly untouched test set caught the share-delta regression; splitting precision by position caught the QB-volume reallocation and several groups after it. The `evaluation/` scripts and the rejected model artifacts remain in the repo as the record.
 
 ## Data sources
 
@@ -81,7 +98,7 @@ The lesson kept from all three rejections: a pooled or single-validation-year wi
 
 ## Tech
 
-Python, SQLite, XGBoost, pandas.
+Python, SQLite, XGBoost, pandas, numpy, pyarrow (for nflverse's play-by-play parquet releases).
 
 ## Status
 
