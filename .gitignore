@@ -6,6 +6,7 @@ yahoo_token.json
 *.db
 nflverse_raw/
 *.joblib
+manifest_nflverse.json
 
 # Real Yahoo league data, once that access comes through -- local-only
 league_data/
