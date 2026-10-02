@@ -32,6 +32,20 @@ accumulates week over week; a week with no shadow file just has no
 Fails fast if the labels pipeline hasn't been run for this week yet --
 verification against raw points would silently ignore each player's own
 baseline, which is exactly the thing a "spike" is defined relative to.
+
+SNAPSHOTS: score_week.py's kickoff guard means a week can now have more
+than one committed prediction file -- the first (bare, unsuffixed) run,
+plus a later same-week run under a snapshot-labeled name, e.g.
+2026_week04_sunday.json, generated after the kickoff guard has excluded
+whoever's already played. This script is deliberately UNCHANGED here: it
+only ever reads the bare `predictions/<season>_week<NN>.json` (and its
+`_shadow` pair), so the first snapshot remains the sole authoritative
+record for verification_log.json and the production/shadow head-to-head,
+exactly as before snapshots existed. Comparing a later snapshot against
+the first one directly (outside this script) needs restricting to their
+shared population first -- the later snapshot's stable/scored_pool
+excludes anyone the kickoff guard already carried forward, so a naive
+diff would misread "excluded, not re-scored" as "model disagreement."
 """
 import argparse
 import json

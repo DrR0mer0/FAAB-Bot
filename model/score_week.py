@@ -60,15 +60,71 @@ warning if the shadow model file isn't present locally (it's gitignored,
 like every .joblib). Like the production file, the shadow prediction file
 must be generated before the week is played and committed frozen -- never
 regenerated afterward, same discipline throughout this pipeline.
+
+Kickoff guard: a mid-week re-run (e.g. Sunday, after some early games have
+already kicked off) must not score a player whose game has already started
+-- the whole point of a spike-probability ranking is deciding who to add
+*before* the outcome is known. Checked first, unconditionally, ahead of
+even the availability gate -- resolved from each game's actual kickoff
+instant in nfl_games (via `--as-of`, default now), never from day-of-week,
+so a late-season Saturday game, a 9:30am ET London kickoff, or a holiday
+game are all caught by the same rule. These players are excluded from
+scoring entirely and reported in `already_played_watch_list`, with their
+rank/score CARRIED FORWARD from the week's first snapshot if one exists --
+never re-scored, since the whole premise of excluding them is that there's
+nothing new to compute.
+
+TIMEZONE NOTE on kickoff_utc: despite the column name, nfl_games.kickoff_utc
+is NOT a true UTC instant -- it's `gameday` + `gametime` with no offset
+(flagged in data/load_nflverse_into_history_SAFE_v3.py since this project's
+early days). Checked directly against 2026 data before relying on it here:
+it's consistently US/Eastern LOCAL time, regardless of the game's actual
+venue -- nflverse's `gametime` column is always Eastern. Confirmed two
+ways: every 2026 early-window game (the "1:00pm" slot) stores '13:00:00'
+even when hosted by a Pacific-zone team (2026 week 17 KC @ LAC, week 18
+SEA @ LA both do) -- a literal 1:00pm Pacific kickoff would be a very
+unusual early-window slot, and if the column were true UTC it would read
+'17:00' or '18:00' for a 1:00pm ET game, not '13:00'. And the lone 2026
+London game (week 6, HOU @ JAX) stores '09:30:00' -- nflverse's documented
+Eastern-denominated time for a London "breakfast" kickoff, not its ~14:30
+UTC/BST local equivalent a true-UTC column would show. KICKOFF_TZ below
+localizes the naive timestamp as US/Eastern via the IANA database (so it's
+correct across the DST boundary the NFL season straddles -- EDT in
+September, EST by January) and converts to a real UTC instant for
+comparison against `--as-of`. If this ever stops holding for a future
+season (a schema change upstream, say), the guard would silently compare
+against the wrong instant -- there is no live check against that here.
+
+SNAPSHOT NAMING: the first run for a week keeps the existing bare filename
+(e.g. predictions/2026_week04.json) -- nothing changes there. A later
+same-week run must pass a DIFFERENT --json-out so it doesn't overwrite the
+first, by convention a snapshot label before the extension, e.g.
+predictions/2026_week04_sunday.json; the existing stem-based shadow/
+markdown derivation (`_shadow`, `.md`) already applies consistently to
+whatever stem is given, so a later snapshot automatically gets
+2026_week04_sunday_shadow.json, 2026_week04_sunday.md, and
+2026_week04_sunday_shadow.md to match. Carry-forward (above) always reads
+from the bare, UNsuffixed file for the matching role (production reads the
+bare production file, shadow reads the bare shadow file) via
+--predictions-dir, independent of where --json-out writes THIS run's
+output -- so a dry run to a scratch location still carries forward from
+the real, committed first snapshot. evaluation/verify_week.py is
+unchanged and only ever reads the bare filename too, so it keeps treating
+the first snapshot as the sole authoritative record for the running log
+and the shadow head-to-head; comparing a later snapshot against the first
+one directly would need restricting to their shared population first,
+since the later snapshot's stable pool excludes whoever's already played.
 """
 import argparse
 import csv
 import json
 import os
 import sqlite3
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import joblib
 import numpy as np
@@ -77,6 +133,11 @@ from features_lib import MIN_PRIOR_GAMES, PERSISTED_FEATURE_COLS, FeatureEngine
 from model_metadata import read_metadata
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "data"))
+from team_crosswalk import norm_team  # noqa: E402 -- shared crosswalk; see data/team_crosswalk.py
+
+# See the module docstring's TIMEZONE NOTE for how this was determined.
+KICKOFF_TZ = ZoneInfo("America/New_York")
 
 # Only these statuses represent a confirmed, current team assignment. CUT/RET/
 # EXE players aren't actually on the team a roster file last associated them
@@ -110,6 +171,78 @@ ROSTERABLE_POSITIONS = {"QB", "RB", "WR", "TE"}
 # or futures signing with neither trips nothing.
 PROD_THRESHOLDS = {"RB": 50, "WR": 30, "TE": 30, "QB": 100}  # touches/targets/targets/attempts
 DRAFT_CAPITAL_PICK_CUTOFF = 96  # ~3 rounds at 32 picks/round
+
+ALREADY_PLAYED_REASON = "game already kicked off as of this run -- not re-scored"
+
+
+def parse_kickoff_utc(kickoff_str):
+    """nfl_games.kickoff_utc -> a real, aware UTC datetime, or None if
+    missing/unparseable. See the module docstring's TIMEZONE NOTE for why
+    this localizes the naive string as US/Eastern (KICKOFF_TZ) rather than
+    treating it as already being UTC despite the column name."""
+    if not kickoff_str:
+        return None
+    try:
+        naive = datetime.fromisoformat(kickoff_str)
+    except ValueError:
+        return None
+    return naive.replace(tzinfo=KICKOFF_TZ).astimezone(timezone.utc)
+
+
+def load_kickoffs(con, season, week):
+    """team -> (kickoff_utc as an aware UTC datetime, opponent) for every
+    non-playoff game in (season, week), keyed both home and away. Same
+    is_playoffs=0 filter FeatureEngine's own game_info uses, and the same
+    norm_team() crosswalk (nfl_games uses each franchise's historical
+    code; player-facing team values elsewhere in this script already use
+    the current one)."""
+    kickoffs = {}
+    for r in con.execute(
+        "SELECT home_team, away_team, kickoff_utc FROM nfl_games WHERE season=? AND week=? AND is_playoffs=0",
+        (season, week),
+    ):
+        dt = parse_kickoff_utc(r["kickoff_utc"])
+        if dt is None:
+            continue
+        home, away = norm_team(r["home_team"]), norm_team(r["away_team"])
+        kickoffs[home] = (dt, away)
+        kickoffs[away] = (dt, home)
+    return kickoffs
+
+
+def build_already_played_records(already_played_base, names, baseline_path):
+    """already_played_base: [(pid, feat, kickoff_dt, opponent), ...].
+    Looks up each player's rank (from the baseline file's `top` list, if
+    present there) and score (from its `scored_pool`, the broader stable
+    pool) in baseline_path -- the week's FIRST, unsuffixed snapshot for
+    this model's role (production or shadow; see the module docstring's
+    SNAPSHOT NAMING note) -- and labels it explicitly as carried forward.
+    No new score is ever computed here. carried_forward is None if
+    baseline_path doesn't exist yet (this IS the first run, or kickoff
+    beat even that), or if this specific player wasn't scored in it
+    (e.g. they were suppressed there too)."""
+    rank_by_pid, score_by_pid, baseline_name = {}, {}, None
+    if baseline_path is not None and baseline_path.exists():
+        baseline_name = baseline_path.name
+        with open(baseline_path, encoding="utf-8") as f:
+            baseline = json.load(f)
+        rank_by_pid = {r["player_id"]: r["rank"] for r in baseline.get("top", [])}
+        score_by_pid = {r["player_id"]: r["score"] for r in baseline.get("scored_pool", [])}
+
+    records = []
+    for pid, feat, kickoff_dt, opponent in already_played_base:
+        rec = {
+            "player_id": pid, "name": names.get(pid, pid), "pos": feat["_pos"], "team": feat["_team"],
+            "kickoff": kickoff_dt.isoformat(), "opponent": opponent, "reason": ALREADY_PLAYED_REASON,
+        }
+        if pid in score_by_pid:
+            rec["carried_forward"] = {
+                "source": baseline_name, "score": score_by_pid[pid], "rank": rank_by_pid.get(pid),
+            }
+        else:
+            rec["carried_forward"] = None
+        records.append(rec)
+    return records
 
 
 def get_eligible_candidates(engine, season, week):
@@ -157,6 +290,9 @@ def render_markdown_report(output):
     ]
     if counts.get("unavailable_suppressed") is not None:
         lines.append(f"- Unavailable (reserve/PUP/NFI/suspended) suppressed: {counts['unavailable_suppressed']}")
+    if counts.get("already_played") is not None:
+        lines.append(f"- Already played as of this run (not re-scored, rank/score carried forward where available): "
+                      f"{counts['already_played']}")
     lines += [
         f"- Team-changed suppressed: {counts['team_changed_suppressed']}",
         f"- New-competitor suppressed: {counts['new_competitor_suppressed']} "
@@ -312,6 +448,7 @@ def print_top_table(label, ranked, args, names):
 def write_output(model_path, model_commit, model_meta, args, names, ranked, stable, proba,
                   all_eligible_count, n_candidates, n_released_by_recency,
                   team_changed_records, new_competitor_records, unavailable_records,
+                  already_played_records,
                   n_via_production_only, n_via_draft_only, n_via_both, json_out_path):
     def player_record(pid, feat, score=None):
         return {
@@ -347,6 +484,7 @@ def write_output(model_path, model_commit, model_meta, args, names, ranked, stab
             "stable_scored": len(stable),
             "released_from_offseason_suppression": n_released_by_recency,
             "unavailable_suppressed": len(unavailable_records),
+            "already_played": len(already_played_records),
             "team_changed_suppressed": len(team_changed_records),
             "new_competitor_suppressed": len(new_competitor_records),
             "new_competitor_via_production_only": n_via_production_only,
@@ -356,6 +494,7 @@ def write_output(model_path, model_commit, model_meta, args, names, ranked, stab
         "top": ranked_records,
         "scored_pool": scored_pool_records,
         "unavailable_watch_list": unavailable_records,
+        "already_played_watch_list": already_played_records,
         "team_changed_watch_list": team_changed_records,
         "new_competitor_watch_list": new_competitor_records,
     }
@@ -385,7 +524,22 @@ def main():
                      help="defaults to nflverse_raw/roster_weekly_<season>.csv if present; single source for "
                           "team-mapping, new-competitor detection, AND the availability gate")
     ap.add_argument("--json-out", default=None, help="if set, write the full scoring output (top N, scored pool, both watch lists, model identity) as JSON to this path, and a matching shadow file (same basename + _shadow) if shadow scoring runs")
+    ap.add_argument("--predictions-dir", default=str(REPO_ROOT / "predictions"),
+                     help="where to look for the week's FIRST (bare, unsuffixed) snapshot when carrying forward "
+                          "already-played players' rank/score -- independent of --json-out, so a dry run to a "
+                          "scratch location still carries forward from the real committed baseline")
+    ap.add_argument("--as-of", default=None,
+                     help="ISO8601 instant to evaluate the kickoff guard against (default: now; naive input is "
+                          "assumed UTC). For testing, e.g. --as-of 2026-10-05T14:00:00+00:00 to simulate a "
+                          "Sunday-afternoon run after early games have kicked off")
     args = ap.parse_args()
+
+    if args.as_of:
+        as_of = datetime.fromisoformat(args.as_of)
+        if as_of.tzinfo is None:
+            as_of = as_of.replace(tzinfo=timezone.utc)
+    else:
+        as_of = datetime.now(timezone.utc)
 
     weekly_roster_path = args.weekly_roster or str(REPO_ROOT / "nflverse_raw" / f"roster_weekly_{args.season}.csv")
     roster_team_of, team_pos_roster, draft_pick_of, weekly_status_of = {}, {}, {}, {}
@@ -408,9 +562,17 @@ def main():
 
     names = {row["player_id"]: row["full_name"] for row in con.execute("SELECT player_id, full_name FROM ref_players")}
 
-    already_played = bool(engine.played_this_week.get((args.season, args.week)))
+    kickoffs = load_kickoffs(con, args.season, args.week)
+    print(f"[INFO] kickoff guard evaluated as-of {as_of.isoformat()} against {len(kickoffs) // 2} "
+          f"scheduled game(s) for {args.season} week {args.week}")
+
+    # Not to be confused with the per-player kickoff guard below (also
+    # called "already played" in this script, but a different thing: this
+    # is week-level -- does ANY stat data exist for this week at all --
+    # while the guard is per-player and based on actual kickoff instants.
+    week_has_any_stat_data = bool(engine.played_this_week.get((args.season, args.week)))
     print(f"[INFO] {args.season} week {args.week}: "
-          f"{'ALREADY HAS stat data (historical/backtest mode)' if already_played else 'no stat data yet (genuine future-week mode)'}")
+          f"{'ALREADY HAS stat data (historical/backtest mode)' if week_has_any_stat_data else 'no stat data yet (genuine future-week mode)'}")
 
     candidates = get_eligible_candidates(engine, args.season, args.week)
     all_eligible_count = len(candidates)
@@ -474,11 +636,25 @@ def main():
         via_draft = pick is not None and pick <= DRAFT_CAPITAL_PICK_CUTOFF
         return (via_production or via_draft), via_production, via_draft
 
-    stable, team_changed_list, new_competitor_list, unavailable_list = [], [], [], []
+    stable, team_changed_list, new_competitor_list, unavailable_list, already_played_list = [], [], [], [], []
     n_via_production_only = n_via_draft_only = n_via_both = 0
     n_released_by_recency = 0
     for pid, feat in candidates:
-        # Availability gate first, unconditionally -- ahead of even the
+        # Kickoff guard first, unconditionally -- ahead of even the
+        # availability gate below. Whatever team this player is ACTUALLY on
+        # (roster_team_of, same resolution the team-changed check below
+        # uses) determines which game's kickoff applies; a team on a bye
+        # this week has no entry in `kickoffs` and the guard is simply a
+        # no-op for it. See the module docstring's TIMEZONE NOTE for how
+        # kickoff_dt was resolved to a real UTC instant.
+        kickoff_info = kickoffs.get(roster_team_of.get(pid) or feat["_team"])
+        if kickoff_info is not None:
+            kickoff_dt, opponent = kickoff_info
+            if kickoff_dt <= as_of:
+                already_played_list.append((pid, feat, kickoff_dt, opponent))
+                continue
+
+        # Availability gate next, unconditionally -- ahead of even the
         # recency-release below. A player on reserve who happens to have
         # accumulated 3+ real current-season games (hurt mid-season, say)
         # still can't play; games_played_this_season says nothing about
@@ -537,11 +713,21 @@ def main():
 
     print(f"[INFO] {len(stable)} stable candidates scored ({n_released_by_recency} of those released from "
           f"offseason suppression this week, having reached {MIN_PRIOR_GAMES}+ current-season games); "
+          f"{len(already_played_list)} already played as of {as_of.isoformat()} (excluded, not re-scored); "
           f"{len(unavailable_list)} unavailable (reserve/PUP/NFI/suspended, score suppressed); "
           f"{len(team_changed_list)} team-changed (score suppressed); "
           f"{len(new_competitor_list)} with a meaningful new same-position competitor this offseason (score suppressed)")
     print(f"[INFO]   of those {len(new_competitor_list)}: {n_via_production_only} via prior-production threshold only, "
           f"{n_via_draft_only} via draft-capital only, {n_via_both} via both")
+
+    if already_played_list:
+        print(f"\nWatch list -- {len(already_played_list)} players whose game has already kicked off, not re-scored ({ALREADY_PLAYED_REASON}):")
+        header0 = f"{'Name':24} {'Pos':4} {'Team':5} {'Opp':4} {'Kickoff (UTC)'}"
+        print(header0)
+        print("-" * len(header0))
+        for pid, feat, kickoff_dt, opponent in sorted(already_played_list, key=lambda w: (w[2], names.get(w[0], w[0]))):
+            display = names.get(pid, pid)
+            print(f"{display:24.24} {feat['_pos']:4} {feat['_team']:5} {opponent:4} {kickoff_dt.isoformat()}")
 
     if unavailable_list:
         print(f"\nWatch list -- {len(unavailable_list)} players known long-term unavailable, score suppressed ({UNAVAILABLE_REASON}):")
@@ -620,7 +806,16 @@ def main():
             "new_competitors": comp_details,
         })
 
-    def run_pass(model_path, label, json_out_path):
+    # The week's FIRST (bare, unsuffixed) snapshot for each role, independent
+    # of where THIS run's --json-out points -- see the module docstring's
+    # SNAPSHOT NAMING note. Used only to carry forward already-played
+    # players' rank/score; never read for anything else.
+    baseline_production_path = Path(args.predictions_dir) / f"{args.season}_week{args.week:02d}.json"
+    baseline_shadow_path = baseline_production_path.with_name(
+        baseline_production_path.stem + "_shadow" + baseline_production_path.suffix
+    )
+
+    def run_pass(model_path, label, json_out_path, baseline_path):
         result = load_and_score(model_path, label, stable)
         if result is None:
             print(f"[WARN] {label} model not found at {model_path} -- skipping {label.lower()} scoring")
@@ -629,17 +824,19 @@ def main():
         ranked = sorted(zip(stable, proba), key=lambda x: x[1], reverse=True)[: args.top]
         print_top_table(label, ranked, args, names)
         if json_out_path is not None:
+            already_played_records = build_already_played_records(already_played_list, names, baseline_path)
             write_output(model_path, model_commit, model_meta, args, names, ranked, stable, proba,
                          all_eligible_count, len(candidates), n_released_by_recency,
                          team_changed_records, new_competitor_records, unavailable_records,
+                         already_played_records,
                          n_via_production_only, n_via_draft_only, n_via_both, json_out_path)
 
     json_out_path = Path(args.json_out) if args.json_out else None
-    run_pass(args.model, "PRODUCTION", json_out_path)
+    run_pass(args.model, "PRODUCTION", json_out_path, baseline_production_path)
 
     if not args.no_shadow:
         shadow_json_out = json_out_path.with_name(json_out_path.stem + "_shadow" + json_out_path.suffix) if json_out_path else None
-        run_pass(args.shadow_model, "SHADOW", shadow_json_out)
+        run_pass(args.shadow_model, "SHADOW", shadow_json_out, baseline_shadow_path)
 
     con.close()
 
