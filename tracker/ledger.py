@@ -2,7 +2,7 @@
 """Append-only prediction ledger (SQLite) for the baseline tracker.
 
 Every table here is created IF NOT EXISTS in the existing FAAB history DB --
-no existing table is altered. The ledger and results tables get BEFORE UPDATE
+no table outside the tracker's own tr_* set is altered. The ledger and results tables get BEFORE UPDATE
 and BEFORE DELETE triggers that RAISE(ABORT), so a stray UPDATE/DELETE fails
 loudly instead of silently rewriting history. That's a guard against
 accidents, not tamper-proofing -- anyone with DB access can still DROP a
@@ -15,7 +15,10 @@ Layout:
     tr_run_results / tr_percentiles /
     tr_crowd_results                        -- results, in SEPARATE tables;
                                                re-scoring APPENDS a new scoring_id
-  tr_ownership_snapshots / tr_ownership     -- roster-% snapshots (raw + parsed)
+  tr_ownership_snapshots / tr_ownership     -- roster-% snapshots: parsed rows plus
+                                               the SHA-256 and file name of each raw
+                                               response; the raw bytes themselves live
+                                               outside the DB (see ownership.py)
   tr_snap_counts                            -- nflverse snap counts (a loaded data
                                                table like player_week_stats, NOT
                                                append-only: reload is idempotent)
@@ -159,7 +162,7 @@ CREATE TABLE IF NOT EXISTS tr_ownership_snapshots (
   http_status INTEGER,
   n_rows INTEGER,
   raw_sha256 TEXT,
-  raw_zlib BLOB
+  raw_file TEXT
 );
 
 CREATE TABLE IF NOT EXISTS tr_ownership (
@@ -198,17 +201,30 @@ APPEND_ONLY_TABLES = (
 )
 
 
+def create_append_only_triggers(con, table):
+    con.execute(
+        f"CREATE TRIGGER IF NOT EXISTS {table}_no_update BEFORE UPDATE ON {table} "
+        f"BEGIN SELECT RAISE(ABORT, 'append-only ledger: UPDATE on {table} is blocked'); END"
+    )
+    con.execute(
+        f"CREATE TRIGGER IF NOT EXISTS {table}_no_delete BEFORE DELETE ON {table} "
+        f"BEGIN SELECT RAISE(ABORT, 'append-only ledger: DELETE on {table} is blocked'); END"
+    )
+
+
+def table_columns(con, table):
+    return [r[1] for r in con.execute(f"PRAGMA table_info({table})")]
+
+
 def init_schema(con):
     con.executescript(DDL)
+    # A DB created before raw responses moved out to files has raw_zlib and no
+    # raw_file. Adding the column is harmless; moving the blobs out and dropping
+    # raw_zlib is the explicit one-time `migrate-ownership-raw` command.
+    if "raw_file" not in table_columns(con, "tr_ownership_snapshots"):
+        con.execute("ALTER TABLE tr_ownership_snapshots ADD COLUMN raw_file TEXT")
     for t in APPEND_ONLY_TABLES:
-        con.execute(
-            f"CREATE TRIGGER IF NOT EXISTS {t}_no_update BEFORE UPDATE ON {t} "
-            f"BEGIN SELECT RAISE(ABORT, 'append-only ledger: UPDATE on {t} is blocked'); END"
-        )
-        con.execute(
-            f"CREATE TRIGGER IF NOT EXISTS {t}_no_delete BEFORE DELETE ON {t} "
-            f"BEGIN SELECT RAISE(ABORT, 'append-only ledger: DELETE on {t} is blocked'); END"
-        )
+        create_append_only_triggers(con, t)
     con.commit()
 
 

@@ -7,9 +7,12 @@ Stdlib unittest only; every test uses temp dirs / in-memory SQLite, never the
 real DB or predictions/.
 """
 import csv
+import gzip
+import hashlib
 import sqlite3
 import tempfile
 import unittest
+import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -532,11 +535,12 @@ class TestOwnership(unittest.TestCase):
     def test_failure_is_recorded_loudly_and_never_raises(self):
         con = mem_db()
         failing = lambda season: {"ok": False, "error": "HTTP 500", "rows": [], "raw_bytes": b"oops", "http_status": 500, "url": "u"}
-        with mock.patch("sys.stderr"):
-            s = ownership.take_snapshot(con, 2026, crosswalk={}, espn_fetch=failing, include_sleeper=False)
+        with mock.patch("sys.stderr"), tempfile.TemporaryDirectory() as d:
+            s = ownership.take_snapshot(con, 2026, d, crosswalk={}, espn_fetch=failing, include_sleeper=False)
+            row = con.execute("SELECT ok, error, http_status, raw_file FROM tr_ownership_snapshots").fetchone()
+            self.assertEqual(gzip.decompress((Path(d) / row["raw_file"]).read_bytes()), b"oops")  # a failed response is kept too
         self.assertFalse(s["espn_ok"])
         self.assertTrue(s["errors"])
-        row = con.execute("SELECT ok, error, http_status FROM tr_ownership_snapshots").fetchone()
         self.assertEqual((row["ok"], row["error"], row["http_status"]), (0, "HTTP 500", 500))
         self.assertIsNone(ownership.latest_ok_espn(con, datetime.now(timezone.utc), 36))  # failed snapshots are never used
 
@@ -551,14 +555,48 @@ class TestOwnership(unittest.TestCase):
         con = mem_db()
         ok_fetch = lambda season: {"ok": True, "error": None, "http_status": 200, "url": "u", "raw_bytes": b'{"x":1}',
                                    "rows": ownership.validate_espn(espn_payload())[2]}
-        s = ownership.take_snapshot(con, 2026, crosswalk={"1000": "00-0000001"}, espn_fetch=ok_fetch, include_sleeper=False)
+        with tempfile.TemporaryDirectory() as d:
+            s = ownership.take_snapshot(con, 2026, d, now=utc("2026-10-03T17:00:26"), crosswalk={"1000": "00-0000001"},
+                                        espn_fetch=ok_fetch, include_sleeper=False)
+            files = [f.name for f in Path(d).iterdir()]
+            snap = con.execute("SELECT * FROM tr_ownership_snapshots").fetchone()
+            raw = gzip.decompress((Path(d) / snap["raw_file"]).read_bytes())
         self.assertTrue(s["espn_ok"])
         self.assertEqual(s["espn_matched"], 1)
-        snap = con.execute("SELECT raw_zlib, raw_sha256 FROM tr_ownership_snapshots").fetchone()
-        import zlib
-        self.assertEqual(zlib.decompress(snap["raw_zlib"]), b'{"x":1}')
-        got = ownership.latest_ok_espn(con, datetime.now(timezone.utc) + timedelta(seconds=5), 36)
+        # the raw response lives in a file OUTSIDE the DB; the DB keeps its SHA-256 and the file's name
+        sha = hashlib.sha256(b'{"x":1}').hexdigest()
+        self.assertEqual(raw, b'{"x":1}')
+        self.assertEqual(snap["raw_sha256"], sha)
+        self.assertEqual(files, [f"20261003T170026Z_espn_{sha[:12]}.json.gz"])
+        self.assertEqual(snap["raw_file"], files[0])
+        self.assertNotIn("raw_zlib", snap.keys())
+        got = ownership.latest_ok_espn(con, utc("2026-10-03T17:00:31"), 36)
         self.assertEqual(ownership.ownership_by_player(con, got[0]), {"00-0000001": 99.0})
+        parsed = con.execute("SELECT o.player_id, o.percent_owned, o.percent_change, s.taken_at FROM tr_ownership o "
+                             "JOIN tr_ownership_snapshots s USING (snapshot_id) WHERE o.player_id IS NOT NULL").fetchone()
+        self.assertEqual(tuple(parsed), ("00-0000001", 99.0, 0.1, "2026-10-03T17:00:26+00:00"))
+
+    def test_unwritable_raw_dir_is_loud_but_keeps_the_snapshot(self):
+        con = mem_db()
+        ok_fetch = lambda season: {"ok": True, "error": None, "http_status": 200, "url": "u", "raw_bytes": b'{"x":1}',
+                                   "rows": ownership.validate_espn(espn_payload())[2]}
+        with tempfile.TemporaryDirectory() as d, mock.patch("sys.stderr") as err:
+            blocker = Path(d) / "not_a_dir"
+            blocker.write_text("x")
+            s = ownership.take_snapshot(con, 2026, blocker, crosswalk={}, espn_fetch=ok_fetch, include_sleeper=False)
+        self.assertTrue(s["espn_ok"])
+        self.assertIn("could not write the raw", "".join(c.args[0] for c in err.write.call_args_list))
+        snap = con.execute("SELECT raw_sha256, raw_file, n_rows FROM tr_ownership_snapshots").fetchone()
+        self.assertEqual((snap["raw_sha256"], snap["raw_file"], snap["n_rows"]), (hashlib.sha256(b'{"x":1}').hexdigest(), None, 400))
+
+    def test_raw_file_is_never_overwritten_with_different_bytes(self):
+        with tempfile.TemporaryDirectory() as d:
+            name = ownership.write_raw(d, "2026-10-03T17:00:26+00:00", "espn", b"abc")
+            self.assertEqual(ownership.write_raw(d, "2026-10-03T17:00:26+00:00", "espn", b"abc"), name)  # same bytes: fine
+            (Path(d) / name).write_bytes(gzip.compress(b"tampered"))
+            with self.assertRaises(FileExistsError):
+                ownership.write_raw(d, "2026-10-03T17:00:26+00:00", "espn", b"abc")
+
 
     def test_name_fallback_is_unique_match_only(self):
         con = mem_db()
@@ -575,6 +613,85 @@ class TestOwnership(unittest.TestCase):
         con.execute("INSERT INTO tr_ownership_snapshots (taken_at, source, ok) VALUES ('2026-10-01T00:00:00+00:00','espn',1)")
         self.assertIsNotNone(ownership.latest_ok_espn(con, utc("2026-10-02T00:00:00"), 36))
         self.assertIsNone(ownership.latest_ok_espn(con, utc("2026-10-04T00:00:00"), 36))
+
+
+LEGACY_SNAPSHOTS_DDL = """CREATE TABLE tr_ownership_snapshots (
+  snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT, taken_at TEXT NOT NULL, source TEXT NOT NULL, url TEXT,
+  ok INTEGER NOT NULL, error TEXT, http_status INTEGER, n_rows INTEGER, raw_sha256 TEXT, raw_zlib BLOB)"""
+
+
+class TestOwnershipRawMigration(unittest.TestCase):
+    """A DB from before raw responses moved out to files: blobs in raw_zlib."""
+
+    RAWS = {1: b'{"players": ["espn"]}', 2: b'[{"player_id": "1", "count": 2}]'}
+
+    def setUp(self):
+        self.con = sqlite3.connect(":memory:")
+        self.con.row_factory = sqlite3.Row
+        self.con.execute(LEGACY_SNAPSHOTS_DDL)
+        ledger.init_schema(self.con)  # what any command does on connect: adds raw_file + the triggers, moves nothing
+        for sid, source in ((1, "espn"), (2, "sleeper_trending_add")):
+            raw = self.RAWS[sid]
+            self.con.execute("INSERT INTO tr_ownership_snapshots (snapshot_id, taken_at, source, url, ok, http_status, n_rows, "
+                             "raw_sha256, raw_zlib) VALUES (?, '2026-10-03T17:00:26.074714+00:00', ?, 'u', 1, 200, 1, ?, ?)",
+                             (sid, source, hashlib.sha256(raw).hexdigest(), zlib.compress(raw, 6)))
+        self.con.execute("INSERT INTO tr_ownership_snapshots (snapshot_id, taken_at, source, ok, error) "
+                         "VALUES (3, '2026-10-03T18:00:00+00:00', 'espn', 0, 'ConnectionError')")  # failed fetch, no body
+        self.con.execute("INSERT INTO tr_ownership (snapshot_id, source, external_id, player_id, percent_owned, percent_change) "
+                         "VALUES (1, 'espn', '1000', '00-0000001', 42.5, -1.5)")
+        self.con.commit()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.raw_dir = Path(self.tmp.name) / "raw" / "ownership"
+
+    def tearDown(self):
+        self.con.close()
+        self.tmp.cleanup()
+
+    def snapshot_rows(self, cols):
+        return [tuple(r) for r in self.con.execute(f"SELECT {cols} FROM tr_ownership_snapshots ORDER BY snapshot_id")]
+
+    def test_blobs_move_to_verified_files_and_the_column_is_dropped(self):
+        keep = "snapshot_id, taken_at, source, url, ok, error, http_status, n_rows, raw_sha256"
+        before = self.snapshot_rows(keep)
+        files = ownership.migrate_raw_to_files(self.con, self.raw_dir)
+        self.assertEqual(len(files), 2)
+        self.assertEqual(sorted(f.name for f in self.raw_dir.iterdir()), sorted(files))
+        self.assertEqual(self.snapshot_rows(keep), before)                      # nothing else about the rows changed
+        self.assertNotIn("raw_zlib", ledger.table_columns(self.con, "tr_ownership_snapshots"))
+        for sid, sha, name in self.snapshot_rows("snapshot_id, raw_sha256, raw_file"):
+            if sid == 3:
+                self.assertIsNone(name)
+                continue
+            raw = gzip.decompress((self.raw_dir / name).read_bytes())
+            self.assertEqual(raw, self.RAWS[sid])
+            self.assertEqual(hashlib.sha256(raw).hexdigest(), sha)
+            self.assertIn(sha[:12], name)
+        self.assertEqual(tuple(self.con.execute("SELECT player_id, percent_owned, percent_change FROM tr_ownership").fetchone()),
+                         ("00-0000001", 42.5, -1.5))
+
+    def test_table_is_append_only_again_afterwards_and_rerun_is_a_no_op(self):
+        ownership.migrate_raw_to_files(self.con, self.raw_dir)
+        for sql in ("UPDATE tr_ownership_snapshots SET ok = 0", "DELETE FROM tr_ownership_snapshots"):
+            with self.assertRaises(sqlite3.DatabaseError) as cm:
+                self.con.execute(sql)
+            self.assertIn("append-only", str(cm.exception))
+        self.assertEqual(ownership.migrate_raw_to_files(self.con, self.raw_dir), [])
+        with tempfile.TemporaryDirectory() as d:  # and new snapshots land in the migrated table
+            ok_fetch = lambda season: {"ok": True, "error": None, "http_status": 200, "url": "u", "raw_bytes": b"new",
+                                       "rows": ownership.validate_espn(espn_payload())[2]}
+            ownership.take_snapshot(self.con, 2026, d, crosswalk={}, espn_fetch=ok_fetch, include_sleeper=False)
+        self.assertEqual(self.con.execute("SELECT COUNT(*) FROM tr_ownership_snapshots").fetchone()[0], 4)
+
+    def test_blob_that_does_not_match_its_hash_aborts_before_anything_changes(self):
+        self.con.execute("DROP TRIGGER tr_ownership_snapshots_no_update")
+        self.con.execute("UPDATE tr_ownership_snapshots SET raw_sha256 = 'not-the-hash' WHERE snapshot_id = 2")
+        ledger.init_schema(self.con)
+        with self.assertRaises(RuntimeError):
+            ownership.migrate_raw_to_files(self.con, self.raw_dir)
+        self.assertIn("raw_zlib", ledger.table_columns(self.con, "tr_ownership_snapshots"))
+        self.assertEqual(self.con.execute("SELECT COUNT(raw_zlib), COUNT(raw_file) FROM tr_ownership_snapshots").fetchone()[:], (2, 0))
+        with self.assertRaises(sqlite3.DatabaseError):
+            self.con.execute("DELETE FROM tr_ownership_snapshots")
 
 
 # -------------------------------------------------------------- crowd + score

@@ -12,17 +12,27 @@ user's own league.
 SECONDARY -- Sleeper's trending-adds endpoint: league-wide ADD COUNTS over a
 lookback window (not a percentage), mapped Sleeper id -> espn_id -> gsis_id.
 
-Every response is stored raw (zlib-compressed) in the append-only
-tr_ownership_snapshots, with parsed rows in tr_ownership. Because the ESPN
-endpoint is unofficial, every fetch is shape-validated; on ANY failure (network,
-HTTP error, JSON change, implausible values) the failure is recorded as an
-ok=0 snapshot row, a loud banner is printed, and nothing raises -- a broken
-roster-% feed must never take down a prediction run. The snapshot command
-exits non-zero so a scheduler can notice.
+STORAGE -- the DB keeps what the tracker queries: one append-only
+tr_ownership_snapshots row per fetch (timestamp, status, and the SHA-256 of the
+raw response) and the parsed rows in tr_ownership (player_id, percent_owned,
+percent_change, ... keyed to that snapshot). The raw response itself is written
+gzip-compressed to a file OUTSIDE the DB (raw/ownership/ under the repo root,
+gitignored; ~3.6 MB per ESPN snapshot), named <UTC timestamp>_<source>_<first
+12 hex of the SHA-256>.json.gz, so old ones can be moved to an archive without
+touching the ledger. The snapshot row records the file's name; the SHA-256
+still identifies the exact bytes wherever the file ends up.
+
+Because the ESPN endpoint is unofficial, every fetch is shape-validated; on ANY
+failure (network, HTTP error, JSON change, implausible values) the failure is
+recorded as an ok=0 snapshot row, a loud banner is printed, and nothing raises
+-- a broken roster-% feed must never take down a prediction run. The snapshot
+command exits non-zero so a scheduler can notice.
 """
 import csv
+import gzip
 import hashlib
 import json
+import os
 import re
 import sys
 import zlib
@@ -31,7 +41,10 @@ from pathlib import Path
 
 import requests
 
+import ledger
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_RAW_DIR = REPO_ROOT / "raw" / "ownership"
 
 ESPN_URL = ("https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{season}"
             "/segments/0/leaguedefaults/3?view=kona_player_info")
@@ -175,15 +188,49 @@ def fetch_sleeper_trending(session=None, timeout=60):
     return out
 
 
-def store_snapshot(con, source, taken_at, fetched, parsed_rows):
-    """Append one snapshot (raw + parsed rows) in a single transaction."""
+def raw_file_name(taken_at, source, sha256):
+    ts = datetime.fromisoformat(taken_at).astimezone(timezone.utc)
+    return f"{ts:%Y%m%dT%H%M%SZ}_{source}_{sha256[:12]}.json.gz"
+
+
+def write_raw(raw_dir, taken_at, source, raw):
+    """Write one raw response gzip-compressed under raw_dir and return the
+    file's name. The file is read back and compared with `raw` before it gets
+    its final name, and an existing file holding different bytes is never
+    overwritten."""
+    raw_dir = Path(raw_dir)
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    path = raw_dir / raw_file_name(taken_at, source, hashlib.sha256(raw).hexdigest())
+    if path.exists():
+        if gzip.decompress(path.read_bytes()) != raw:
+            raise FileExistsError(f"{path} already exists with different content")
+        return path.name
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_bytes(gzip.compress(raw, compresslevel=6, mtime=0))
+    if gzip.decompress(tmp.read_bytes()) != raw:
+        raise OSError(f"read-back of {tmp} does not match the response")
+    os.replace(tmp, path)
+    return path.name
+
+
+def store_snapshot(con, source, taken_at, fetched, parsed_rows, raw_dir):
+    """Append one snapshot: the raw response to a file under raw_dir, then its
+    SHA-256 + file name and the parsed rows to the DB in a single transaction.
+    A raw file that can't be written is loud but doesn't lose the snapshot."""
     raw = fetched.get("raw_bytes")
+    raw_file = None
+    if raw:
+        try:
+            raw_file = write_raw(raw_dir, taken_at, source, raw)
+        except Exception as e:  # noqa: BLE001 -- disk trouble must not take the snapshot down with it
+            _banner(f"could not write the raw {source} response under {raw_dir} ({type(e).__name__}: {e}). The parsed "
+                    f"rows and the response's SHA-256 are still recorded; the raw bytes are NOT kept.")
     cur = con.execute(
-        "INSERT INTO tr_ownership_snapshots (taken_at, source, url, ok, error, http_status, n_rows, raw_sha256, raw_zlib) "
+        "INSERT INTO tr_ownership_snapshots (taken_at, source, url, ok, error, http_status, n_rows, raw_sha256, raw_file) "
         "VALUES (?,?,?,?,?,?,?,?,?)",
         (taken_at, source, fetched.get("url"), 1 if fetched.get("ok") else 0, fetched.get("error"),
          fetched.get("http_status"), len(parsed_rows),
-         hashlib.sha256(raw).hexdigest() if raw else None, zlib.compress(raw, 6) if raw else None))
+         hashlib.sha256(raw).hexdigest() if raw else None, raw_file))
     sid = cur.lastrowid
     con.executemany(
         "INSERT INTO tr_ownership (snapshot_id, source, external_id, player_id, name, position, team, "
@@ -194,9 +241,11 @@ def store_snapshot(con, source, taken_at, fetched, parsed_rows):
     return sid
 
 
-def take_snapshot(con, season, now=None, crosswalk=None, espn_fetch=fetch_espn, sleeper_fetch=fetch_sleeper_trending,
-                  include_sleeper=True):
-    """Fetch + store ESPN (primary) and Sleeper trending (secondary). Returns
+def take_snapshot(con, season, raw_dir, now=None, crosswalk=None, espn_fetch=fetch_espn,
+                  sleeper_fetch=fetch_sleeper_trending, include_sleeper=True):
+    """Fetch + store ESPN (primary) and Sleeper trending (secondary); raw
+    responses go to files under raw_dir (deliberately no default here, so a
+    test can't write into the real raw/ownership/). Returns
     {'espn_ok', 'espn_snapshot_id', 'sleeper_ok', 'espn_matched', 'espn_rows', 'errors'}. Never raises."""
     taken_at = (now or now_utc()).isoformat()
     crosswalk = crosswalk if crosswalk is not None else load_espn_crosswalk()
@@ -208,7 +257,7 @@ def take_snapshot(con, season, now=None, crosswalk=None, espn_fetch=fetch_espn, 
     name_index = build_name_index(con)
     for r in rows:
         r["player_id"] = crosswalk.get(r["external_id"]) or name_index.get((norm_name(r.get("name")), r.get("position")))
-    summary["espn_snapshot_id"] = store_snapshot(con, "espn", taken_at, espn, rows)
+    summary["espn_snapshot_id"] = store_snapshot(con, "espn", taken_at, espn, rows, raw_dir)
     summary["espn_ok"], summary["espn_rows"] = bool(espn["ok"]), len(rows)
     summary["espn_matched"] = sum(1 for r in rows if r.get("player_id"))
     if not espn["ok"]:
@@ -225,13 +274,49 @@ def take_snapshot(con, season, now=None, crosswalk=None, espn_fetch=fetch_espn, 
                     or name_index.get((norm_name(info.get("name")), info.get("position"))))
             srows.append({**r, "player_id": gsis, "name": info.get("name"), "position": info.get("position"),
                           "team": info.get("team")})
-        store_snapshot(con, "sleeper_trending_add", taken_at, sl, srows)
+        store_snapshot(con, "sleeper_trending_add", taken_at, sl, srows, raw_dir)
         summary["sleeper_ok"] = bool(sl["ok"])
         if not sl["ok"]:
             msg = f"Sleeper trending fetch FAILED ({sl.get('error')})."
             summary["errors"].append(msg)
             _banner(msg)
     return summary
+
+
+def migrate_raw_to_files(con, raw_dir):
+    """One-time migration for a DB whose snapshots still carry the raw response
+    as a zlib blob (tr_ownership_snapshots.raw_zlib): write every blob to a
+    file under raw_dir, checked against the stored SHA-256 and read back, and
+    only then record the file names and drop the column. That last step is the
+    one sanctioned bypass of the table's append-only triggers -- they're dropped
+    and recreated inside the same transaction, and nothing but raw_file /
+    raw_zlib changes. Returns the list of files written; [] if already migrated."""
+    table = "tr_ownership_snapshots"
+    if "raw_zlib" not in ledger.table_columns(con, table):
+        return []
+    files = []
+    for r in con.execute(f"SELECT snapshot_id, taken_at, source, raw_sha256, raw_zlib FROM {table} "
+                         f"WHERE raw_zlib IS NOT NULL ORDER BY snapshot_id").fetchall():
+        raw = zlib.decompress(r["raw_zlib"])
+        if hashlib.sha256(raw).hexdigest() != r["raw_sha256"]:
+            raise RuntimeError(f"snapshot {r['snapshot_id']}: stored blob does not match its raw_sha256 -- nothing changed")
+        files.append((write_raw(raw_dir, r["taken_at"], r["source"], raw), r["snapshot_id"]))
+    before = con.execute(f"SELECT COUNT(*), COUNT(raw_sha256) FROM {table}").fetchone()
+    con.execute("BEGIN")
+    try:
+        con.execute(f"DROP TRIGGER IF EXISTS {table}_no_update")
+        con.execute(f"DROP TRIGGER IF EXISTS {table}_no_delete")
+        con.executemany(f"UPDATE {table} SET raw_file=? WHERE snapshot_id=?", files)
+        con.execute(f"ALTER TABLE {table} DROP COLUMN raw_zlib")
+        ledger.create_append_only_triggers(con, table)
+        after = con.execute(f"SELECT COUNT(*), COUNT(raw_sha256) FROM {table}").fetchone()
+        if tuple(after) != tuple(before):
+            raise RuntimeError(f"row counts changed during the migration ({tuple(before)} -> {tuple(after)})")
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    return [name for name, _sid in files]
 
 
 def latest_ok_espn(con, as_of, max_age_hours):

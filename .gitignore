@@ -4,6 +4,8 @@ yahoo_token.json
 
 # Regeneratable / binary artifacts -- not version-controlled
 *.db
+*.db-shm
+*.db-wal
 nflverse_raw/
 *.joblib
 manifest_nflverse.json
@@ -13,3 +15,6 @@ league_data/
 
 # Python bytecode cache
 __pycache__/
+
+# Tracker: raw roster-% responses (gzip, ~3.6 MB per ESPN snapshot; archive, don't commit)
+raw/

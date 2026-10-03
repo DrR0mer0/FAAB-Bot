@@ -5,6 +5,7 @@
   python tracker/tracker.py score --season 2026 --week 5
   python tracker/tracker.py report --season 2026 [--week 5]
   python tracker/tracker.py snapshot-ownership          # daily roster-% collection
+  python tracker/tracker.py migrate-ownership-raw       # one-time: raw responses out of the DB into raw/ownership/
   python tracker/tracker.py fetch-snaps --seasons 2024-2026
   python tracker/tracker.py backtest --seasons 2022-2025   # phase 2 (not built yet)
 
@@ -43,6 +44,7 @@ DEFAULT_PRED_DIR = REPO_ROOT / "predictions"
 DEFAULT_RAW_DIR = REPO_ROOT / "nflverse_raw"
 DEFAULT_EXPORT_DIR = TRACKER_DIR / "ledger_export"
 DEFAULT_REPORT_DIR = TRACKER_DIR / "reports"
+DEFAULT_OWNERSHIP_RAW_DIR = ownership.DEFAULT_RAW_DIR
 BASELINE_VERSIONS = {"dart": "dart-v1", "heuristic": "heuristic-v1", "last_week": "last_week-v1"}
 METRICS = ("top24_hits", "spike_hits", "total_points")
 
@@ -224,12 +226,12 @@ def rebuild_dart_sets(con, run_id):
 
 # ---------------------------------------------------------------------- log
 
-def resolve_ownership(con, cfg, season, as_of, allow_live):
+def resolve_ownership(con, cfg, season, as_of, allow_live, raw_dir):
     """-> (status, snapshot_id, {gsis: percent_owned}). Never raises."""
     max_age = cfg["run"]["ownership_max_age_hours"]
     found = ownership.latest_ok_espn(con, as_of, max_age)
     if found is None and allow_live:
-        ownership.take_snapshot(con, season)
+        ownership.take_snapshot(con, season, raw_dir)
         found = ownership.latest_ok_espn(con, utcnow(), max_age)
     if found is None:
         ownership._banner("no usable ESPN roster-% snapshot -- logging WITHOUT ownership; the sleeper (under-50%) "
@@ -285,7 +287,7 @@ def cmd_log(args, con):
     if args.skip_ownership:
         status, snap_id, own = "skipped", None, {}
     else:
-        status, snap_id, own = resolve_ownership(con, cfg, season, as_of, allow_live)
+        status, snap_id, own = resolve_ownership(con, cfg, season, as_of, allow_live, args.ownership_raw_dir)
     thr = cfg["run"]["sleeper_owned_pct_max"]
     ids = [r["player_id"] for r in pool_src]
     lw = baselines.last_week_and_target_share(store, ids, season, week)
@@ -541,10 +543,23 @@ def cmd_report(args, con):
 
 @with_db
 def cmd_snapshot(args, con):
-    s = ownership.take_snapshot(con, args.season or default_season())
+    s = ownership.take_snapshot(con, args.season or default_season(), args.ownership_raw_dir)
     print(f"[OWNERSHIP] ESPN {'ok' if s['espn_ok'] else 'FAILED'}: {s['espn_rows']} players, {s['espn_matched']} matched to gsis_id "
           f"(snapshot {s['espn_snapshot_id']}); Sleeper trending {'ok' if s['sleeper_ok'] else 'FAILED'}")
     return 0 if s["espn_ok"] else 1
+
+
+@with_db
+def cmd_migrate_ownership_raw(args, con):
+    files = ownership.migrate_raw_to_files(con, args.ownership_raw_dir)
+    if not files:
+        print("[MIGRATE] nothing to do: tr_ownership_snapshots has no raw_zlib column")
+        return 0
+    con.execute("VACUUM")  # hand the freed blob pages back to the filesystem
+    print(f"[MIGRATE] moved {len(files)} raw response(s) to {args.ownership_raw_dir} and dropped raw_zlib:")
+    for name in files:
+        print(f"  {name}")
+    return 0
 
 
 @with_db
@@ -569,6 +584,8 @@ def build_parser():
         p.add_argument("--config", default=None, help="hit config JSON (default tracker/hit_config.json)")
         p.add_argument("--raw-dir", default=str(DEFAULT_RAW_DIR))
         p.add_argument("--export-dir", default=str(DEFAULT_EXPORT_DIR))
+        p.add_argument("--ownership-raw-dir", default=str(DEFAULT_OWNERSHIP_RAW_DIR),
+                       help="where raw roster-%% responses are written, gzip-compressed (outside the DB)")
 
     p = sub.add_parser("log", help="run O.D.D.S. + baselines and write to the ledger (before kickoff)")
     common(p)
@@ -602,6 +619,11 @@ def build_parser():
     common(p)
     p.add_argument("--season", type=int, default=None)
     p.set_defaults(fn=cmd_snapshot)
+
+    p = sub.add_parser("migrate-ownership-raw",
+                       help="one-time: move raw responses stored in the DB (raw_zlib) out to --ownership-raw-dir")
+    common(p)
+    p.set_defaults(fn=cmd_migrate_ownership_raw)
 
     p = sub.add_parser("fetch-snaps", help="download nflverse snap counts and load them")
     common(p)
