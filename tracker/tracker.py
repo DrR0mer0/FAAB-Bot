@@ -199,7 +199,35 @@ def choose_prediction_path(pred_dir, season, week, slot):
                   f"{', ' + later.name if later.exists() else ''}); refusing to overwrite a frozen snapshot")
 
 
-def check_data_fresh(con, store, season, week):
+def played_games_not_loaded(con, season, week, as_of):
+    """Every game of `season` in a week BEFORE `week` that has kicked off (as of
+    as_of) must be in the DB the model scores from: player_week_stats rows for
+    both teams, and a labels_player_week row for each of those stat rows
+    (opponent_position_matchup reads fantasy points from the labels). Returns
+    one description per game/week that falls short; [] when the DB is complete.
+    nfl_games carries each franchise's historical team code, so both sides go
+    through norm_team()."""
+    loaded = {(wk, norm_team(team)) for wk, team in con.execute(
+        "SELECT DISTINCT week, team FROM player_week_stats WHERE season=? AND week<?", (season, week))}
+    problems = []
+    for wk, home, away, ko in con.execute(
+            "SELECT week, home_team, away_team, kickoff_utc FROM nfl_games WHERE season=? AND week<? AND is_playoffs=0 "
+            "ORDER BY week, kickoff_utc, game_id", (season, week)):
+        kickoff = parse_kickoff_utc(ko)
+        if kickoff is not None and kickoff > as_of:
+            continue  # a postponed game that hasn't been played yet
+        absent = [t for t in (norm_team(away), norm_team(home)) if (wk, t) not in loaded]
+        if absent:
+            problems.append(f"week {wk} {away}@{home}: no player stats for {'/'.join(absent)}")
+    for wk, n in con.execute(
+            "SELECT s.week, COUNT(*) FROM player_week_stats s LEFT JOIN labels_player_week l "
+            "ON l.season=s.season AND l.week=s.week AND l.player_id=s.player_id "
+            "WHERE s.season=? AND s.week<? AND l.player_id IS NULL GROUP BY s.week ORDER BY s.week", (season, week)):
+        problems.append(f"week {wk}: {n} loaded player-week(s) have no labels_player_week row")
+    return problems
+
+
+def check_data_fresh(con, store, season, week, as_of):
     if week <= 1:
         return
     g = con.execute("SELECT COUNT(*), SUM(CASE WHEN home_score IS NOT NULL AND away_score IS NOT NULL THEN 1 ELSE 0 END) "
@@ -210,6 +238,13 @@ def check_data_fresh(con, store, season, week):
     if store.max_week(season) < week - 1:
         raise Refused(f"stats CSV only runs through week {store.max_week(season)}; need week {week - 1} "
                       f"(run data/fetch_weekly_update.py --season {season})")
+    problems = played_games_not_loaded(con, season, week, as_of)
+    if problems:
+        shown = "; ".join(problems[:6]) + (f"; ... and {len(problems) - 6} more" if len(problems) > 6 else "")
+        raise Refused(f"the DB is missing data for {len(problems)} already-played game(s)/week(s) before week {week}, so "
+                      f"O.D.D.S. would score on incomplete history: {shown}. Run data/fetch_weekly_update.py --season "
+                      f"{season}, data/load_nflverse_into_history_SAFE_v3.py --seasons {season} and "
+                      f"model/generate_labels_and_breakouts.py first")
 
 
 # -------------------------------------------------------------------- picks
@@ -323,7 +358,7 @@ def cmd_log(args, con):
     if logged:
         raise Refused(f"a {slot} run for {season} week {week} is already in the ledger (append-only: no re-logging)")
     store = scoring.StatsStore(args.raw_dir, cfg["scoring"])
-    check_data_fresh(con, store, season, week)
+    check_data_fresh(con, store, season, week, as_of)
     pred_path = choose_prediction_path(args.predictions_dir, season, week, slot)
     # the same roster file score_week.py's kickoff guard resolves teams from (its default path, made explicit)
     weekly_roster = Path(args.raw_dir) / f"roster_weekly_{season}.csv"

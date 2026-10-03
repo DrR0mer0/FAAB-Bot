@@ -525,6 +525,132 @@ class TestLogRefusesAfterKickoff(unittest.TestCase):
         self.assert_nothing_written()
 
 
+# ------------------------------------- prior weeks must be loaded in the DB
+
+class TestPriorWeeksLoaded(unittest.TestCase):
+    """`log` for week W refuses unless every already-played game of weeks < W
+    is in the DB the model scores from (player_week_stats + labels)."""
+
+    AS_OF = "2026-10-03T15:00:00+00:00"   # Saturday of week 4
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.db = self.dir / "t.db"
+        (self.dir / "raw").mkdir()
+        con = ledger.connect(self.db)
+        con.execute("CREATE TABLE nfl_games (season INTEGER, week INTEGER, game_id TEXT, kickoff_utc TEXT, home_team TEXT, "
+                    "away_team TEXT, home_score INTEGER, away_score INTEGER, is_playoffs INTEGER DEFAULT 0)")
+        con.execute("CREATE TABLE player_week_stats (season INTEGER, week INTEGER, player_id TEXT, team TEXT)")
+        con.execute("CREATE TABLE labels_player_week (season INTEGER, week INTEGER, player_id TEXT)")
+        games = [(2, "w2a", "2026-09-20T13:00:00", "BAL", "TEN", 24, 10), (2, "w2b", "2026-09-21T20:15:00", "LV", "KC", 17, 27),
+                 (3, "w3a", "2026-09-27T13:00:00", "TEN", "KC", 13, 30), (3, "w3b", "2026-09-28T20:15:00", "BAL", "LV", 20, 17),
+                 (4, "w4a", "2026-10-01T20:15:00", "KC", "BAL", None, None), (4, "w4b", "2026-10-04T13:00:00", "LV", "TEN", None, None)]
+        con.executemany("INSERT INTO nfl_games (season, week, game_id, kickoff_utc, home_team, away_team, home_score, away_score) "
+                        "VALUES (2026, ?, ?, ?, ?, ?, ?, ?)", games)
+        for wk in (2, 3):
+            for team in ("BAL", "TEN", "KC", "LV"):
+                self.add_player(con, wk, team)
+        con.commit()
+        con.close()
+        with open(self.dir / "raw" / "stats_player_week_2026.csv", "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=["player_id", "season", "week", "season_type", "position", "team"])
+            w.writeheader()
+            w.writerow(dict(player_id="x", season=2026, week=3, season_type="REG", position="WR", team="KC"))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    @staticmethod
+    def add_player(con, week, team, label=True):
+        pid = f"{team}-w{week}"
+        con.execute("INSERT INTO player_week_stats VALUES (2026, ?, ?, ?)", (week, pid, team))
+        if label:
+            con.execute("INSERT INTO labels_player_week VALUES (2026, ?, ?)", (week, pid))
+
+    def sql(self, *statements):
+        con = sqlite3.connect(self.db)
+        for s in statements:
+            con.execute(s)
+        con.commit()
+        con.close()
+
+    def problems(self, week=4, as_of=None):
+        con = ledger.connect(self.db)
+        try:
+            return tracker.played_games_not_loaded(con, 2026, week, utc((as_of or self.AS_OF)[:19]))
+        finally:
+            con.close()
+
+    def run_log(self):
+        """-> (exit code, stderr, O.D.D.S. was started)."""
+        started = []
+
+        def fake_run(cmd, **_kw):
+            started.append(cmd)
+            return mock.Mock(returncode=1, stdout="", stderr="stub")  # never gets far enough to write anything
+        argv = ["log", "--season", "2026", "--week", "4", "--slot", "sun", "--as-of", self.AS_OF, "--db", str(self.db),
+                "--predictions-dir", str(self.dir / "preds"), "--export-dir", str(self.dir / "export"),
+                "--raw-dir", str(self.dir / "raw"), "--skip-ownership"]
+        err = io.StringIO()
+        with mock.patch.object(tracker.subprocess, "run", side_effect=fake_run), contextlib.redirect_stderr(err), \
+                contextlib.redirect_stdout(io.StringIO()):
+            try:
+                rc = tracker.main(argv)
+            except RuntimeError:  # the stubbed score_week "failing" = the freshness checks all passed
+                rc = "reached O.D.D.S."
+        return rc, err.getvalue(), bool(started)
+
+    def assert_refused_with_nothing_written(self, expect):
+        rc, err, started = self.run_log()
+        self.assertEqual(rc, 2)
+        self.assertFalse(started)                      # refused BEFORE O.D.D.S. ran
+        self.assertIn("[REFUSED] the DB is missing data", err)
+        self.assertIn(expect, err)
+        con = sqlite3.connect(self.db)
+        try:
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM tr_runs").fetchone()[0], 0)
+        finally:
+            con.close()
+        self.assertFalse((self.dir / "preds").exists())
+
+    def test_complete_db_passes_the_check(self):
+        self.assertEqual(self.problems(), [])
+        self.assertEqual(self.run_log()[0], "reached O.D.D.S.")
+
+    def test_week_being_logged_is_not_required_even_though_its_thursday_game_was_played(self):
+        self.assertEqual(self.problems(), [])          # w4a kicked off Thursday; no week-4 rows in the DB
+        self.assertEqual(self.problems(week=5, as_of="2026-10-05T15:00:00+00:00"),
+                         ["week 4 BAL@KC: no player stats for BAL/KC", "week 4 TEN@LV: no player stats for TEN/LV"])
+
+    def test_prior_week_game_with_no_stats_is_refused(self):
+        """The Monday-night game: its score is in nfl_games and the stats CSV
+        reaches week 3, so the older guards pass -- but its players never got loaded."""
+        self.sql("DELETE FROM player_week_stats WHERE week = 3 AND team IN ('BAL', 'LV')")
+        self.assertEqual(self.problems(), ["week 3 LV@BAL: no player stats for LV/BAL"])
+        self.assert_refused_with_nothing_written("week 3 LV@BAL: no player stats for LV/BAL")
+
+    def test_hole_in_an_earlier_week_and_a_half_loaded_game_are_both_caught(self):
+        self.sql("DELETE FROM player_week_stats WHERE week = 2 AND team = 'KC'")
+        self.assertEqual(self.problems(), ["week 2 KC@LV: no player stats for KC"])
+        self.assert_refused_with_nothing_written("week 2 KC@LV: no player stats for KC")
+
+    def test_stats_loaded_without_labels_is_refused(self):
+        self.sql("DELETE FROM labels_player_week WHERE week = 3")
+        self.assertEqual(self.problems(), ["week 3: 4 loaded player-week(s) have no labels_player_week row"])
+        self.assert_refused_with_nothing_written("have no labels_player_week row")
+
+    def test_postponed_game_that_has_not_kicked_off_is_not_required(self):
+        self.sql("DELETE FROM player_week_stats WHERE week = 3 AND team IN ('BAL', 'LV')",
+                 "UPDATE nfl_games SET kickoff_utc = '2026-10-06T20:15:00', home_score = NULL, away_score = NULL WHERE game_id = 'w3b'")
+        self.assertEqual(self.problems(), [])
+
+    def test_historical_team_codes_are_normalized_on_both_sides(self):
+        self.sql("UPDATE nfl_games SET home_team = 'OAK' WHERE home_team = 'LV'", "UPDATE nfl_games SET away_team = 'OAK' WHERE away_team = 'LV'")
+        self.assertEqual(tracker.norm_team("OAK"), "LV")
+        self.assertEqual(self.problems(), [])
+
+
 # ------------------------------------------- international week: slot pool
 
 class TestSlotPool(unittest.TestCase):
@@ -577,6 +703,11 @@ class TestLogInternationalWeek(unittest.TestCase):
         con.execute("CREATE TABLE nfl_games (season INTEGER, week INTEGER, game_id TEXT, kickoff_utc TEXT, home_team TEXT, "
                     "away_team TEXT, home_score INTEGER, away_score INTEGER, is_playoffs INTEGER DEFAULT 0)")
         con.execute("INSERT INTO nfl_games VALUES (2026, 3, 'w3', '2026-09-27T13:00:00', 'PIT', 'CLE', 20, 17, 0)")
+        con.execute("CREATE TABLE player_week_stats (season INTEGER, week INTEGER, player_id TEXT, team TEXT)")
+        con.execute("CREATE TABLE labels_player_week (season INTEGER, week INTEGER, player_id TEXT)")
+        for pid, team in (("pit1", "PIT"), ("cle1", "CLE")):
+            con.execute("INSERT INTO player_week_stats VALUES (2026, 3, ?, ?)", (pid, team))
+            con.execute("INSERT INTO labels_player_week VALUES (2026, 3, ?)", (pid,))
         con.executemany("INSERT INTO nfl_games (season, week, game_id, kickoff_utc, home_team, away_team) VALUES (2026, 4, ?, ?, ?, ?)",
                         [("thu", "2026-10-01T20:15:00", "CLE", "PIT"), ("london", "2026-10-04T09:30:00", "WAS", "IND"),
                          ("early", "2026-10-04T13:00:00", "BAL", "TEN"), ("late", "2026-10-04T16:25:00", "LV", "KC")])
@@ -954,6 +1085,14 @@ class TestScheduledRun(unittest.TestCase):
         self.assertIn("log-sun FAILED", title)
         self.assertIn("the sun slot closed", text)
         self.assertIn("Nothing was written to the ledger", text)
+
+    def test_db_missing_prior_games_refusal_gets_the_failed_line_and_the_message_box(self):
+        refusal = "[REFUSED] the DB is missing data for 1 already-played game(s)/week(s) before week 5, so O.D.D.S. would ...\n"
+        rc = self.run_job("log-thu", self.THURSDAY, [(0, ""), (2, refusal)])
+        self.assertEqual(rc, 2)
+        self.assertIn("FAILED", self.summary()[-1])
+        self.assertIn("the DB is missing data", self.summary()[-1])
+        self.assertIn("the DB is missing data", self.alerts[0][1])
 
     def test_log_job_woken_on_the_wrong_day_runs_nothing(self):
         """Missed on Sunday, PC back on Tuesday: --auto would now resolve to NEXT
