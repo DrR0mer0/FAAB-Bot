@@ -9,6 +9,14 @@ can span two seasons), EXCEPT across a gap between loaded seasons -- if the
 season immediately before the current one wasn't loaded (e.g. 2019 is
 missing from a 2010-2018 + 2020-2024 run), history resets at that boundary,
 same as if the player were a rookie again.
+
+--through-week N caps the latest season in --seasons at week N: stat rows from
+a later week get no label and are not counted as anyone's prior games. Because
+every label for the listed seasons is deleted and rebuilt, this also removes
+labels previously written for those later weeks. It is the labels half of the
+routine in-season load (see data/load_nflverse_into_history_SAFE_v3.py's
+--through-week): N = the last COMPLETED week, so nothing is ever labelled for
+the week still in progress.
 """
 import argparse
 import json
@@ -87,6 +95,9 @@ def main():
     ap.add_argument("--db", default=str(REPO_ROOT / "faab_history_core_v0_1.db"))
     ap.add_argument("--seasons", nargs="+", type=int, default=[2022])
     ap.add_argument("--profile", default=HALF12_PROFILE_ID)
+    ap.add_argument("--through-week", type=int, default=None,
+                    help="label the LATEST season in --seasons only through this week (the last completed one); "
+                         "default: every loaded week")
     args = ap.parse_args()
     seasons = sorted(args.seasons)
 
@@ -124,6 +135,11 @@ def main():
         seasons,
     ).fetchall()
     rows = [r for r in all_rows if (r["season"], r["week"], r["team"]) not in playoff_team_weeks]
+    if args.through_week is not None:
+        n_before = len(rows)
+        rows = [r for r in rows if not (r["season"] == seasons[-1] and r["week"] > args.through_week)]
+        print(f"[INFO] --through-week {args.through_week}: left out {n_before - len(rows)} season-{seasons[-1]} "
+              f"stat row(s) from later weeks")
 
     # Clean slate for these seasons: previous runs may have written playoff-week
     # labels, or labels under a different cross-season history, that no longer belong.

@@ -607,12 +607,25 @@ class TestPriorWeeksLoaded(unittest.TestCase):
         self.assertFalse(started)                      # refused BEFORE O.D.D.S. ran
         self.assertIn("[REFUSED] the DB is missing data", err)
         self.assertIn(expect, err)
+        self.assert_points_at_the_capped_load(err)
         con = sqlite3.connect(self.db)
         try:
             self.assertEqual(con.execute("SELECT COUNT(*) FROM tr_runs").fetchone()[0], 0)
         finally:
             con.close()
         self.assertFalse((self.dir / "preds").exists())
+
+    def assert_points_at_the_capped_load(self, err):
+        """The fix a refusal recommends must not itself pull week 4 into the DB."""
+        self.assertIn("load_nflverse_into_history_SAFE_v3.py --seasons 2026 --through-week 3", err)
+        self.assertIn("generate_labels_and_breakouts.py --seasons <all loaded seasons incl. 2026> --through-week 3", err)
+
+    def test_prior_week_not_final_in_nfl_games_points_at_the_capped_load(self):
+        self.sql("UPDATE nfl_games SET home_score = NULL WHERE game_id = 'w3b'")
+        rc, err, started = self.run_log()
+        self.assertEqual((rc, started), (2, False))
+        self.assertIn("week 3 isn't fully final in nfl_games", err)
+        self.assert_points_at_the_capped_load(err)
 
     def test_complete_db_passes_the_check(self):
         self.assertEqual(self.problems(), [])
@@ -666,6 +679,7 @@ class TestPriorWeeksLoaded(unittest.TestCase):
         self.assertFalse(started)                      # refused BEFORE O.D.D.S. ran
         self.assertIn("[REFUSED] the DB already holds rows for the week being logged (2026 week 4)", err)
         self.assertIn(expect, err)
+        self.assertIn("load with --through-week 3", err)
         con = sqlite3.connect(self.db)
         try:
             self.assertEqual(con.execute("SELECT COUNT(*) FROM tr_runs").fetchone()[0], 0)

@@ -260,6 +260,14 @@ def target_week_rows_in_db(con, season, week):
     return problems
 
 
+def load_commands(season, week):
+    """The routine load, capped at the last completed week so it can never pull
+    the in-progress week into the DB (which `log` would then refuse on)."""
+    return (f"data/fetch_weekly_update.py --season {season}, then data/load_nflverse_into_history_SAFE_v3.py --seasons {season} "
+            f"--through-week {week - 1}, then model/generate_labels_and_breakouts.py --seasons <all loaded seasons incl. "
+            f"{season}> --through-week {week - 1}")
+
+
 def check_data_fresh(con, store, season, week, as_of):
     loaded = target_week_rows_in_db(con, season, week)
     if loaded:
@@ -267,14 +275,14 @@ def check_data_fresh(con, store, season, week, as_of):
         raise Refused(f"the DB already holds rows for the week being logged ({season} week {week}): {shown}. With week-{week} "
                       f"stats loaded, O.D.D.S. computes starter_absent_proxy from a partial week, so this run's scores would "
                       f"depend on when the DB was loaded. Delete the week-{week} rows from player_week_stats and "
-                      f"labels_player_week (season {season}), then log again")
+                      f"labels_player_week (season {season}), then log again -- and load with --through-week "
+                      f"{week - 1} so the in-progress week stays out")
     if week <= 1:
         return
     g = con.execute("SELECT COUNT(*), SUM(CASE WHEN home_score IS NOT NULL AND away_score IS NOT NULL THEN 1 ELSE 0 END) "
                     "FROM nfl_games WHERE season=? AND week=? AND is_playoffs=0", (season, week - 1)).fetchone()
     if not g[0] or g[0] != g[1]:
-        raise Refused(f"week {week - 1} isn't fully final in nfl_games -- run data/fetch_weekly_update.py --season {season} "
-                      f"and data/load_nflverse_into_history_SAFE_v3.py --seasons {season} first")
+        raise Refused(f"week {week - 1} isn't fully final in nfl_games -- run {load_commands(season, week)} first")
     if store.max_week(season) < week - 1:
         raise Refused(f"stats CSV only runs through week {store.max_week(season)}; need week {week - 1} "
                       f"(run data/fetch_weekly_update.py --season {season})")
@@ -282,9 +290,7 @@ def check_data_fresh(con, store, season, week, as_of):
     if problems:
         shown = "; ".join(problems[:6]) + (f"; ... and {len(problems) - 6} more" if len(problems) > 6 else "")
         raise Refused(f"the DB is missing data for {len(problems)} already-played game(s)/week(s) before week {week}, so "
-                      f"O.D.D.S. would score on incomplete history: {shown}. Run data/fetch_weekly_update.py --season "
-                      f"{season}, data/load_nflverse_into_history_SAFE_v3.py --seasons {season} and "
-                      f"model/generate_labels_and_breakouts.py first")
+                      f"O.D.D.S. would score on incomplete history: {shown}. Run {load_commands(season, week)} first")
 
 
 # -------------------------------------------------------------------- picks

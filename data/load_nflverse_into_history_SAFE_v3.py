@@ -6,6 +6,15 @@ team_week_stats' betting lines (spread/total/implied_total) from games.csv
 (one file covering every season). Injuries, depth charts, projections, and
 non-betting team_week_stats columns (pace, DVOA, weather) are not touched
 here.
+
+--through-week N caps player_week_stats for the latest season in --seasons at
+week N: stat rows from a later week are not loaded. Use it for the routine
+in-season load (N = the last COMPLETED week) so the in-progress week's
+already-played games never reach the DB -- model/score_week.py's
+starter_absent_proxy reads any current-week stat row as "this week has been
+played", and tracker.py log refuses on a DB in that state. The cap only skips
+rows; it never deletes ones already loaded. nfl_games and betting lines are
+always loaded for the whole season (the schedule is needed for future weeks).
 """
 import argparse
 import csv
@@ -51,16 +60,20 @@ PLAYER_STAT_COLUMNS = [
 ]
 
 
-def load_player_week_stats(con, folder: Path, season: int):
+def load_player_week_stats(con, folder: Path, season: int, through_week=None):
     path = folder / f"stats_player_week_{season}.csv"
     if not path.exists():
         print(f"[WARN] {path} not found; skipping player_week_stats for {season}")
         return 0
 
     rows = []
+    n_beyond_cap = 0
     with path.open(encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for r in reader:
+            if through_week is not None and (to_int(r["week"]) or 0) > through_week:
+                n_beyond_cap += 1
+                continue
             # sacks_suffered/fumbles lost across sack, rush and receiving plays
             # is the closest single "fumbles" figure this file supports.
             fumbles_lost = (
@@ -92,6 +105,8 @@ def load_player_week_stats(con, folder: Path, season: int):
         f"INSERT OR REPLACE INTO player_week_stats ({cols}) VALUES ({placeholders})",
         rows,
     )
+    if through_week is not None:
+        print(f"[INFO] season {season}: --through-week {through_week} -- skipped {n_beyond_cap} stat row(s) from later weeks")
     return len(rows)
 
 
@@ -185,13 +200,17 @@ def main():
     ap.add_argument("--db", default=str(REPO_ROOT / "faab_history_core_v0_1.db"))
     ap.add_argument("--folder", default=str(REPO_ROOT / "nflverse_raw"))
     ap.add_argument("--seasons", nargs="+", type=int, default=[2022])
+    ap.add_argument("--through-week", type=int, default=None,
+                    help="load player_week_stats for the LATEST season in --seasons only through this week (the last "
+                         "completed one); later weeks in the CSV are skipped. Default: load every week in the file")
     args = ap.parse_args()
 
     folder = Path(args.folder)
     con = sqlite3.connect(args.db)
     try:
         for season in args.seasons:
-            n_stats = load_player_week_stats(con, folder, season)
+            cap = args.through_week if season == max(args.seasons) else None
+            n_stats = load_player_week_stats(con, folder, season, through_week=cap)
             n_games = load_nfl_games(con, folder, season)
             n_team_week = load_team_week_stats(con, folder, season)
             con.commit()
