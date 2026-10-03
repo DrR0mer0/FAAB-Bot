@@ -82,21 +82,24 @@ From the repo root (PowerShell), after the usual `data/fetch_weekly_update.py` +
 python tracker/tracker.py snapshot-ownership                      # daily: ESPN roster-%, Sleeper trending adds
 python tracker/tracker.py fetch-snaps                             # nflverse snap counts (the heuristic needs them)
 python tracker/tracker.py log --season 2026 --week 5 --slot thu   # Thursday morning, before kickoff
-python tracker/tracker.py log --season 2026 --week 5 --slot sun   # Sunday morning, before the first Sunday kickoff
+python tracker/tracker.py log --season 2026 --week 5 --slot sun   # Sunday morning, before the first 1 PM ET kickoff
 python tracker/tracker.py score --season 2026 --week 5            # after Monday night
 python tracker/tracker.py report --season 2026 --week 5           # newsletter-ready scoreboard
 python tracker/tracker.py report --season 2026                    # season to date, with bootstrap 95% CIs
+python tracker/scheduled_run.py install                           # Windows Task Scheduler: daily snapshot + Thu/Sun morning logs
 python -m unittest discover -s tracker -v                         # tests
 ```
 
-`log` runs `model/score_week.py` as-is and **refuses** once its slot's first kickoff has passed (a week with no Thursday game has no `thu` slot). Each `log` also exports its rows to `tracker/ledger_export/*.jsonl`, which *is* committed — the database isn't.
+`log` runs `model/score_week.py` as-is and **refuses** once its slot has closed. The `sun` slot closes at the first 1 PM ET Sunday kickoff; the `thu` slot at the first game before that. International/early-Sunday games (9:30am ET London kickoffs) are treated like Thursday games: they don't close the `sun` slot, and their players are left out of the `sun` pool the same way Thursday players are. A week with nothing before the 1 PM slate has no `thu` slot. Each `log` also exports its rows to `tracker/ledger_export/*.jsonl`, which *is* committed — the database isn't.
+
+The three recurring commands run from Windows Task Scheduler (`tracker/scheduled_run.py`): the ownership snapshot daily, `log --auto` on Thursday and Sunday mornings. Runs are logged to `tracker/logs/`; a week without the slot is skipped quietly, and a missed window (PC asleep) fails with a message box and writes nothing.
 
 **What counts as a hit** (`tracker/hit_config.json`; its hash is stored with every scored week, so any later edit is visible in the data). Everything is scored under my league's settings — 0.5 PPR, 5-pt passing TDs, 6-pt rushing/receiving TDs, −2 INT, −2 fumbles lost, +2 per 2-pt conversion:
 
 - **Top-24 finish** — the pick finishes top-24 at his position that week. "Does it help me win."
 - **Spike week** — he scores ≥1.5× his trailing 3-game average and ≥10 points. "Does O.D.D.S. beat chance at its own job."
 - **Dart percentile** — where a model's result falls among the 1,000 random draws; 50% is chance.
-- **Crowd hit** (secondary) — a pick that started under 50% owned and rose above 50% within 14 days. Ownership is ESPN's `percentOwned` (unofficial endpoint, so it's validated and a failure is logged loudly, never fatal), not Yahoo's; collection started 2026-10-03, so this is excluded from any backtest.
+- **Crowd hit** (secondary) — a pick that started under 50% owned and rose above 50% within 14 days. Ownership is ESPN's `percentOwned` (unofficial endpoint, so it's validated and a failure is logged loudly, never fatal), not Yahoo's; the database keeps the parsed rows and a SHA-256 of each raw response, and the raw responses themselves are gzip files under `raw/ownership/` (not committed); collection started 2026-10-03, so this is excluded from any backtest.
 - **Sleeper pool** — every scoreboard is also produced for just the players under 50% owned at pick time, with each model re-picking from that smaller pool. That's the actual sleeper test.
 
 The scoreboard says plainly when the sample is too small to call a winner. Two known issues are flagged in every report rather than hidden: the production model's `starter_absent_proxy` feature leaks (see `CLAUDE.md`), and its training labels used a 4-pt passing TD. Both are queued for a separate retrain. Backtesting (`backtest`) is phase 2 and not built yet.
