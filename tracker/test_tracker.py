@@ -26,6 +26,7 @@ import baselines
 import ledger
 import ownership
 import report
+import scheduled_run
 import scoring
 import tracker
 
@@ -461,13 +462,67 @@ class TestLogRefusesAfterKickoff(unittest.TestCase):
         self.assertEqual(self.run_log(5, "thu", "2026-10-07T12:00:00+00:00"), 2)
         self.assert_nothing_written()
 
-    def test_run_already_in_the_ledger_is_refused(self):
+    def insert_run(self, week, slot):
         con = sqlite3.connect(self.db)
-        con.execute("INSERT INTO tr_runs (run_id, run_timestamp, season, week, run_slot) VALUES ('x','t',2026,4,'sun')")
+        con.execute("INSERT INTO tr_runs (run_id, run_timestamp, season, week, run_slot) VALUES ('x','t',2026,?,?)", (week, slot))
         con.commit()
         con.close()
+
+    def test_run_already_in_the_ledger_is_refused(self):
+        self.insert_run(4, "sun")
         self.assertEqual(self.run_log(4, "sun", "2026-10-03T15:00:00+00:00"), 2)
         self.assertEqual(self.count("tr_runs"), 1)
+
+    # ---- `log --auto`, the scheduled-task form: "nothing to do" exits 0, a closed window still refuses
+
+    def run_auto(self, slot, as_of):
+        argv = ["log", "--auto", "--slot", slot, "--as-of", as_of, "--db", str(self.db),
+                "--predictions-dir", str(self.dir / "preds"), "--export-dir", str(self.dir / "export"),
+                "--raw-dir", str(self.dir / "raw")]
+        out = io.StringIO()
+        with mock.patch.object(tracker.subprocess, "run", side_effect=AssertionError("O.D.D.S. must not run")), \
+                contextlib.redirect_stdout(out):
+            return tracker.main(argv), out.getvalue()
+
+    def test_current_week_is_the_earliest_week_with_a_game_still_to_play(self):
+        con = ledger.connect(self.db)
+        try:
+            self.assertEqual(tracker.current_week(con, 2026, utc("2026-10-01T12:00:00")), 4)   # Thursday morning
+            self.assertEqual(tracker.current_week(con, 2026, utc("2026-10-04T14:00:00")), 4)   # Sunday, 1 PM game to come
+            self.assertEqual(tracker.current_week(con, 2026, utc("2026-10-04T17:00:00")), 5)   # week 4's last game kicked off
+            self.assertIsNone(tracker.current_week(con, 2026, utc("2026-10-11T17:00:00")))
+        finally:
+            con.close()
+
+    def test_auto_skips_quietly_when_the_week_has_no_such_slot(self):
+        rc, out = self.run_auto("thu", "2026-10-08T14:00:00+00:00")  # week 5 here: one Sunday 1 PM game only
+        self.assertEqual(rc, 0)
+        self.assertIn("[SKIP] 2026 week 5 has no thu slot", out)
+        self.assert_nothing_written()
+
+    def test_auto_skips_quietly_when_the_slot_is_already_logged(self):
+        self.insert_run(4, "sun")
+        rc, out = self.run_auto("sun", "2026-10-04T14:00:00+00:00")
+        self.assertEqual(rc, 0)
+        self.assertIn("already in the ledger", out)
+        self.assertEqual(self.count("tr_runs"), 1)
+
+    def test_auto_still_refuses_loudly_once_the_window_has_closed(self):
+        rc, _out = self.run_auto("thu", "2026-10-02T14:00:00+00:00")  # Friday: week 4's Thursday game has been played
+        self.assertEqual(rc, 2)
+        self.assert_nothing_written()
+
+    def test_auto_never_logs_a_slot_more_than_a_week_out(self):
+        rc, out = self.run_auto("sun", "2026-09-01T14:00:00+00:00")
+        self.assertEqual(rc, 0)
+        self.assertIn("too early to log", out)
+        self.assert_nothing_written()
+
+    def test_auto_with_no_games_left_is_a_quiet_skip(self):
+        rc, out = self.run_auto("sun", "2027-02-01T14:00:00+00:00")
+        self.assertEqual(rc, 0)
+        self.assertIn("[SKIP] no upcoming", out)
+        self.assert_nothing_written()
 
 
 # ------------------------------------------- international week: slot pool
@@ -843,6 +898,104 @@ class TestOwnershipRawMigration(unittest.TestCase):
         self.assertEqual(self.con.execute("SELECT COUNT(raw_zlib), COUNT(raw_file) FROM tr_ownership_snapshots").fetchone()[:], (2, 0))
         with self.assertRaises(sqlite3.DatabaseError):
             self.con.execute("DELETE FROM tr_ownership_snapshots")
+
+
+# ----------------------------------------------------------- scheduled runner
+
+class TestScheduledRun(unittest.TestCase):
+    THURSDAY = datetime(2026, 10, 8, 7, 0, 5)
+    SUNDAY = datetime(2026, 10, 11, 7, 0, 5)
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.logs = Path(self.tmp.name) / "logs"
+        self.alerts, self.calls = [], []
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_job(self, job, now, results, **kw):
+        """results: one (exit code, output) per step, in order."""
+        it = iter(results)
+
+        def fake(argv):
+            self.calls.append(argv)
+            return next(it)
+        return scheduled_run.run_job(job, now=now, log_dir=self.logs, run=fake, alert=lambda *a: self.alerts.append(a), **kw)
+
+    def summary(self):
+        return (self.logs / scheduled_run.SUMMARY_LOG).read_text(encoding="utf-8").splitlines()
+
+    def test_log_job_refreshes_then_logs_in_auto_mode_and_writes_both_logs(self):
+        rc = self.run_job("log-sun", self.SUNDAY, [(0, "[DONE] refreshed\n"), (0, "noise\n[LOGGED] 2026w05-sun: pool 300\n  all_k10:\n")])
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.alerts, [])
+        self.assertIn("fetch_weekly_update.py", self.calls[0][1])
+        self.assertEqual(self.calls[0][-2:], ["--season", "2026"])
+        self.assertEqual(self.calls[1][-4:], ["log", "--auto", "--slot", "sun"])
+        line = self.summary()[-1]
+        self.assertIn("log-sun", line)
+        self.assertIn("OK", line)
+        self.assertIn("[LOGGED] 2026w05-sun", line)
+        detail = (self.logs / "20261011_070005_log-sun.log").read_text(encoding="utf-8")
+        self.assertIn("[DONE] refreshed", detail)
+        self.assertIn("[exit 0]", detail)
+
+    def test_quiet_skip_is_not_a_failure(self):
+        rc = self.run_job("log-thu", self.THURSDAY, [(0, ""), (0, "[SKIP] 2026 week 18 has no thu slot: ...\n")])
+        self.assertEqual((rc, self.alerts), (0, []))
+        self.assertIn("[SKIP]", self.summary()[-1])
+
+    def test_closed_window_refusal_is_loud_and_says_nothing_was_written(self):
+        rc = self.run_job("log-sun", self.SUNDAY, [(0, ""), (2, "[REFUSED] REFUSED: the sun slot closed at 2026-10-11T17:00:00+00:00\n")])
+        self.assertEqual(rc, 2)
+        self.assertIn("FAILED", self.summary()[-1])
+        (title, text), = self.alerts
+        self.assertIn("log-sun FAILED", title)
+        self.assertIn("the sun slot closed", text)
+        self.assertIn("Nothing was written to the ledger", text)
+
+    def test_log_job_woken_on_the_wrong_day_runs_nothing(self):
+        """Missed on Sunday, PC back on Tuesday: --auto would now resolve to NEXT
+        week and log its sun slot five days early. The job must not run at all."""
+        rc = self.run_job("log-sun", datetime(2026, 10, 13, 9, 0, 0), [])
+        self.assertEqual(rc, 3)
+        self.assertEqual(self.calls, [])
+        self.assertIn("MISSED", self.summary()[-1])
+        self.assertIn("running on a Tuesday", self.alerts[0][1])
+
+    def test_snapshot_runs_any_day_and_its_failure_is_loud(self):
+        self.assertEqual(self.run_job("snapshot", datetime(2026, 10, 13, 9, 0, 0), [(0, "[OWNERSHIP] ESPN ok: 960 players\n")]), 0)
+        self.assertEqual(self.calls[0][-1], "snapshot-ownership")
+        self.assertEqual(self.run_job("snapshot", datetime(2026, 10, 14, 9, 0, 0), [(1, "[OWNERSHIP] ESPN FAILED: 0 players\n")]), 1)
+        self.assertEqual(len(self.alerts), 1)
+        self.assertEqual(len(self.summary()), 2)
+
+    def test_failed_refresh_is_noted_but_the_log_step_still_decides(self):
+        rc = self.run_job("log-thu", self.THURSDAY, [(1, "[WARN] 1 file(s) failed to refresh\n"), (0, "[LOGGED] 2026w05-thu\n")])
+        self.assertEqual((rc, self.alerts), (0, []))
+        self.assertIn("refresh nflverse files FAILED (exit 1)", self.summary()[-1])
+
+    def test_step_that_cannot_start_is_reported_not_raised(self):
+        code, out = scheduled_run.run_step([str(Path(self.tmp.name) / "no_such_python.exe")])
+        self.assertEqual(code, 127)
+        self.assertIn("could not start", out)
+
+    def test_task_definitions_run_missed_starts_and_never_wake_the_pc(self):
+        now = datetime(2026, 10, 3, 10, 0, 0)  # a Saturday
+        starts = {}
+        for job in scheduled_run.JOBS:
+            xml = scheduled_run.task_xml(job, "PC\\me", now)
+            self.assertIn("<StartWhenAvailable>true</StartWhenAvailable>", xml)
+            self.assertIn("<WakeToRun>false</WakeToRun>", xml)
+            self.assertIn("<LogonType>InteractiveToken</LogonType>", xml)
+            self.assertIn(f'scheduled_run.py" run {job}', xml)
+            starts[job] = xml.split("<StartBoundary>")[1].split("<")[0]
+        self.assertEqual(starts, {"snapshot": "2026-10-04T06:30:00", "log-thu": "2026-10-08T07:00:00",
+                                  "log-sun": "2026-10-04T07:00:00"})
+        self.assertIn("<Thursday />", scheduled_run.task_xml("log-thu", "u", now))
+        self.assertIn("<Sunday />", scheduled_run.task_xml("log-sun", "u", now))
+        self.assertIn("<ScheduleByDay>", scheduled_run.task_xml("snapshot", "u", now))
 
 
 # -------------------------------------------------------------- crowd + score

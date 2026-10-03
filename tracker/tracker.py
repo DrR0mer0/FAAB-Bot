@@ -2,6 +2,7 @@
 """Baseline tracker CLI -- is O.D.D.S. actually better than chance?
 
   python tracker/tracker.py log --season 2026 --week 5 --slot thu
+  python tracker/tracker.py log --auto --slot sun       # scheduled form (tracker/scheduled_run.py)
   python tracker/tracker.py score --season 2026 --week 5
   python tracker/tracker.py report --season 2026 [--week 5]
   python tracker/tracker.py snapshot-ownership          # daily roster-% collection
@@ -14,8 +15,9 @@ frozen JSON into the append-only ledger, then draws the dart / heuristic /
 last_week baselines from that SAME pool. It REFUSES to log a run once the
 slot's kickoff cutoff has passed (see check_slot_window), and a slot's pool
 only ever holds players whose game kicks off at or after that cutoff (see
-split_pool_at_cutoff). See README.md ("Baseline tracker") for the hit
-definition and the full workflow.
+split_pool_at_cutoff). `log --auto` is the scheduled-task form: it works out
+the current week itself and quietly skips a week that has no such slot. See
+README.md ("Baseline tracker") for the hit definition and the full workflow.
 """
 import argparse
 import json
@@ -51,6 +53,7 @@ BASELINE_VERSIONS = {"dart": "dart-v1", "heuristic": "heuristic-v1", "last_week"
 METRICS = ("top24_hits", "spike_hits", "total_points")
 MAIN_SLATE_ET = (13, 0)  # the Sunday main slate opens with the 1:00 PM Eastern window
 SLOT_RULE = "main-slate-v2"  # recorded with every run; v1 closed `sun` at the earliest Sunday kickoff
+AUTO_MAX_DAYS_AHEAD = 7  # `log --auto` never logs a slot whose cutoff is further out than this
 
 
 class Refused(Exception):
@@ -154,6 +157,19 @@ def split_pool_at_cutoff(pool_src, team_kickoffs, roster_team_of, cutoff):
         info = team_kickoffs.get(roster_team_of.get(r["player_id"]) or r["team"])
         (excluded if info is not None and info[0] < cutoff else kept).append(r)
     return kept, excluded
+
+
+def current_week(con, season, now):
+    """The earliest week of `season` that still has a game to kick off, or None
+    (season over / not loaded). On a Thursday or Sunday morning that is the week
+    about to be played -- the previous week's Monday game is already behind us."""
+    last = {}
+    for wk, ko in con.execute("SELECT week, kickoff_utc FROM nfl_games WHERE season=? AND is_playoffs=0", (season,)):
+        dt = parse_kickoff_utc(ko)
+        if dt is not None and (wk not in last or dt > last[wk]):
+            last[wk] = dt
+    upcoming = [wk for wk, dt in last.items() if dt > now]
+    return min(upcoming) if upcoming else None
 
 
 def check_slot_window(kickoffs, slot, as_of):
@@ -274,14 +290,37 @@ def resolve_ownership(con, cfg, season, as_of, allow_live, raw_dir):
 @with_db
 def cmd_log(args, con):
     cfg = scoring.load_config(args.config)
-    season, week, slot = args.season, args.week, args.slot
+    slot = args.slot
     as_of = parse_as_of(args.as_of)
+    season = args.season if args.season is not None else default_season(as_of)
+    week = current_week(con, season, as_of) if args.auto else args.week
+    if week is None:
+        if not args.auto:
+            raise Refused("--week is required (or pass --auto to resolve the current week from the schedule)")
+        print(f"[SKIP] no upcoming {season} regular-season game in nfl_games -- nothing to log")
+        return 0
 
     kicks = week_kickoffs(con, season, week)
     ok, cutoff, msg = check_slot_window(kicks, slot, as_of)
+    logged = con.execute("SELECT 1 FROM tr_runs WHERE season=? AND week=? AND run_slot=?", (season, week, slot)).fetchone()
+    if args.auto:
+        # Scheduled mode: "there is nothing to do" is a quiet skip (exit 0), so a
+        # week without this slot -- or one already logged by hand -- doesn't raise
+        # an alarm. A slot whose window has CLOSED still refuses loudly below.
+        if cutoff is None:
+            print(f"[SKIP] {season} week {week} has no {slot} slot: {msg}")
+            return 0
+        if logged:
+            print(f"[SKIP] the {slot} run for {season} week {week} is already in the ledger")
+            return 0
+        if ok and cutoff - as_of > timedelta(days=AUTO_MAX_DAYS_AHEAD):
+            print(f"[SKIP] the {season} week {week} {slot} slot doesn't close until {cutoff.isoformat()} "
+                  f"(more than {AUTO_MAX_DAYS_AHEAD} days out) -- too early to log")
+            return 0
+        print(f"[AUTO] resolved {season} week {week} ({slot} slot closes {cutoff.isoformat()})")
     if not ok:
         raise Refused(msg)
-    if con.execute("SELECT 1 FROM tr_runs WHERE season=? AND week=? AND run_slot=?", (season, week, slot)).fetchone():
+    if logged:
         raise Refused(f"a {slot} run for {season} week {week} is already in the ledger (append-only: no re-logging)")
     store = scoring.StatsStore(args.raw_dir, cfg["scoring"])
     check_data_fresh(con, store, season, week)
@@ -628,8 +667,11 @@ def build_parser():
 
     p = sub.add_parser("log", help="run O.D.D.S. + baselines and write to the ledger (before kickoff)")
     common(p)
-    p.add_argument("--season", type=int, required=True)
-    p.add_argument("--week", type=int, required=True)
+    p.add_argument("--season", type=int, default=None, help="default: the current season")
+    p.add_argument("--week", type=int, default=None)
+    p.add_argument("--auto", action="store_true",
+                   help="scheduled mode: resolve the current week from the schedule; a week without this slot, or a "
+                        "slot already logged, is a quiet skip (exit 0). A closed window still refuses (exit 2)")
     p.add_argument("--slot", choices=("thu", "sun"), required=True)
     p.add_argument("--predictions-dir", default=str(DEFAULT_PRED_DIR))
     p.add_argument("--as-of", default=None, help="ISO8601 instant to treat as 'now' (testing only; default now)")
