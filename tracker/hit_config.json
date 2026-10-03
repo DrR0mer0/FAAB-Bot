@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "_comment": "The 'scoring', 'hit' and 'crowd_hit' sections are hashed (see scoring.config_hash) and the hash is stored with every scored week, so any later edit to the hit definition is visible in the data. 'run' and 'report' are operational knobs and are not hashed.",
+  "scoring": {
+    "pass_yd": 0.04,
+    "pass_td": 5,
+    "pass_int": -2,
+    "rush_yd": 0.1,
+    "rush_td": 6,
+    "rec_yd": 0.1,
+    "reception": 0.5,
+    "rec_td": 6,
+    "fumble_lost": -2,
+    "two_pt_conversion": 2
+  },
+  "hit": {
+    "positions": ["QB", "RB", "WR", "TE"],
+    "top_n_per_position": 24,
+    "spike": {
+      "multiplier": 1.5,
+      "min_points": 10.0,
+      "baseline_games": 3,
+      "min_prior_games": 3
+    }
+  },
+  "crowd_hit": {
+    "owned_pct_threshold": 50,
+    "window_days": 14
+  },
+  "run": {
+    "ks": [10, 25],
+    "n_draws": 1000,
+    "pools": ["all", "u50"],
+    "sleeper_owned_pct_max": 50,
+    "ownership_max_age_hours": 36
+  },
+  "report": {
+    "min_weeks_to_call": 8,
+    "bootstrap_resamples": 10000,
+    "bootstrap_seed": 12345
+  }
+}

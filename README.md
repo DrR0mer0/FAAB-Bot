@@ -34,6 +34,7 @@ The production model has since been promoted to **13 features** (Group 1, below)
 | `model/` | Feature engineering, label generation, training, weekly scoring |
 | `league/` | Yahoo Fantasy API authentication (read-only) |
 | `startsit/` | Standalone start/sit lineup simulator — see below |
+| `tracker/` | Baseline tracker: logs O.D.D.S. next to "dumb" baselines and scores them after the games — see below |
 | `evaluation/` | Held-out model evaluation and feature experiments |
 | `predictions/` | Committed, frozen weekly scoring output (production + shadow), plus the running verification log |
 | `legacy/` | Non-functional artifacts from an earlier attempt, kept for context |
@@ -64,6 +65,41 @@ python startsit/lineup_sim.py startsit/example_week.json --seed 7
 ```
 
 It's standalone and model-agnostic; the full week-file contract is in `startsit/README.md`. `example_week.json` uses made-up numbers — it's waiting on the Yahoo fetcher to produce real week files once API access comes through.
+
+## Baseline tracker
+
+How I find out whether O.D.D.S. is actually better than chance. Every run is written to an **append-only** SQLite ledger (UPDATE/DELETE are blocked by triggers) next to three deliberately dumb baselines that draw from the *exact same pool* with the *same position mix*, then everything is scored against what really happened:
+
+- **dart** — random picks, 1,000 draws. Only the seed and the pool snapshot are stored; the distribution is regenerated at scoring time.
+- **heuristic** — snap-share increase (mean offense snap % over the last 2 games minus the 2 before that; ties broken by target share).
+- **last_week** — last game's half-PPR points.
+
+The shadow (10-feature) model is logged too. Headline is the top 10; the top 25 is scored as well, each with its own matched position mix.
+
+From the repo root (PowerShell), after the usual `data/fetch_weekly_update.py` + loader:
+
+```
+python tracker/tracker.py snapshot-ownership                      # daily: ESPN roster-%, Sleeper trending adds
+python tracker/tracker.py fetch-snaps                             # nflverse snap counts (the heuristic needs them)
+python tracker/tracker.py log --season 2026 --week 5 --slot thu   # Thursday morning, before kickoff
+python tracker/tracker.py log --season 2026 --week 5 --slot sun   # Sunday morning, before the first Sunday kickoff
+python tracker/tracker.py score --season 2026 --week 5            # after Monday night
+python tracker/tracker.py report --season 2026 --week 5           # newsletter-ready scoreboard
+python tracker/tracker.py report --season 2026                    # season to date, with bootstrap 95% CIs
+python -m unittest discover -s tracker -v                         # tests
+```
+
+`log` runs `model/score_week.py` as-is and **refuses** once its slot's first kickoff has passed (a week with no Thursday game has no `thu` slot). Each `log` also exports its rows to `tracker/ledger_export/*.jsonl`, which *is* committed — the database isn't.
+
+**What counts as a hit** (`tracker/hit_config.json`; its hash is stored with every scored week, so any later edit is visible in the data). Everything is scored under my league's settings — 0.5 PPR, 5-pt passing TDs, 6-pt rushing/receiving TDs, −2 INT, −2 fumbles lost, +2 per 2-pt conversion:
+
+- **Top-24 finish** — the pick finishes top-24 at his position that week. "Does it help me win."
+- **Spike week** — he scores ≥1.5× his trailing 3-game average and ≥10 points. "Does O.D.D.S. beat chance at its own job."
+- **Dart percentile** — where a model's result falls among the 1,000 random draws; 50% is chance.
+- **Crowd hit** (secondary) — a pick that started under 50% owned and rose above 50% within 14 days. Ownership is ESPN's `percentOwned` (unofficial endpoint, so it's validated and a failure is logged loudly, never fatal), not Yahoo's; collection started 2026-10-03, so this is excluded from any backtest.
+- **Sleeper pool** — every scoreboard is also produced for just the players under 50% owned at pick time, with each model re-picking from that smaller pool. That's the actual sleeper test.
+
+The scoreboard says plainly when the sample is too small to call a winner. Two known issues are flagged in every report rather than hidden: the production model's `starter_absent_proxy` feature leaks (see `CLAUDE.md`), and its training labels used a 4-pt passing TD. Both are queued for a separate retrain. Backtesting (`backtest`) is phase 2 and not built yet.
 
 ## Method notes
 
