@@ -640,6 +640,68 @@ class TestPriorWeeksLoaded(unittest.TestCase):
         self.assertEqual(self.problems(), ["week 3: 4 loaded player-week(s) have no labels_player_week row"])
         self.assert_refused_with_nothing_written("have no labels_player_week row")
 
+    # ---- and the DB must hold NOTHING for the week being logged
+
+    def load_thursday_game(self, labels=True):
+        """What the loader does when run after week 4's Thursday game (BAL@KC)."""
+        con = sqlite3.connect(self.db)
+        for team in ("KC", "BAL"):
+            for i in range(2):
+                con.execute("INSERT INTO player_week_stats VALUES (2026, 4, ?, ?)", (f"{team}-w4-{i}", team))
+                if labels:
+                    con.execute("INSERT INTO labels_player_week VALUES (2026, 4, ?)", (f"{team}-w4-{i}",))
+        con.commit()
+        con.close()
+
+    def target_rows(self, week=4):
+        con = ledger.connect(self.db)
+        try:
+            return tracker.target_week_rows_in_db(con, 2026, week)
+        finally:
+            con.close()
+
+    def assert_target_week_refusal(self, expect):
+        rc, err, started = self.run_log()
+        self.assertEqual(rc, 2)
+        self.assertFalse(started)                      # refused BEFORE O.D.D.S. ran
+        self.assertIn("[REFUSED] the DB already holds rows for the week being logged (2026 week 4)", err)
+        self.assertIn(expect, err)
+        con = sqlite3.connect(self.db)
+        try:
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM tr_runs").fetchone()[0], 0)
+        finally:
+            con.close()
+        self.assertFalse((self.dir / "preds").exists())
+
+    def test_clean_target_week_passes(self):
+        self.assertEqual(self.target_rows(), [])
+
+    def test_stats_and_labels_for_the_week_being_logged_are_refused_naming_the_game(self):
+        self.load_thursday_game()
+        expect = "week 4 BAL@KC: 4 player_week_stats row(s), 4 labels_player_week row(s)"
+        self.assertEqual(self.target_rows(), [expect])   # only the played game is named, not TEN@LV
+        self.assert_target_week_refusal(expect)
+
+    def test_stats_without_labels_for_the_week_being_logged_are_refused(self):
+        self.load_thursday_game(labels=False)
+        self.assert_target_week_refusal("week 4 BAL@KC: 4 player_week_stats row(s), 0 labels_player_week row(s)")
+
+    def test_labels_without_stats_for_the_week_being_logged_are_refused(self):
+        self.sql("INSERT INTO labels_player_week VALUES (2026, 4, 'orphan')")
+        self.assert_target_week_refusal("week 4, no matching game: 0 player_week_stats row(s), 1 labels_player_week row(s)")
+
+    def test_week_one_is_guarded_too(self):
+        self.sql("INSERT INTO nfl_games (season, week, game_id, kickoff_utc, home_team, away_team) "
+                 "VALUES (2026, 1, 'w1', '2026-09-10T20:15:00', 'KC', 'BAL')",
+                 "INSERT INTO player_week_stats VALUES (2026, 1, 'kc1', 'KC')")
+        self.assertEqual(self.target_rows(week=1), ["week 1 BAL@KC: 1 player_week_stats row(s), 0 labels_player_week row(s)"])
+        con = ledger.connect(self.db)
+        try:
+            with self.assertRaises(tracker.Refused):
+                tracker.check_data_fresh(con, None, 2026, 1, utc("2026-09-09T12:00:00"))
+        finally:
+            con.close()
+
     def test_postponed_game_that_has_not_kicked_off_is_not_required(self):
         self.sql("DELETE FROM player_week_stats WHERE week = 3 AND team IN ('BAL', 'LV')",
                  "UPDATE nfl_games SET kickoff_utc = '2026-10-06T20:15:00', home_score = NULL, away_score = NULL WHERE game_id = 'w3b'")
@@ -1093,6 +1155,18 @@ class TestScheduledRun(unittest.TestCase):
         self.assertIn("FAILED", self.summary()[-1])
         self.assertIn("the DB is missing data", self.summary()[-1])
         self.assertIn("the DB is missing data", self.alerts[0][1])
+
+    def test_target_week_rows_refusal_gets_the_failed_line_and_the_message_box(self):
+        refusal = ("[REFUSED] the DB already holds rows for the week being logged (2026 week 5): week 5 PHI@NYG: "
+                   "41 player_week_stats row(s), 41 labels_player_week row(s). With week-5 stats loaded, ...\n")
+        rc = self.run_job("log-sun", self.SUNDAY, [(0, ""), (2, refusal)])
+        self.assertEqual(rc, 2)
+        self.assertIn("FAILED", self.summary()[-1])
+        self.assertIn("week 5 PHI@NYG", self.summary()[-1])
+        (title, text), = self.alerts
+        self.assertIn("log-sun FAILED", title)
+        self.assertIn("already holds rows for the week being logged", text)
+        self.assertIn("Nothing was written to the ledger", text)
 
     def test_log_job_woken_on_the_wrong_day_runs_nothing(self):
         """Missed on Sunday, PC back on Tuesday: --auto would now resolve to NEXT

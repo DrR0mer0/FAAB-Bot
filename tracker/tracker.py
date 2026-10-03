@@ -23,6 +23,7 @@ import argparse
 import json
 import subprocess
 import sys
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -227,7 +228,46 @@ def played_games_not_loaded(con, season, week, as_of):
     return problems
 
 
+def target_week_rows_in_db(con, season, week):
+    """The DB must hold NOTHING for the week being logged. Once any week-W stat
+    row is loaded (the loader run after that week's Thursday game, say),
+    score_week.py's feature engine treats week W as having data and computes
+    starter_absent_proxy from that partial week -- 1 for every non-starter
+    whose team simply hasn't played yet -- so the same run scores differently
+    depending on when the DB was last loaded. Returns one description per
+    week-W game with player_week_stats or labels_player_week rows (labels are
+    tied to a game through their stats row); [] when the week is clean."""
+    stats, labels = Counter(), Counter()
+    for team, n in con.execute(
+            "SELECT team, COUNT(*) FROM player_week_stats WHERE season=? AND week=? GROUP BY team", (season, week)):
+        stats[norm_team(team)] += n
+    for team, n in con.execute(
+            "SELECT s.team, COUNT(*) FROM labels_player_week l LEFT JOIN player_week_stats s "
+            "ON s.season=l.season AND s.week=l.week AND s.player_id=l.player_id "
+            "WHERE l.season=? AND l.week=? GROUP BY s.team", (season, week)):
+        labels[norm_team(team)] += n
+    problems = []
+    for home, away in con.execute(
+            "SELECT home_team, away_team FROM nfl_games WHERE season=? AND week=? AND is_playoffs=0 "
+            "ORDER BY kickoff_utc, game_id", (season, week)).fetchall():
+        n_stats = stats.pop(norm_team(home), 0) + stats.pop(norm_team(away), 0)
+        n_labels = labels.pop(norm_team(home), 0) + labels.pop(norm_team(away), 0)
+        if n_stats or n_labels:
+            problems.append(f"week {week} {away}@{home}: {n_stats} player_week_stats row(s), {n_labels} labels_player_week row(s)")
+    if stats or labels:  # rows that match no scheduled game (labels without a stats row, an unknown team)
+        problems.append(f"week {week}, no matching game: {sum(stats.values())} player_week_stats row(s), "
+                        f"{sum(labels.values())} labels_player_week row(s)")
+    return problems
+
+
 def check_data_fresh(con, store, season, week, as_of):
+    loaded = target_week_rows_in_db(con, season, week)
+    if loaded:
+        shown = "; ".join(loaded[:6]) + (f"; ... and {len(loaded) - 6} more" if len(loaded) > 6 else "")
+        raise Refused(f"the DB already holds rows for the week being logged ({season} week {week}): {shown}. With week-{week} "
+                      f"stats loaded, O.D.D.S. computes starter_absent_proxy from a partial week, so this run's scores would "
+                      f"depend on when the DB was loaded. Delete the week-{week} rows from player_week_stats and "
+                      f"labels_player_week (season {season}), then log again")
     if week <= 1:
         return
     g = con.execute("SELECT COUNT(*), SUM(CASE WHEN home_score IS NOT NULL AND away_score IS NOT NULL THEN 1 ELSE 0 END) "
