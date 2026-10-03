@@ -12,8 +12,10 @@
 `log` runs model/score_week.py as-is (no model logic touched), ingests its
 frozen JSON into the append-only ledger, then draws the dart / heuristic /
 last_week baselines from that SAME pool. It REFUSES to log a run once the
-slot's kickoff cutoff has passed (see check_slot_window). See README.md
-("Baseline tracker") for the hit definition and the full workflow.
+slot's kickoff cutoff has passed (see check_slot_window), and a slot's pool
+only ever holds players whose game kicks off at or after that cutoff (see
+split_pool_at_cutoff). See README.md ("Baseline tracker") for the hit
+definition and the full workflow.
 """
 import argparse
 import json
@@ -36,7 +38,7 @@ import ownership  # noqa: E402
 import report  # noqa: E402
 import scoring  # noqa: E402
 import snapcounts  # noqa: E402
-from score_week import KICKOFF_TZ, parse_kickoff_utc  # noqa: E402 -- the one place kickoff timezone logic lives
+from score_week import KICKOFF_TZ, load_current_roster, load_kickoffs, parse_kickoff_utc  # noqa: E402 -- the one place kickoff timezone logic lives
 from team_crosswalk import norm_team  # noqa: E402
 
 DEFAULT_DB = REPO_ROOT / "faab_history_core_v0_1.db"
@@ -47,6 +49,8 @@ DEFAULT_REPORT_DIR = TRACKER_DIR / "reports"
 DEFAULT_OWNERSHIP_RAW_DIR = ownership.DEFAULT_RAW_DIR
 BASELINE_VERSIONS = {"dart": "dart-v1", "heuristic": "heuristic-v1", "last_week": "last_week-v1"}
 METRICS = ("top24_hits", "spike_hits", "total_points")
+MAIN_SLATE_ET = (13, 0)  # the Sunday main slate opens with the 1:00 PM Eastern window
+SLOT_RULE = "main-slate-v2"  # recorded with every run; v1 closed `sun` at the earliest Sunday kickoff
 
 
 class Refused(Exception):
@@ -105,24 +109,51 @@ def week_kickoffs(con, season, week):
     return sorted(out)
 
 
+def main_slate_start(kickoffs):
+    """First kickoff of the Sunday main slate: the earliest Sunday game (Eastern
+    calendar day) at or after 1:00 PM ET. A 9:30am international game, or any
+    other Sunday kickoff before 1 PM ET, is NOT part of it -- those are treated
+    like Thursday games. Falls back to the earliest Sunday kickoff if a Sunday
+    somehow has no game from 1 PM on; None if the week has no Sunday game."""
+    sundays = [k for k in kickoffs if k.astimezone(KICKOFF_TZ).weekday() == 6]
+    main = [k for k in sundays if (k.astimezone(KICKOFF_TZ).hour, k.astimezone(KICKOFF_TZ).minute) >= MAIN_SLATE_ET]
+    return min(main or sundays) if sundays else None
+
+
 def slot_cutoff(kickoffs, slot):
     """(cutoff_utc, reason). `thu` = before the first game that precedes the
-    Sunday slate (Thursday; also Wednesday/Friday/Saturday games); a week with
-    no such game has no thu slot. `sun` = before the first Sunday kickoff
-    (Eastern calendar day), which includes a 9:30am international game. Both
-    resolved from real kickoff instants, never from a day-of-week flag."""
+    Sunday main slate (Thursday; also Wednesday/Friday/Saturday games and an
+    international/early Sunday game); a week with no such game has no thu slot.
+    `sun` = before the first 1 PM ET Sunday kickoff (see main_slate_start).
+    Both resolved from real kickoff instants, never from a day-of-week flag."""
     if not kickoffs:
         return None, "no scheduled games found for this week"
-    sundays = [k for k in kickoffs if k.astimezone(KICKOFF_TZ).weekday() == 6]
-    sunday_start = min(sundays) if sundays else None
+    slate_start = main_slate_start(kickoffs)
     if slot == "thu":
-        pre = [k for k in kickoffs if sunday_start is not None and k < sunday_start]
+        pre = [k for k in kickoffs if slate_start is not None and k < slate_start]
         if not pre:
-            return None, "this week has no game before the Sunday slate (no Thursday game) -- use --slot sun"
+            return None, ("this week has no game before the Sunday 1 PM ET slate (no Thursday game, no early "
+                          "Sunday game) -- use --slot sun")
         return min(pre), None
     if slot == "sun":
-        return (sunday_start or min(kickoffs)), None
+        return (slate_start or min(kickoffs)), None
     return None, f"unknown slot {slot!r}"
+
+
+def split_pool_at_cutoff(pool_src, team_kickoffs, roster_team_of, cutoff):
+    """(kept, excluded). A slot's pool holds only players whose game kicks off
+    at or AFTER the slot's cutoff, no matter when the run happens -- so the sun
+    pool never contains Thursday players or international/early-Sunday players,
+    even on a run made before those games start (score_week.py's kickoff guard
+    only drops a game that has already started). For `thu` the cutoff IS the
+    week's first kickoff, so nothing is excluded. Team resolution mirrors the
+    kickoff guard: the weekly-roster team if known, else the team on the
+    scored-pool row; a player with no game this week is kept, as there."""
+    kept, excluded = [], []
+    for r in pool_src:
+        info = team_kickoffs.get(roster_team_of.get(r["player_id"]) or r["team"])
+        (excluded if info is not None and info[0] < cutoff else kept).append(r)
+    return kept, excluded
 
 
 def check_slot_window(kickoffs, slot, as_of):
@@ -255,10 +286,12 @@ def cmd_log(args, con):
     store = scoring.StatsStore(args.raw_dir, cfg["scoring"])
     check_data_fresh(con, store, season, week)
     pred_path = choose_prediction_path(args.predictions_dir, season, week, slot)
+    # the same roster file score_week.py's kickoff guard resolves teams from (its default path, made explicit)
+    weekly_roster = Path(args.raw_dir) / f"roster_weekly_{season}.csv"
 
     cmd = [sys.executable, str(REPO_ROOT / "model" / "score_week.py"), "--season", str(season), "--week", str(week),
            "--json-out", str(pred_path), "--as-of", as_of.isoformat(), "--db", str(args.db),
-           "--predictions-dir", str(args.predictions_dir)]
+           "--predictions-dir", str(args.predictions_dir), "--weekly-roster", str(weekly_roster)]
     print(f"[INFO] running O.D.D.S. as-is: {' '.join(cmd[1:])}")
     proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     written = [pred_path, pred_path.with_suffix(".md"),
@@ -277,11 +310,16 @@ def cmd_log(args, con):
     shadow_path = pred_path.with_name(pred_path.stem + "_shadow.json")
     shadow = json.loads(shadow_path.read_text(encoding="utf-8")) if shadow_path.exists() else None
     pool_src = prod["scored_pool"]
-    if not pool_src:
-        raise Refused("O.D.D.S. scored an empty pool -- nothing to log")
     shadow_scores = {r["player_id"]: r["score"] for r in shadow["scored_pool"]} if shadow else {}
     if shadow and set(shadow_scores) != {r["player_id"] for r in pool_src}:
         raise RuntimeError("production and shadow pools differ -- they must be identical by construction")
+    roster_team_of = load_current_roster(str(weekly_roster), season, week)[0] if weekly_roster.exists() else {}
+    pool_src, early = split_pool_at_cutoff(pool_src, load_kickoffs(con, season, week), roster_team_of, cutoff)
+    if early:
+        print(f"[INFO] {len(early)} scored player(s) left out of the {slot} pool: their game kicks off before the "
+              f"slot's cutoff ({cutoff.isoformat()}) -- teams {sorted({r['team'] for r in early})}")
+    if not pool_src:
+        raise Refused("O.D.D.S. scored an empty pool -- nothing to log")
 
     allow_live = args.as_of is None and not args.skip_ownership
     if args.skip_ownership:
@@ -324,7 +362,8 @@ def cmd_log(args, con):
         "pool_size": len(pool), "n_draws": args.n_draws or cfg["run"]["n_draws"], "dart_seed": seed,
         "snap_week_used": f"{latest_snap[0]}w{latest_snap[1]:02d}" if latest_snap else None,
         "ownership_snapshot_id": snap_id, "ownership_status": status, "ownership_matched": n_matched,
-        "run_config_json": json.dumps({"run": cfg["run"], "hit_config_hash": scoring.config_hash(cfg)}, sort_keys=True)}
+        "run_config_json": json.dumps({"run": cfg["run"], "hit_config_hash": scoring.config_hash(cfg), "slot_rule": SLOT_RULE,
+                                       "excluded_before_cutoff": sorted(r["player_id"] for r in early)}, sort_keys=True)}
     with con:
         ledger.insert_rows(con, "tr_runs", [run_row])
         ledger.insert_rows(con, "tr_pool", pool)

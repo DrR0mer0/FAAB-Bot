@@ -6,9 +6,12 @@
 Stdlib unittest only; every test uses temp dirs / in-memory SQLite, never the
 real DB or predictions/.
 """
+import contextlib
 import csv
 import gzip
 import hashlib
+import io
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -337,11 +340,33 @@ class TestSlotWindow(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("REFUSED", msg)
 
-    def test_sun_closes_at_the_nine_thirty_international_kickoff_not_one_pm(self):
-        cutoff = utc("2026-10-04T13:30:00")  # 09:30 EDT
+    def test_sun_closes_at_the_first_one_pm_kickoff_not_the_international_game(self):
+        cutoff = utc("2026-10-04T17:00:00")  # 13:00 EDT; the 09:30 EDT (13:30 UTC) London game doesn't close it
         self.assertEqual(tracker.slot_cutoff(WEEK4_2026, "sun")[0], cutoff)
+        self.assertTrue(tracker.check_slot_window(WEEK4_2026, "sun", utc("2026-10-04T13:31:00"))[0])  # London game under way
         self.assertTrue(tracker.check_slot_window(WEEK4_2026, "sun", cutoff - timedelta(minutes=1))[0])
-        self.assertFalse(tracker.check_slot_window(WEEK4_2026, "sun", cutoff)[0])
+        ok, _c, msg = tracker.check_slot_window(WEEK4_2026, "sun", cutoff)
+        self.assertFalse(ok)
+        self.assertIn("REFUSED", msg)
+
+    def test_international_game_is_treated_like_a_thursday_game(self):
+        """No Thursday game, but a 9:30am ET international game: it precedes the
+        main slate, so the week HAS a thu slot (closing at that kickoff) and the
+        sun slot still closes at 1 PM ET."""
+        intl = [kick(s) for s in ("2026-10-18T09:30:00", "2026-10-18T13:00:00", "2026-10-18T16:25:00", "2026-10-19T20:15:00")]
+        self.assertEqual(tracker.slot_cutoff(intl, "thu")[0], utc("2026-10-18T13:30:00"))
+        self.assertEqual(tracker.slot_cutoff(intl, "sun")[0], utc("2026-10-18T17:00:00"))
+        self.assertEqual(tracker.main_slate_start(intl), utc("2026-10-18T17:00:00"))
+
+    def test_main_slate_is_defined_by_eastern_wall_clock_across_dst(self):
+        nov = [kick(s) for s in ("2026-11-08T09:30:00", "2026-11-08T13:00:00")]  # EST: 1 PM ET = 18:00 UTC
+        self.assertEqual(tracker.slot_cutoff(nov, "sun")[0], utc("2026-11-08T18:00:00"))
+        self.assertEqual(tracker.slot_cutoff(nov, "thu")[0], utc("2026-11-08T14:30:00"))
+
+    def test_sunday_with_no_one_pm_or_later_game_falls_back_to_its_first_kickoff(self):
+        odd = [kick(s) for s in ("2026-10-15T20:15:00", "2026-10-18T09:30:00")]
+        self.assertEqual(tracker.slot_cutoff(odd, "sun")[0], utc("2026-10-18T13:30:00"))
+        self.assertEqual(tracker.slot_cutoff(odd, "thu")[0], utc("2026-10-16T00:15:00"))
 
     def test_sun_run_is_allowed_after_the_thursday_game_started(self):
         self.assertTrue(tracker.check_slot_window(WEEK4_2026, "sun", utc("2026-10-03T15:00:00"))[0])
@@ -428,8 +453,8 @@ class TestLogRefusesAfterKickoff(unittest.TestCase):
         self.assertEqual(self.run_log(4, "thu", "2026-10-02T00:15:00+00:00"), 2)
         self.assert_nothing_written()
 
-    def test_sun_run_after_first_sunday_kickoff_is_refused(self):
-        self.assertEqual(self.run_log(4, "sun", "2026-10-04T13:31:00+00:00"), 2)
+    def test_sun_run_after_the_one_pm_kickoff_is_refused(self):
+        self.assertEqual(self.run_log(4, "sun", "2026-10-04T17:00:00+00:00"), 2)
         self.assert_nothing_written()
 
     def test_thu_run_in_a_week_with_no_thursday_game_is_refused(self):
@@ -443,6 +468,132 @@ class TestLogRefusesAfterKickoff(unittest.TestCase):
         con.close()
         self.assertEqual(self.run_log(4, "sun", "2026-10-03T15:00:00+00:00"), 2)
         self.assertEqual(self.count("tr_runs"), 1)
+
+
+# ------------------------------------------- international week: slot pool
+
+class TestSlotPool(unittest.TestCase):
+    """The sun pool only holds players whose game kicks off at or after the
+    slot's cutoff -- Thursday AND international/early-Sunday players are out,
+    whenever the run happens."""
+
+    # 2026 week 4: Thursday PIT@CLE, 9:30am ET London IND@WAS, then the 1 PM slate; DEN is on a bye here
+    KICKOFFS = {"PIT": (kick("2026-10-01T20:15:00"), "CLE"), "CLE": (kick("2026-10-01T20:15:00"), "PIT"),
+                "IND": (kick("2026-10-04T09:30:00"), "WAS"), "WAS": (kick("2026-10-04T09:30:00"), "IND"),
+                "TEN": (kick("2026-10-04T13:00:00"), "BAL"), "BAL": (kick("2026-10-04T13:00:00"), "TEN"),
+                "KC": (kick("2026-10-04T16:25:00"), "LV"), "LV": (kick("2026-10-04T16:25:00"), "KC")}
+    SUN = utc("2026-10-04T17:00:00")
+    THU = utc("2026-10-02T00:15:00")
+
+    def pool(self, *teams):
+        return [{"player_id": f"{t}-{i}", "team": t} for t in teams for i in range(2)]
+
+    def test_sun_pool_excludes_thursday_and_international_players(self):
+        kept, out = tracker.split_pool_at_cutoff(self.pool("PIT", "CLE", "IND", "WAS", "TEN", "BAL", "KC", "DEN"),
+                                                 self.KICKOFFS, {}, self.SUN)
+        self.assertEqual({r["team"] for r in out}, {"PIT", "CLE", "IND", "WAS"})
+        self.assertEqual({r["team"] for r in kept}, {"TEN", "BAL", "KC", "DEN"})  # 1 PM game itself is in; a bye team is untouched
+
+    def test_thu_pool_excludes_nobody(self):
+        pool = self.pool("PIT", "IND", "TEN", "KC")
+        kept, out = tracker.split_pool_at_cutoff(pool, self.KICKOFFS, {}, self.THU)
+        self.assertEqual((kept, out), (pool, []))
+
+    def test_team_is_resolved_like_the_kickoff_guard_roster_team_first(self):
+        pool = [{"player_id": "traded-to-london", "team": "TEN"}, {"player_id": "traded-away", "team": "IND"}]
+        kept, out = tracker.split_pool_at_cutoff(pool, self.KICKOFFS, {"traded-to-london": "WAS", "traded-away": "BAL"}, self.SUN)
+        self.assertEqual([r["player_id"] for r in out], ["traded-to-london"])
+        self.assertEqual([r["player_id"] for r in kept], ["traded-away"])
+
+
+class TestLogInternationalWeek(unittest.TestCase):
+    """CLI-level `log` for a week with an international game, O.D.D.S. itself
+    replaced by a stub that writes a scored pool covering EVERY team -- which is
+    what score_week.py does on a run made before any of the week's games."""
+
+    TEAMS = ("PIT", "CLE", "IND", "WAS", "TEN", "BAL", "KC", "LV")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.db = self.dir / "t.db"
+        (self.dir / "raw").mkdir()
+        con = ledger.connect(self.db)
+        con.execute("CREATE TABLE nfl_games (season INTEGER, week INTEGER, game_id TEXT, kickoff_utc TEXT, home_team TEXT, "
+                    "away_team TEXT, home_score INTEGER, away_score INTEGER, is_playoffs INTEGER DEFAULT 0)")
+        con.execute("INSERT INTO nfl_games VALUES (2026, 3, 'w3', '2026-09-27T13:00:00', 'PIT', 'CLE', 20, 17, 0)")
+        con.executemany("INSERT INTO nfl_games (season, week, game_id, kickoff_utc, home_team, away_team) VALUES (2026, 4, ?, ?, ?, ?)",
+                        [("thu", "2026-10-01T20:15:00", "CLE", "PIT"), ("london", "2026-10-04T09:30:00", "WAS", "IND"),
+                         ("early", "2026-10-04T13:00:00", "BAL", "TEN"), ("late", "2026-10-04T16:25:00", "LV", "KC")])
+        con.commit()
+        con.close()
+        cols = ["player_id", "season", "week", "season_type", "position", "team", "receptions", "receiving_yards", "target_share"]
+        self.scored_pool = []
+        with open(self.dir / "raw" / "stats_player_week_2026.csv", "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=cols)
+            w.writeheader()
+            for t in self.TEAMS:
+                for i, pos in enumerate(("RB", "RB", "WR", "WR", "WR", "TE")):
+                    pid = f"{t}-{pos}{i}"
+                    w.writerow(dict(player_id=pid, season=2026, week=3, season_type="REG", position=pos, team=t,
+                                    receptions=i, receiving_yards=10 * i, target_share=0.1))
+                    self.scored_pool.append({"player_id": pid, "name": pid, "pos": pos, "team": t,
+                                             "score": round(0.9 - 0.01 * len(self.scored_pool), 4)})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def fake_run(self, cmd, **_kw):
+        if "rev-parse" in cmd:
+            return mock.Mock(returncode=0, stdout="deadbeef\n", stderr="")
+        self.score_week_cmd = cmd
+        out = Path(cmd[cmd.index("--json-out") + 1])
+        out.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps({"scored_pool": self.scored_pool, "top": [], "model": {"git_commit": "m1"}})
+        out.write_text(payload, encoding="utf-8")
+        out.with_name(out.stem + "_shadow.json").write_text(payload, encoding="utf-8")
+        return mock.Mock(returncode=0, stdout="", stderr="")
+
+    def log(self, slot, as_of):
+        argv = ["log", "--season", "2026", "--week", "4", "--slot", slot, "--as-of", as_of, "--db", str(self.db),
+                "--predictions-dir", str(self.dir / "preds"), "--export-dir", str(self.dir / "export"),
+                "--raw-dir", str(self.dir / "raw"), "--skip-ownership"]
+        with mock.patch.object(tracker.subprocess, "run", side_effect=self.fake_run), \
+                contextlib.redirect_stdout(io.StringIO()):
+            return tracker.main(argv)
+
+    def rows(self, sql):
+        con = sqlite3.connect(self.db)
+        con.row_factory = sqlite3.Row
+        try:
+            return con.execute(sql).fetchall()
+        finally:
+            con.close()
+
+    def test_sun_run_made_before_any_game_still_leaves_out_thursday_and_international_players(self):
+        self.assertEqual(self.log("sun", "2026-09-30T15:00:00+00:00"), 0)   # Wednesday: nothing has kicked off
+        run = self.rows("SELECT * FROM tr_runs")[0]
+        self.assertEqual(run["kickoff_cutoff_utc"], "2026-10-04T17:00:00+00:00")   # 1 PM ET, not the 9:30 London game
+        self.assertEqual({r["team"] for r in self.rows("SELECT team FROM tr_pool")}, {"TEN", "BAL", "KC", "LV"})
+        self.assertEqual(run["pool_size"], 24)
+        early_teams = ("PIT-", "CLE-", "IND-", "WAS-")
+        picked = [r["player_id"] for r in self.rows("SELECT player_id FROM tr_predictions")]
+        self.assertTrue(picked)
+        self.assertFalse([p for p in picked if p.startswith(early_teams)])  # no model, baseline or dart pick from those games
+        cfg = json.loads(run["run_config_json"])
+        self.assertEqual(cfg["slot_rule"], tracker.SLOT_RULE)
+        self.assertEqual(len(cfg["excluded_before_cutoff"]), 24)
+        self.assertTrue(all(p.startswith(early_teams) for p in cfg["excluded_before_cutoff"]))
+        self.assertIn("--weekly-roster", self.score_week_cmd)
+
+    def test_sun_run_is_accepted_between_the_international_kickoff_and_one_pm(self):
+        self.assertEqual(self.log("sun", "2026-10-04T16:59:00+00:00"), 0)
+        self.assertEqual(self.log("sun", "2026-10-04T16:59:30+00:00"), 2)   # and only once
+
+    def test_thu_run_keeps_the_whole_pool_international_players_included(self):
+        self.assertEqual(self.log("thu", "2026-09-30T15:00:00+00:00"), 0)
+        self.assertEqual({r["team"] for r in self.rows("SELECT team FROM tr_pool")}, set(self.TEAMS))
+        self.assertEqual(json.loads(self.rows("SELECT run_config_json FROM tr_runs")[0][0])["excluded_before_cutoff"], [])
 
 
 # ----------------------------------------------------------------- baselines
