@@ -25,7 +25,8 @@ updated within `injury_report_max_age_hours`, or has no rows for the week. If
 neither source is available the run is still logged, loudly, with the rule not
 applied and that fact recorded -- same policy as a missing roster-% feed.
 
-Nothing here touches model/score_week.py's scores, ranks or JSON.
+Nothing here touches model/score_week.py's scores, ranks or JSON. The same
+designations are also used to FLAG players in the prediction markdown.
 """
 import csv
 import hashlib

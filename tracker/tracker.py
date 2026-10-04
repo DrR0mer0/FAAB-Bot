@@ -44,7 +44,7 @@ import report  # noqa: E402
 import scoring  # noqa: E402
 import snapcounts  # noqa: E402
 from score_week import (  # noqa: E402 -- the one place kickoff timezone logic lives
-    KICKOFF_TZ, load_current_roster, load_kickoffs, parse_kickoff_utc)
+    KICKOFF_TZ, load_current_roster, load_kickoffs, parse_kickoff_utc, render_markdown_report)
 from team_crosswalk import norm_team  # noqa: E402
 
 DEFAULT_DB = REPO_ROOT / "faab_history_core_v0_1.db"
@@ -370,6 +370,23 @@ def resolve_injuries(args, con, cfg, season, week, as_of, snap_id):
                             fetch=injuries.fetch_nflverse)
 
 
+def injury_flag_note(inj, exclude):
+    """The line printed above the prediction markdown's table, or None to leave the markdown as score_week.py wrote it."""
+    labels = " / ".join(f"**({s.upper()})**" for s in exclude)
+    if inj["source"] == "nflverse":
+        return (f"Injury flags: {labels} = designated on the NFL injury report (nflverse, last updated "
+                f"{inj['last_modified']:%Y-%m-%d %H:%M} UTC) when this was generated. Display only -- scores and ranks are "
+                f"unchanged. Flagged players are not in the tracker's pool.")
+    if inj["source"] == "espn-fallback":
+        return (f"Injury flags: {labels} = ESPN's injury status when this was generated (the official report was "
+                f"unavailable: {inj['reason']}). Display only -- scores and ranks are unchanged. Flagged players are not "
+                f"in the tracker's pool.")
+    if inj["source"] == "unavailable":
+        return ("Injury flags: no injury designations were available when this was generated, so NOBODY is flagged -- "
+                "players already ruled out may appear below.")
+    return None
+
+
 def resolve_ownership(con, cfg, season, as_of, allow_live, raw_dir):
     """-> (status, snapshot_id, {gsis: percent_owned}). Never raises."""
     max_age = cfg["run"]["ownership_max_age_hours"]
@@ -482,6 +499,13 @@ def cmd_log(args, con):
             injuries._banner(f"could not keep a copy of the injury report under {args.injuries_raw_dir} ({type(e).__name__}: {e})")
     if not pool_src:
         raise Refused("O.D.D.S. scored an empty pool -- nothing to log")
+    # Display only: flag those players in the prediction markdown. Scores, ranks and the JSON stay as score_week.py wrote them.
+    note = injury_flag_note(inj, exclude)
+    if note:
+        flags = {pid: st.upper() for pid, st in inj["status"].items() if st in exclude}
+        for path, output in ((pred_path, prod), (shadow_path, shadow)):
+            if output is not None:
+                path.with_suffix(".md").write_text(render_markdown_report(output, flags, note), encoding="utf-8")
     thr = cfg["run"]["sleeper_owned_pct_max"]
     ids = [r["player_id"] for r in pool_src]
     lw = baselines.last_week_and_target_share(store, ids, season, week)

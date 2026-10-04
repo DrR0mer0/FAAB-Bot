@@ -30,6 +30,7 @@ import report
 import scheduled_run
 import scoring
 import tracker
+from score_week import render_markdown_report
 
 CFG = scoring.load_config()
 RULES = CFG["scoring"]
@@ -986,6 +987,21 @@ class TestEspnInjuryStatus(unittest.TestCase):
         self.assertEqual(ownership.ownership_by_player(con, 7), {"g1": 99.0})
 
 
+class TestPredictionMarkdownFlags(unittest.TestCase):
+    def test_flags_are_display_only(self):
+        plain = render_markdown_report(PREDICTION_OUTPUT)
+        self.assertEqual(render_markdown_report(PREDICTION_OUTPUT, None, None), plain)
+        self.assertEqual(render_markdown_report(PREDICTION_OUTPUT, {}, None), plain)       # nobody flagged, no note: unchanged
+        flagged = render_markdown_report(PREDICTION_OUTPUT, {"a": "OUT", "c": "DOUBTFUL", "not_in_top": "OUT"}, "Injury flags: note.")
+        self.assertIn("| 1 | Alpha One **(OUT)** | WR | MIN | 0.6134 |", flagged)
+        self.assertIn("| 2 | Bravo Two | RB | KC | 0.5000 |", flagged)
+        self.assertIn("| 3 | Charlie Three **(DOUBTFUL)** | TE | TB | 0.4000 |", flagged)
+        self.assertIn("Injury flags: note.", flagged)
+        # taking the flags and the note back out gives the original report: same rows, order, ranks and scores
+        undone = flagged.replace(" **(OUT)**", "").replace(" **(DOUBTFUL)**", "").replace("Injury flags: note.\n\n", "")
+        self.assertEqual(undone, plain)
+
+
 class TestLogInjuryPoolRule(TestLogInternationalWeek):
     """CLI-level `log` on a live (no --as-of) run with the injury report stubbed:
     Out/Doubtful players are out of the pool for every model, the run records
@@ -1010,6 +1026,7 @@ class TestLogInjuryPoolRule(TestLogInternationalWeek):
         for path in (out, out.with_name(out.stem + "_shadow.json")):
             path.write_text(payload, encoding="utf-8")
             path.with_suffix(".md").write_text("as score_week.py wrote it", encoding="utf-8")
+        self.json_as_written = payload
         return mock.Mock(returncode=0, stdout="", stderr="")
 
     def add_espn_snapshot(self, statuses):
@@ -1062,6 +1079,18 @@ class TestLogInjuryPoolRule(TestLogInternationalWeek):
         # the report that decided the pool is kept, outside the DB, under the recorded name
         self.assertEqual(gzip.decompress((self.dir / "raw_injuries" / inj["nflverse_file"]).read_bytes()), self.REPORT)
 
+    def test_prediction_json_is_untouched_and_the_markdown_only_gains_flags(self):
+        self.assertEqual(self.log_live(self.fresh, "--skip-ownership")[0], 0)
+        for stem in ("2026_week04", "2026_week04_shadow"):
+            self.assertEqual((self.dir / "preds" / f"{stem}.json").read_text(encoding="utf-8"), self.json_as_written)
+            md = (self.dir / "preds" / f"{stem}.md").read_text(encoding="utf-8")
+            self.assertIn("TEN-RB0 **(OUT)**", md)
+            self.assertIn("BAL-WR2 **(DOUBTFUL)**", md)
+            self.assertIn("IND-RB0 **(OUT)**", md)                 # flagged wherever he appears, in the pool or not
+            self.assertNotIn("KC-TE5 **", md)
+            self.assertIn("Injury flags:", md)
+            self.assertIn("| 1 | PIT-RB0 | RB | PIT | 0.9000 |", md)   # rank and score exactly as scored
+
     def test_stale_report_falls_back_to_espn_and_says_so(self):
         self.add_espn_snapshot({"LV-WR3": "OUT", "KC-RB1": "DOUBTFUL", "TEN-RB0": "QUESTIONABLE"})
         stale = lambda season: dict(self.fresh(season), last_modified=self.NOW - timedelta(hours=26))
@@ -1071,6 +1100,7 @@ class TestLogInjuryPoolRule(TestLogInternationalWeek):
         self.assertIn("nightly update is missing", inj["reason"])
         self.assertEqual(inj["excluded"], {"LV-WR3": "Out", "KC-RB1": "Doubtful"})
         self.assertEqual(self.rows("SELECT COUNT(*) FROM tr_pool")[0][0], 22)
+        self.assertIn("ESPN's injury status", (self.dir / "preds" / "2026_week04.md").read_text(encoding="utf-8"))
 
     def test_no_source_still_logs_with_the_rule_recorded_as_not_applied(self):
         down = lambda season: {"ok": False, "raw_bytes": None, "error": "ConnectionError", "url": "u", "last_modified": None}
@@ -1078,6 +1108,7 @@ class TestLogInjuryPoolRule(TestLogInternationalWeek):
         inj = self.run_config()["injury"]
         self.assertEqual((inj["source"], inj["excluded"]), ("unavailable", {}))
         self.assertEqual(self.rows("SELECT COUNT(*) FROM tr_pool")[0][0], 24)
+        self.assertIn("NOBODY is flagged", (self.dir / "preds" / "2026_week04.md").read_text(encoding="utf-8"))
 
     def test_as_of_run_never_fetches_and_leaves_the_markdown_alone(self):
         with mock.patch.object(tracker.injuries, "fetch_nflverse", side_effect=AssertionError("no live report on an --as-of run")):

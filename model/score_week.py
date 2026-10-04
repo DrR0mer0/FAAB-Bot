@@ -265,14 +265,21 @@ def get_eligible_candidates(engine, season, week):
     return candidates
 
 
-def render_markdown_report(output):
+def render_markdown_report(output, status_flags=None, flag_note=None):
     """Renders the same content already written to --json-out as a
     markdown report, matching the style of evaluation/verify_week.py's
     _verified.md reports so prediction and verification files read
     consistently. Takes exactly the dict shape written as JSON (or one
     read back from a previously-written file, e.g. model/render_prediction_
     report.py), so a report can be (re)rendered without recomputing or
-    altering the JSON itself."""
+    altering the JSON itself.
+
+    status_flags ({player_id: label}, e.g. "OUT") and flag_note are DISPLAY
+    ONLY: a flagged player's name gets the label next to it and the note is
+    printed above the table. Scores, ranks, row order and the JSON are
+    untouched, and with neither argument the output is exactly what it was
+    before they existed. tracker/tracker.py's `log` passes the week's injury
+    designations here; nothing in this script fetches or decides them."""
     counts = output["counts"]
     model = output.get("model") or {}
     lines = [
@@ -299,11 +306,17 @@ def render_markdown_report(output):
         f"({counts['new_competitor_via_production_only']} via production, "
         f"{counts['new_competitor_via_draft_only']} via draft, {counts['new_competitor_via_both']} via both)",
         "",
+    ]
+    if flag_note:
+        lines += [flag_note, ""]
+    lines += [
         "| Rank | Name | Pos | Team | Score |",
         "|---:|---|---|---|---:|",
     ]
     for r in output["top"]:
-        lines.append(f"| {r['rank']} | {r['name']} | {r['pos']} | {r['team']} | {r['score']:.4f} |")
+        flag = (status_flags or {}).get(r["player_id"])
+        name = f"{r['name']} **({flag})**" if flag else r["name"]
+        lines.append(f"| {r['rank']} | {name} | {r['pos']} | {r['team']} | {r['score']:.4f} |")
     return "\n".join(lines) + "\n"
 
 
