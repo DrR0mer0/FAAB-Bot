@@ -176,6 +176,7 @@ CREATE TABLE IF NOT EXISTS tr_ownership (
   percent_owned REAL,
   percent_change REAL,
   trending_count INTEGER,
+  injury_status TEXT,
   PRIMARY KEY (snapshot_id, source, external_id)
 );
 
@@ -223,6 +224,9 @@ def init_schema(con):
     # raw_zlib is the explicit one-time `migrate-ownership-raw` command.
     if "raw_file" not in table_columns(con, "tr_ownership_snapshots"):
         con.execute("ALTER TABLE tr_ownership_snapshots ADD COLUMN raw_file TEXT")
+    # ESPN's injuryStatus, parsed from the same response from 2026-10-04 on (NULL in earlier snapshots)
+    if "injury_status" not in table_columns(con, "tr_ownership"):
+        con.execute("ALTER TABLE tr_ownership ADD COLUMN injury_status TEXT")
     for t in APPEND_ONLY_TABLES:
         create_append_only_triggers(con, t)
     con.commit()

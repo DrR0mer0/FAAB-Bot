@@ -23,6 +23,7 @@ from unittest import mock
 import numpy as np
 
 import baselines
+import injuries
 import ledger
 import ownership
 import report
@@ -858,6 +859,233 @@ class TestLogInternationalWeek(unittest.TestCase):
         self.assertEqual(json.loads(self.rows("SELECT run_config_json FROM tr_runs")[0][0])["excluded_before_cutoff"], [])
 
 
+# ------------------------------------------------- injury designations: pool rule
+
+INJURY_COLS = ["season", "season_type", "game_type", "team", "week", "gsis_id", "position", "full_name", "report_status",
+               "practice_status"]
+
+
+def injury_csv(rows):
+    """rows: (week, gsis_id, report_status[, game_type]) -> the nflverse file's bytes."""
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=INJURY_COLS)
+    w.writeheader()
+    for week, pid, status, *rest in rows:
+        w.writerow(dict(season=2026, season_type="REG", game_type=rest[0] if rest else "REG", team="X", week=week, gsis_id=pid,
+                        position="WR", full_name=pid, report_status=status, practice_status="Limited Participation in Practice"))
+    return buf.getvalue().encode("utf-8")
+
+
+NOW = utc("2026-10-11T14:00:00")   # a Sunday, 07:00 Pacific
+WEEK5_REPORT = injury_csv([(5, "out1", "Out"), (5, "dbt1", "Doubtful"), (5, "q1", "Questionable"), (5, "practice_only", ""),
+                           (4, "last_week_out", "Out"), (5, "playoff_row", "Out", "WC")])
+EXCLUDE = ("Out", "Doubtful")
+
+
+def fetched(raw=WEEK5_REPORT, age_hours=8, ok=True, error=None):
+    return lambda season: {"ok": ok, "raw_bytes": raw if ok else None, "error": error, "url": "u",
+                           "last_modified": (NOW - timedelta(hours=age_hours)) if (ok and age_hours is not None) else None}
+
+
+# what score_week.py writes as JSON, cut down to what its markdown renderer reads
+PREDICTION_OUTPUT = {"season": 2026, "week": 5, "generated_at": "t", "model": {"filename": "m.joblib", "git_commit": "abc"},
+          "counts": dict(total_eligible=3, after_position_filter=3, stable_scored=3, released_from_offseason_suppression=0,
+                         unavailable_suppressed=0, already_played=0, team_changed_suppressed=0, new_competitor_suppressed=0,
+                         new_competitor_via_production_only=0, new_competitor_via_draft_only=0, new_competitor_via_both=0),
+          "top": [{"rank": 1, "player_id": "a", "name": "Alpha One", "pos": "WR", "team": "MIN", "score": 0.6134},
+                  {"rank": 2, "player_id": "b", "name": "Bravo Two", "pos": "RB", "team": "KC", "score": 0.5},
+                  {"rank": 3, "player_id": "c", "name": "Charlie Three", "pos": "TE", "team": "TB", "score": 0.4}]}
+
+
+class TestInjuryDesignations(unittest.TestCase):
+    def resolve(self, fetch, espn=None):
+        with mock.patch("sys.stderr"):
+            return injuries.resolve(2026, 5, NOW, CFG["run"]["injury_report_max_age_hours"], espn, fetch=fetch)
+
+    def test_rule_is_out_plus_doubtful_and_the_nightly_update_fits_the_age_limit(self):
+        self.assertEqual(CFG["run"]["pool_exclude_injury_statuses"], ["Out", "Doubtful"])
+        self.assertGreater(CFG["run"]["injury_report_max_age_hours"], 8)    # 06:00 UTC update, 14:00 UTC run
+        self.assertLess(CFG["run"]["injury_report_max_age_hours"], 24)      # yesterday's file must count as missing
+
+    def test_parse_week_keeps_only_this_weeks_regular_season_designations(self):
+        status, n = injuries.parse_week(WEEK5_REPORT, 2026, 5)
+        self.assertEqual(status, {"out1": "Out", "dbt1": "Doubtful", "q1": "Questionable"})
+        self.assertEqual(n, 4)   # practice-only row is listed, has no designation; week 4 and the playoff row are not this report
+
+    def test_fresh_official_report_decides_and_espn_is_only_a_cross_check(self):
+        r = self.resolve(fetched(), espn={"out1": "OUT", "espn_only": "OUT", "q1": "QUESTIONABLE", "x": "ACTIVE", "ir": "INJURY_RESERVE"})
+        self.assertEqual((r["source"], r["reason"]), ("nflverse", None))
+        self.assertEqual(r["status"], {"out1": "Out", "dbt1": "Doubtful", "q1": "Questionable"})
+        self.assertEqual(r["espn"], {"out1": "Out", "espn_only": "Out", "q1": "Questionable"})
+        self.assertEqual(r["sha256"], hashlib.sha256(WEEK5_REPORT).hexdigest())
+
+    def test_missing_nightly_update_falls_back_to_espn(self):
+        for fetch, why in ((fetched(age_hours=26), "nightly update is missing"),
+                           (fetched(ok=False, error="HTTP 503"), "fetch failed (HTTP 503)"),
+                           (fetched(raw=injury_csv([(4, "a", "Out")])), "no rows for 2026 week 5"),
+                           (fetched(age_hours=None), "age is unknown"),
+                           (fetched(raw=b"\xff\xfe not a csv"), "could not be parsed")):
+            with self.subTest(why=why):
+                r = self.resolve(fetch, espn={"espn_only": "OUT", "d": "DOUBTFUL", "x": "ACTIVE"})
+                self.assertEqual(r["source"], "espn-fallback")
+                self.assertIn(why, r["reason"])
+                self.assertEqual(r["status"], {"espn_only": "Out", "d": "Doubtful"})
+
+    def test_no_source_at_all_is_recorded_as_unavailable_and_excludes_nobody(self):
+        for espn in (None, {}):   # no snapshot / a snapshot from before the status was parsed
+            r = self.resolve(fetched(ok=False, error="ConnectionError"), espn=espn)
+            self.assertEqual((r["source"], r["status"]), ("unavailable", {}))
+
+    def test_fetch_never_raises(self):
+        session = mock.Mock()
+        session.get.side_effect = ConnectionError("down")
+        got = injuries.fetch_nflverse(2026, session=session)
+        self.assertFalse(got["ok"])
+        self.assertIn("ConnectionError", got["error"])
+        session.get.side_effect = None
+        session.get.return_value = mock.Mock(status_code=200, content=b"x", headers={"Last-Modified": "Sun, 04 Oct 2026 13:08:58 GMT"})
+        self.assertEqual(injuries.fetch_nflverse(2026, session=session)["last_modified"], utc("2026-10-04T13:08:58"))
+
+    def test_split_pool_and_disagreements(self):
+        pool = [{"player_id": p, "name": p} for p in ("out1", "dbt1", "q1", "healthy", "espn_only")]
+        kept, held = injuries.split_pool(pool, {"out1": "Out", "dbt1": "Doubtful", "q1": "Questionable"}, EXCLUDE)
+        self.assertEqual([r["player_id"] for r in kept], ["q1", "healthy", "espn_only"])   # Questionable stays in
+        self.assertEqual(held, {"out1": "Out", "dbt1": "Doubtful"})
+        d = injuries.disagreements(pool, {"out1": "Out", "dbt1": "Doubtful", "q1": "Questionable"},
+                                   {"out1": "Out", "espn_only": "Out", "q1": "Questionable"}, EXCLUDE)
+        self.assertEqual(d, [{"player_id": "dbt1", "name": "dbt1", "nflverse": "Doubtful", "espn": None},
+                             {"player_id": "espn_only", "name": "espn_only", "nflverse": None, "espn": "Out"}])
+        self.assertEqual(injuries.disagreements(pool, None, {"out1": "Out"}, EXCLUDE), [])
+
+
+class TestEspnInjuryStatus(unittest.TestCase):
+    def test_status_is_parsed_stored_and_optional(self):
+        payload = espn_payload()
+        payload["players"][0]["player"]["injuryStatus"] = "OUT"
+        payload["players"][1]["player"]["injuryStatus"] = "ACTIVE"
+        ok, _reason, rows = ownership.validate_espn(payload)
+        self.assertTrue(ok)                                      # players with no injuryStatus don't fail validation
+        self.assertEqual([r["injury_status"] for r in rows[:3]], ["OUT", "ACTIVE", None])
+        con = mem_db()
+        fetch = lambda season: {"ok": True, "error": None, "http_status": 200, "url": "u", "raw_bytes": b"{}", "rows": rows}
+        with tempfile.TemporaryDirectory() as d:
+            s = ownership.take_snapshot(con, 2026, d, crosswalk={"1000": "g0", "1001": "g1", "1002": "g2"}, espn_fetch=fetch,
+                                        include_sleeper=False)
+        self.assertEqual(ownership.injury_status_by_player(con, s["espn_snapshot_id"]), {"g0": "OUT", "g1": "ACTIVE"})
+
+    def test_existing_db_gets_the_column_and_old_snapshots_read_as_no_status(self):
+        con = sqlite3.connect(":memory:")
+        con.row_factory = sqlite3.Row
+        con.execute("CREATE TABLE tr_ownership (snapshot_id INTEGER NOT NULL, source TEXT NOT NULL, external_id TEXT NOT NULL, "
+                    "player_id TEXT, name TEXT, position TEXT, team TEXT, percent_owned REAL, percent_change REAL, "
+                    "trending_count INTEGER, PRIMARY KEY (snapshot_id, source, external_id))")
+        con.execute("INSERT INTO tr_ownership (snapshot_id, source, external_id, player_id, percent_owned) VALUES (7, 'espn', '1', 'g1', 99.0)")
+        ledger.init_schema(con)
+        self.assertIn("injury_status", ledger.table_columns(con, "tr_ownership"))
+        self.assertEqual(ownership.injury_status_by_player(con, 7), {})
+        self.assertEqual(ownership.ownership_by_player(con, 7), {"g1": 99.0})
+
+
+class TestLogInjuryPoolRule(TestLogInternationalWeek):
+    """CLI-level `log` on a live (no --as-of) run with the injury report stubbed:
+    Out/Doubtful players are out of the pool for every model, the run records
+    what was excluded and why, and the prediction JSON is untouched."""
+
+    # the parent's own tests run once, there
+    test_sun_run_made_before_any_game_still_leaves_out_thursday_and_international_players = None
+    test_sun_run_is_accepted_between_the_international_kickoff_and_one_pm = None
+    test_thu_run_keeps_the_whole_pool_international_players_included = None
+
+    NOW = utc("2026-10-04T14:00:00")   # Sunday 07:00 Pacific, before the 1 PM ET cutoff
+    REPORT = injury_csv([(4, "TEN-RB0", "Out"), (4, "BAL-WR2", "Doubtful"), (4, "KC-TE5", "Questionable"),
+                         (4, "IND-RB0", "Out"), (3, "LV-RB0", "Out")])
+
+    def fake_run(self, cmd, **_kw):
+        if "rev-parse" in cmd:
+            return mock.Mock(returncode=0, stdout="deadbeef\n", stderr="")
+        out = Path(cmd[cmd.index("--json-out") + 1])
+        out.parent.mkdir(parents=True, exist_ok=True)
+        top = [dict(r, rank=i) for i, r in enumerate(self.scored_pool, start=1)]
+        payload = json.dumps(dict(PREDICTION_OUTPUT, week=4, scored_pool=self.scored_pool, top=top))
+        for path in (out, out.with_name(out.stem + "_shadow.json")):
+            path.write_text(payload, encoding="utf-8")
+            path.with_suffix(".md").write_text("as score_week.py wrote it", encoding="utf-8")
+        return mock.Mock(returncode=0, stdout="", stderr="")
+
+    def add_espn_snapshot(self, statuses):
+        con = ledger.connect(self.db)
+        sid = con.execute("INSERT INTO tr_ownership_snapshots (taken_at, source, ok) VALUES ('2026-10-04T13:30:00+00:00', 'espn', 1)").lastrowid
+        for r in self.scored_pool:
+            con.execute("INSERT INTO tr_ownership (snapshot_id, source, external_id, player_id, percent_owned, injury_status) "
+                        "VALUES (?, 'espn', ?, ?, 10.0, ?)", (sid, r["player_id"], r["player_id"], statuses.get(r["player_id"], "ACTIVE")))
+        con.commit()
+        con.close()
+
+    def log_live(self, fetch, *extra):
+        argv = ["log", "--season", "2026", "--week", "4", "--slot", "sun", "--db", str(self.db),
+                "--predictions-dir", str(self.dir / "preds"), "--export-dir", str(self.dir / "export"),
+                "--raw-dir", str(self.dir / "raw"), "--injuries-raw-dir", str(self.dir / "raw_injuries"), *extra]
+        out = io.StringIO()
+        with mock.patch.object(tracker.subprocess, "run", side_effect=self.fake_run), \
+                mock.patch.object(tracker, "utcnow", return_value=self.NOW), \
+                mock.patch.object(tracker.injuries, "fetch_nflverse", side_effect=fetch), \
+                mock.patch("sys.stderr"), contextlib.redirect_stdout(out):
+            rc = tracker.main(argv)
+        return rc, out.getvalue()
+
+    def fresh(self, season):
+        return {"ok": True, "raw_bytes": self.REPORT, "error": None, "url": "u", "last_modified": self.NOW - timedelta(hours=8)}
+
+    def run_config(self):
+        return json.loads(self.rows("SELECT run_config_json FROM tr_runs")[0][0])
+
+    def test_out_and_doubtful_are_left_out_for_every_model_and_recorded(self):
+        self.add_espn_snapshot({"TEN-RB0": "OUT", "KC-TE5": "QUESTIONABLE", "LV-WR3": "OUT"})
+        rc, out = self.log_live(self.fresh)
+        self.assertEqual(rc, 0)
+        pool = {r["player_id"] for r in self.rows("SELECT player_id FROM tr_pool")}
+        self.assertEqual(len(pool), 22)                                    # 24 after the slot cutoff, minus Out and Doubtful
+        self.assertFalse(pool & {"TEN-RB0", "BAL-WR2"})
+        self.assertTrue({"KC-TE5", "LV-WR3"} <= pool)                      # Questionable stays; ESPN alone doesn't exclude
+        picks = self.rows("SELECT DISTINCT model_name, player_id FROM tr_predictions")
+        self.assertEqual({r["model_name"] for r in picks}, {"odds_prod", "odds_shadow", "heuristic", "last_week", "dart"})
+        self.assertFalse([r for r in picks if r["player_id"] in ("TEN-RB0", "BAL-WR2")])
+        cfg = self.run_config()
+        self.assertEqual(cfg["pool_rule"], injuries.POOL_RULE)
+        inj = cfg["injury"]
+        self.assertEqual((inj["source"], inj["reason"], inj["exclude_statuses"]), ("nflverse", None, ["Out", "Doubtful"]))
+        self.assertEqual(inj["excluded"], {"TEN-RB0": "Out", "BAL-WR2": "Doubtful"})   # IND-RB0 was already out via the cutoff
+        self.assertEqual(inj["nflverse_sha256"], hashlib.sha256(self.REPORT).hexdigest())
+        self.assertEqual(sorted((d["player_id"], d["nflverse"], d["espn"]) for d in inj["disagreements"]),
+                         [("BAL-WR2", "Doubtful", None), ("LV-WR3", None, "Out")])
+        self.assertIn("sources disagree on LV-WR3", out)
+        # the report that decided the pool is kept, outside the DB, under the recorded name
+        self.assertEqual(gzip.decompress((self.dir / "raw_injuries" / inj["nflverse_file"]).read_bytes()), self.REPORT)
+
+    def test_stale_report_falls_back_to_espn_and_says_so(self):
+        self.add_espn_snapshot({"LV-WR3": "OUT", "KC-RB1": "DOUBTFUL", "TEN-RB0": "QUESTIONABLE"})
+        stale = lambda season: dict(self.fresh(season), last_modified=self.NOW - timedelta(hours=26))
+        self.assertEqual(self.log_live(stale)[0], 0)
+        inj = self.run_config()["injury"]
+        self.assertEqual(inj["source"], "espn-fallback")
+        self.assertIn("nightly update is missing", inj["reason"])
+        self.assertEqual(inj["excluded"], {"LV-WR3": "Out", "KC-RB1": "Doubtful"})
+        self.assertEqual(self.rows("SELECT COUNT(*) FROM tr_pool")[0][0], 22)
+
+    def test_no_source_still_logs_with_the_rule_recorded_as_not_applied(self):
+        down = lambda season: {"ok": False, "raw_bytes": None, "error": "ConnectionError", "url": "u", "last_modified": None}
+        self.assertEqual(self.log_live(down, "--skip-ownership")[0], 0)
+        inj = self.run_config()["injury"]
+        self.assertEqual((inj["source"], inj["excluded"]), ("unavailable", {}))
+        self.assertEqual(self.rows("SELECT COUNT(*) FROM tr_pool")[0][0], 24)
+
+    def test_as_of_run_never_fetches_and_leaves_the_markdown_alone(self):
+        with mock.patch.object(tracker.injuries, "fetch_nflverse", side_effect=AssertionError("no live report on an --as-of run")):
+            self.assertEqual(self.log("sun", "2026-10-04T14:00:00+00:00"), 0)
+        self.assertEqual(self.run_config()["injury"]["source"], "skipped")
+        self.assertEqual((self.dir / "preds" / "2026_week04.md").read_text(encoding="utf-8"), "as score_week.py wrote it")
+
+
 # ----------------------------------------------------------------- baselines
 
 class TestBaselines(unittest.TestCase):
@@ -1347,6 +1575,21 @@ class TestScoreEndToEnd(unittest.TestCase):
         self.con.execute("UPDATE nfl_games SET home_score = 20, home_team = 'ZZZ'")  # a team with no stat rows
         with self.assertRaises(tracker.Refused):
             self.score()
+
+    def test_run_logged_before_the_pool_rule_is_footnoted_and_a_run_under_it_is_not(self):
+        self.score()
+        legacy = "was logged before the Out/Doubtful pool rule existed"
+        self.assertIn(legacy, report.build_weekly_report(self.con, 2026, 5))
+        self.assertIn(legacy, report.build_season_report(self.con, 2026, CFG["report"]))
+        row = {k: self.con.execute("SELECT * FROM tr_runs").fetchone()[k] for k in ("run_id", "week", "run_slot")}
+        for source, expect in (("nflverse", None), ("espn-fallback", "using ESPN's injury status instead"),
+                               ("unavailable", "exclusion was NOT applied")):
+            cfg = json.dumps({"pool_rule": injuries.POOL_RULE, "injury": {"source": source}})
+            notes = report.pool_rule_notes([dict(row, run_config_json=cfg)])
+            self.assertEqual(len(notes), 0 if expect is None else 1)
+            if expect:
+                self.assertIn(expect, notes[0])
+                self.assertIn("week 5 `thu` run", notes[0])
 
     def test_exports_are_written_and_report_renders(self):
         self.score()

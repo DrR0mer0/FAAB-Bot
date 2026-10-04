@@ -15,7 +15,8 @@ frozen JSON into the append-only ledger, then draws the dart / heuristic /
 last_week baselines from that SAME pool. It REFUSES to log a run once the
 slot's kickoff cutoff has passed (see check_slot_window), and a slot's pool
 only ever holds players whose game kicks off at or after that cutoff (see
-split_pool_at_cutoff). `log --auto` is the scheduled-task form: it works out
+split_pool_at_cutoff) and who are not designated Out or Doubtful on the
+week's injury report at log time (see injuries.py). `log --auto` is the scheduled-task form: it works out
 the current week itself and quietly skips a week that has no such slot. See
 README.md ("Baseline tracker") for the hit definition and the full workflow.
 """
@@ -36,12 +37,14 @@ sys.path.insert(0, str(REPO_ROOT / "model"))
 sys.path.insert(0, str(REPO_ROOT / "data"))
 
 import baselines  # noqa: E402
+import injuries  # noqa: E402
 import ledger  # noqa: E402
 import ownership  # noqa: E402
 import report  # noqa: E402
 import scoring  # noqa: E402
 import snapcounts  # noqa: E402
-from score_week import KICKOFF_TZ, load_current_roster, load_kickoffs, parse_kickoff_utc  # noqa: E402 -- the one place kickoff timezone logic lives
+from score_week import (  # noqa: E402 -- the one place kickoff timezone logic lives
+    KICKOFF_TZ, load_current_roster, load_kickoffs, parse_kickoff_utc)
 from team_crosswalk import norm_team  # noqa: E402
 
 DEFAULT_DB = REPO_ROOT / "faab_history_core_v0_1.db"
@@ -50,6 +53,7 @@ DEFAULT_RAW_DIR = REPO_ROOT / "nflverse_raw"
 DEFAULT_EXPORT_DIR = TRACKER_DIR / "ledger_export"
 DEFAULT_REPORT_DIR = TRACKER_DIR / "reports"
 DEFAULT_OWNERSHIP_RAW_DIR = ownership.DEFAULT_RAW_DIR
+DEFAULT_INJURIES_RAW_DIR = REPO_ROOT / "raw" / "injuries"
 BASELINE_VERSIONS = {"dart": "dart-v1", "heuristic": "heuristic-v1", "last_week": "last_week-v1"}
 METRICS = ("top24_hits", "spike_hits", "total_points")
 MAIN_SLATE_ET = (13, 0)  # the Sunday main slate opens with the 1:00 PM Eastern window
@@ -354,6 +358,18 @@ def rebuild_dart_sets(con, run_id):
 
 # ---------------------------------------------------------------------- log
 
+def resolve_injuries(args, con, cfg, season, week, as_of, snap_id):
+    """The week's injury designations for this run (see injuries.resolve), or a
+    'skipped' result when the run can't use a live report: --skip-injuries, or
+    an --as-of (testing) run, where today's report would be from the future."""
+    if args.skip_injuries or args.as_of is not None:
+        return {"source": "skipped", "reason": "--skip-injuries" if args.skip_injuries else "--as-of run: no live injury report",
+                "status": {}, "nflverse": None, "espn": None, "raw_bytes": None, "sha256": None, "last_modified": None}
+    espn_status = ownership.injury_status_by_player(con, snap_id) if snap_id is not None else None
+    return injuries.resolve(season, week, as_of, cfg["run"]["injury_report_max_age_hours"], espn_status,
+                            fetch=injuries.fetch_nflverse)
+
+
 def resolve_ownership(con, cfg, season, as_of, allow_live, raw_dir):
     """-> (status, snapshot_id, {gsis: percent_owned}). Never raises."""
     max_age = cfg["run"]["ownership_max_age_hours"]
@@ -438,14 +454,34 @@ def cmd_log(args, con):
     if early:
         print(f"[INFO] {len(early)} scored player(s) left out of the {slot} pool: their game kicks off before the "
               f"slot's cutoff ({cutoff.isoformat()}) -- teams {sorted({r['team'] for r in early})}")
-    if not pool_src:
-        raise Refused("O.D.D.S. scored an empty pool -- nothing to log")
 
     allow_live = args.as_of is None and not args.skip_ownership
     if args.skip_ownership:
         status, snap_id, own = "skipped", None, {}
     else:
         status, snap_id, own = resolve_ownership(con, cfg, season, as_of, allow_live, args.ownership_raw_dir)
+
+    # Pool rule: nobody designated Out/Doubtful at log time, for every model alike (see injuries.py).
+    exclude = tuple(cfg["run"]["pool_exclude_injury_statuses"])
+    inj = resolve_injuries(args, con, cfg, season, week, as_of, snap_id)
+    differ = injuries.disagreements(pool_src, inj["nflverse"], inj["espn"], exclude)
+    names = {r["player_id"]: r["name"] for r in pool_src}
+    pool_src, held_out = injuries.split_pool(pool_src, inj["status"], exclude)
+    print(f"[INJURY] source {inj['source']}" + (f" ({inj['reason']})" if inj["reason"] else "") + f": {len(held_out)} scored "
+          f"player(s) left out of the pool as {'/'.join(exclude)}"
+          + (": " + ", ".join(f"{names[p]} ({s})" for p, s in sorted(held_out.items(), key=lambda kv: names[kv[0]])) if held_out else ""))
+    for d in differ:
+        print(f"[INJURY] sources disagree on {d['name']}: nflverse {d['nflverse'] or 'not designated'} vs ESPN "
+              f"{d['espn'] or 'not designated'} -- nflverse decides")
+    injury_file = None
+    if inj["raw_bytes"]:
+        try:
+            injury_file = ownership.write_raw(args.injuries_raw_dir, as_of.isoformat(), f"nflverse_injuries_{season}",
+                                              inj["raw_bytes"], suffix=".csv.gz")
+        except Exception as e:  # noqa: BLE001 -- the SHA-256 below still identifies the report that was used
+            injuries._banner(f"could not keep a copy of the injury report under {args.injuries_raw_dir} ({type(e).__name__}: {e})")
+    if not pool_src:
+        raise Refused("O.D.D.S. scored an empty pool -- nothing to log")
     thr = cfg["run"]["sleeper_owned_pct_max"]
     ids = [r["player_id"] for r in pool_src]
     lw = baselines.last_week_and_target_share(store, ids, season, week)
@@ -482,8 +518,13 @@ def cmd_log(args, con):
         "pool_size": len(pool), "n_draws": args.n_draws or cfg["run"]["n_draws"], "dart_seed": seed,
         "snap_week_used": f"{latest_snap[0]}w{latest_snap[1]:02d}" if latest_snap else None,
         "ownership_snapshot_id": snap_id, "ownership_status": status, "ownership_matched": n_matched,
-        "run_config_json": json.dumps({"run": cfg["run"], "hit_config_hash": scoring.config_hash(cfg), "slot_rule": SLOT_RULE,
-                                       "excluded_before_cutoff": sorted(r["player_id"] for r in early)}, sort_keys=True)}
+        "run_config_json": json.dumps({
+            "run": cfg["run"], "hit_config_hash": scoring.config_hash(cfg), "slot_rule": SLOT_RULE,
+            "excluded_before_cutoff": sorted(r["player_id"] for r in early), "pool_rule": injuries.POOL_RULE,
+            "injury": {"source": inj["source"], "reason": inj["reason"], "exclude_statuses": list(exclude),
+                       "excluded": held_out, "disagreements": differ, "nflverse_sha256": inj["sha256"],
+                       "nflverse_last_modified": inj["last_modified"].isoformat() if inj["last_modified"] else None,
+                       "nflverse_file": injury_file}}, sort_keys=True)}
     with con:
         ledger.insert_rows(con, "tr_runs", [run_row])
         ledger.insert_rows(con, "tr_pool", pool)
@@ -745,6 +786,8 @@ def build_parser():
         p.add_argument("--export-dir", default=str(DEFAULT_EXPORT_DIR))
         p.add_argument("--ownership-raw-dir", default=str(DEFAULT_OWNERSHIP_RAW_DIR),
                        help="where raw roster-%% responses are written, gzip-compressed (outside the DB)")
+        p.add_argument("--injuries-raw-dir", default=str(DEFAULT_INJURIES_RAW_DIR),
+                       help="where `log` keeps a gzip copy of the injury report each run's pool rule used")
 
     p = sub.add_parser("log", help="run O.D.D.S. + baselines and write to the ledger (before kickoff)")
     common(p)
@@ -759,6 +802,8 @@ def build_parser():
     p.add_argument("--n-draws", type=int, default=None)
     p.add_argument("--seed", type=int, default=None, help="dart seed (default: derived from season/week/slot)")
     p.add_argument("--skip-ownership", action="store_true")
+    p.add_argument("--skip-injuries", action="store_true",
+                   help="don't fetch the injury report: the Out/Doubtful pool rule is NOT applied (recorded with the run)")
     p.add_argument("--allow-stale-roster", action="store_true")
     p.set_defaults(fn=cmd_log)
 

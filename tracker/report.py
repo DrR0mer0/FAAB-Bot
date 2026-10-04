@@ -43,6 +43,27 @@ def pick_set_name(scope, k):
     return f"{scope}_k{k}"
 
 
+def pool_rule_notes(runs):
+    """Footnotes for runs whose pool was not built under the current pool rule
+    (Out/Doubtful players excluded per the official injury report)."""
+    notes = []
+    for run in runs:
+        cfg = json.loads(run["run_config_json"] or "{}")
+        label = f"week {run['week']} `{run['run_slot']}` run"
+        source = (cfg.get("injury") or {}).get("source")
+        if "pool_rule" not in cfg:
+            notes.append(f"**Pool rule:** the {label} was logged before the Out/Doubtful pool rule existed. Players already "
+                         f"ruled Out or Doubtful were still in its pool and could be picked -- by any model and by the "
+                         f"dart draws -- so some of its picks could not score. Its numbers are left as logged.")
+        elif source == "espn-fallback":
+            notes.append(f"**Pool rule:** for the {label} the official injury report was unavailable, so Out/Doubtful "
+                         f"players were excluded using ESPN's injury status instead.")
+        elif source in ("unavailable", "skipped"):
+            notes.append(f"**Pool rule:** for the {label} no injury designations were available, so the Out/Doubtful "
+                         f"exclusion was NOT applied; players already ruled out may have been in its pool.")
+    return notes
+
+
 def fmt_hits(h, n):
     if n is None or n == 0:
         return "-"
@@ -187,7 +208,7 @@ def build_weekly_report(con, season, week):
                 out += [f"### Top {k} -- {run['run_slot']} run ({run['run_timestamp'][:16].replace('T', ' ')} UTC)", ""] + tbl + [""]
         if not wrote:
             out += ["_No results for this section (no roster-% was available when the run was logged)._", ""]
-    out += ["## Caveats", ""] + [f"- {c}" for c in KNOWN_CAVEATS] + [""]
+    out += ["## Caveats", ""] + [f"- {c}" for c in KNOWN_CAVEATS + pool_rule_notes(runs)] + [""]
     return "\n".join(out)
 
 
@@ -204,11 +225,13 @@ def build_season_report(con, season, report_cfg):
     B, seed, min_weeks = report_cfg["bootstrap_resamples"], report_cfg["bootstrap_seed"], report_cfg["min_weeks_to_call"]
     per_week = {}  # (week) -> (res, pct)
     hashes = set()
+    used_runs = []
     for w in weeks:
         sid = latest_scoring_id(con, season, w)
         hashes.add(con.execute("SELECT hit_config_hash FROM tr_scorings WHERE scoring_id=?", (sid,)).fetchone()[0])
         rid = _week_run(con, season, w)
         per_week[w] = run_results(con, sid, rid)
+        used_runs.append(con.execute("SELECT * FROM tr_runs WHERE run_id=?", (rid,)).fetchone())
     ks = sorted({int(ps.split("_k")[1]) for (res, _p) in per_week.values() for (_m, ps) in res})
     out = [f"# O.D.D.S. vs the baselines -- {season} season to date", "",
            f"_{len(weeks)} scored week(s): {', '.join(str(w) for w in weeks)}. One run per week (the first snapshot)._", ""]
@@ -284,7 +307,7 @@ def build_season_report(con, season, report_cfg):
                        f"(95% CI {100 * lo:+.1f} to {100 * hi:+.1f}) over {n} week(s) -- {verdict}"
                        + (" (but see the small-sample note)." if n_weeks < min_weeks else "."))
     crowd = build_crowd_section(con, season)
-    out += [""] + crowd + ["", "## Caveats", ""] + [f"- {c}" for c in KNOWN_CAVEATS] + [""]
+    out += [""] + crowd + ["", "## Caveats", ""] + [f"- {c}" for c in KNOWN_CAVEATS + pool_rule_notes(used_runs)] + [""]
     return "\n".join(out)
 
 

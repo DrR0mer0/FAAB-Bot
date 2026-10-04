@@ -32,7 +32,9 @@
     "n_draws": 1000,
     "pools": ["all", "u50"],
     "sleeper_owned_pct_max": 50,
-    "ownership_max_age_hours": 36
+    "ownership_max_age_hours": 36,
+    "pool_exclude_injury_statuses": ["Out", "Doubtful"],
+    "injury_report_max_age_hours": 20
   },
   "report": {
     "min_weeks_to_call": 8,

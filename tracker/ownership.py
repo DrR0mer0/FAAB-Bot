@@ -127,6 +127,9 @@ def validate_espn(payload):
                 "position": ESPN_POSITIONS.get(pl.get("defaultPositionId")),
                 "team": None, "percent_owned": pct,
                 "percent_change": float(own["percentChange"]) if own.get("percentChange") is not None else None,
+                # ESPN's own (editorial) status: ACTIVE / QUESTIONABLE / DOUBTFUL / OUT / INJURY_RESERVE / ...
+                # Optional -- its absence must not fail a roster-% snapshot. See injuries.py for how it's used.
+                "injury_status": pl.get("injuryStatus"),
             })
     except (KeyError, TypeError, ValueError) as e:
         return False, f"unexpected response shape ({type(e).__name__}: {e})", []
@@ -188,19 +191,19 @@ def fetch_sleeper_trending(session=None, timeout=60):
     return out
 
 
-def raw_file_name(taken_at, source, sha256):
+def raw_file_name(taken_at, source, sha256, suffix=".json.gz"):
     ts = datetime.fromisoformat(taken_at).astimezone(timezone.utc)
-    return f"{ts:%Y%m%dT%H%M%SZ}_{source}_{sha256[:12]}.json.gz"
+    return f"{ts:%Y%m%dT%H%M%SZ}_{source}_{sha256[:12]}{suffix}"
 
 
-def write_raw(raw_dir, taken_at, source, raw):
+def write_raw(raw_dir, taken_at, source, raw, suffix=".json.gz"):
     """Write one raw response gzip-compressed under raw_dir and return the
     file's name. The file is read back and compared with `raw` before it gets
     its final name, and an existing file holding different bytes is never
     overwritten."""
     raw_dir = Path(raw_dir)
     raw_dir.mkdir(parents=True, exist_ok=True)
-    path = raw_dir / raw_file_name(taken_at, source, hashlib.sha256(raw).hexdigest())
+    path = raw_dir / raw_file_name(taken_at, source, hashlib.sha256(raw).hexdigest(), suffix)
     if path.exists():
         if gzip.decompress(path.read_bytes()) != raw:
             raise FileExistsError(f"{path} already exists with different content")
@@ -234,9 +237,10 @@ def store_snapshot(con, source, taken_at, fetched, parsed_rows, raw_dir):
     sid = cur.lastrowid
     con.executemany(
         "INSERT INTO tr_ownership (snapshot_id, source, external_id, player_id, name, position, team, "
-        "percent_owned, percent_change, trending_count) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        "percent_owned, percent_change, trending_count, injury_status) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         [(sid, source, r["external_id"], r.get("player_id"), r.get("name"), r.get("position"), r.get("team"),
-          r.get("percent_owned"), r.get("percent_change"), r.get("trending_count")) for r in parsed_rows])
+          r.get("percent_owned"), r.get("percent_change"), r.get("trending_count"), r.get("injury_status"))
+         for r in parsed_rows])
     con.commit()
     return sid
 
@@ -327,6 +331,14 @@ def latest_ok_espn(con, as_of, max_age_hours):
         "SELECT snapshot_id, taken_at FROM tr_ownership_snapshots WHERE source='espn' AND ok=1 "
         "AND taken_at <= ? AND taken_at >= ? ORDER BY taken_at DESC LIMIT 1", (as_of.isoformat(), cutoff)).fetchone()
     return (r[0], r[1]) if r else None
+
+
+def injury_status_by_player(con, snapshot_id):
+    """{gsis_id: ESPN injuryStatus} for one snapshot; {} for a snapshot taken
+    before the status was parsed (the column is NULL there)."""
+    return {r[0]: r[1] for r in con.execute(
+        "SELECT player_id, injury_status FROM tr_ownership WHERE snapshot_id=? AND player_id IS NOT NULL "
+        "AND injury_status IS NOT NULL", (snapshot_id,))}
 
 
 def ownership_by_player(con, snapshot_id):
