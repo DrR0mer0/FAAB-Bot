@@ -10,6 +10,8 @@ dart percentile, and bootstrap 95% confidence intervals -- resampling WEEKS
 week (the first snapshot: thu if it exists, else sun), like verify_week.py.
 """
 import json
+from datetime import datetime
+
 import numpy as np
 
 # A bootstrap over fewer weeks than this is a zero-width or meaningless interval; show the point estimate only.
@@ -61,6 +63,31 @@ def pool_rule_notes(runs):
         elif source in ("unavailable", "skipped"):
             notes.append(f"**Pool rule:** for the {label} no injury designations were available, so the Out/Doubtful "
                          f"exclusion was NOT applied; players already ruled out may have been in its pool.")
+    return notes
+
+
+STALE_NOTE_HOURS_DEFAULT = 12
+
+
+def ownership_notes(con, runs):
+    """Footnotes about the roster-% snapshot behind a run's under-50% pool: one
+    that was not taken the same morning (older than the run's own
+    ownership_stale_note_hours at log time)."""
+    notes = []
+    for run in runs:
+        if run["ownership_snapshot_id"] is None:
+            continue
+        snap = con.execute("SELECT taken_at FROM tr_ownership_snapshots WHERE snapshot_id=?", (run["ownership_snapshot_id"],)).fetchone()
+        if snap is None:
+            continue
+        cfg = json.loads(run["run_config_json"] or "{}")
+        limit = (cfg.get("run") or {}).get("ownership_stale_note_hours", STALE_NOTE_HOURS_DEFAULT)
+        age_h = (datetime.fromisoformat(run["run_timestamp"]) - datetime.fromisoformat(snap["taken_at"])).total_seconds() / 3600
+        if age_h > limit:
+            notes.append(f"**Roster-%:** the week {run['week']} `{run['run_slot']}` run used a roster-% snapshot that was "
+                         f"{age_h:.0f} hours old when the run was logged (taken {snap['taken_at'][:16].replace('T', ' ')} UTC), "
+                         f"not that morning's. Its under-50% pool reflects ownership as of then; players whose ownership "
+                         f"crossed 50% in between are on the wrong side of the line.")
     return notes
 
 
@@ -208,7 +235,7 @@ def build_weekly_report(con, season, week):
                 out += [f"### Top {k} -- {run['run_slot']} run ({run['run_timestamp'][:16].replace('T', ' ')} UTC)", ""] + tbl + [""]
         if not wrote:
             out += ["_No results for this section (no roster-% was available when the run was logged)._", ""]
-    out += ["## Caveats", ""] + [f"- {c}" for c in KNOWN_CAVEATS + pool_rule_notes(runs)] + [""]
+    out += ["## Caveats", ""] + [f"- {c}" for c in KNOWN_CAVEATS + pool_rule_notes(runs) + ownership_notes(con, runs)] + [""]
     return "\n".join(out)
 
 
@@ -307,7 +334,7 @@ def build_season_report(con, season, report_cfg):
                        f"(95% CI {100 * lo:+.1f} to {100 * hi:+.1f}) over {n} week(s) -- {verdict}"
                        + (" (but see the small-sample note)." if n_weeks < min_weeks else "."))
     crowd = build_crowd_section(con, season)
-    out += [""] + crowd + ["", "## Caveats", ""] + [f"- {c}" for c in KNOWN_CAVEATS + pool_rule_notes(used_runs)] + [""]
+    out += [""] + crowd + ["", "## Caveats", ""] + [f"- {c}" for c in KNOWN_CAVEATS + pool_rule_notes(used_runs) + ownership_notes(con, used_runs)] + [""]
     return "\n".join(out)
 
 

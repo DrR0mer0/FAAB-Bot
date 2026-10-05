@@ -1684,6 +1684,22 @@ class TestScoreEndToEnd(unittest.TestCase):
                 self.assertIn(expect, notes[0])
                 self.assertIn("week 5 `thu` run", notes[0])
 
+    def test_run_on_a_roster_snapshot_older_than_twelve_hours_is_footnoted(self):
+        self.assertEqual(CFG["run"]["ownership_stale_note_hours"], 12)
+        self.assertLess(CFG["run"]["ownership_stale_note_hours"], CFG["run"]["ownership_max_age_hours"])
+        run = dict(self.con.execute("SELECT * FROM tr_runs").fetchone())      # logged 2026-10-08T12:00 UTC
+        for sid, taken in ((1, "2026-10-08T11:30:00+00:00"), (2, "2026-10-07T11:30:00+00:00")):
+            self.con.execute("INSERT INTO tr_ownership_snapshots (snapshot_id, taken_at, source, ok) VALUES (?, ?, 'espn', 1)", (sid, taken))
+        self.assertEqual(report.ownership_notes(self.con, [dict(run, ownership_snapshot_id=None)]), [])   # no snapshot: nothing to say here
+        self.assertEqual(report.ownership_notes(self.con, [dict(run, ownership_snapshot_id=1)]), [])      # that morning's
+        notes = report.ownership_notes(self.con, [dict(run, ownership_snapshot_id=2)])                    # yesterday's
+        self.assertEqual(len(notes), 1)
+        self.assertIn("week 5 `thu` run used a roster-% snapshot that was 24 hours old", notes[0])
+        self.assertIn("taken 2026-10-07 11:30 UTC", notes[0])
+        # a run's own limit, stored with it at log time, wins over today's default
+        strict = dict(run, ownership_snapshot_id=1, run_config_json=json.dumps({"run": {"ownership_stale_note_hours": 0.25}}))
+        self.assertEqual(len(report.ownership_notes(self.con, [strict])), 1)
+
     def test_exports_are_written_and_report_renders(self):
         self.score()
         self.assertTrue(list(self.export.glob("2026_week05_scoring_*.jsonl")))

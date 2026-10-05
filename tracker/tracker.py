@@ -398,6 +398,10 @@ def resolve_ownership(con, cfg, season, as_of, allow_live, raw_dir):
         ownership._banner("no usable ESPN roster-% snapshot -- logging WITHOUT ownership; the sleeper (under-50%) "
                           "scoreboard will be empty for this run")
         return "unavailable", None, {}
+    age_h = (as_of - datetime.fromisoformat(found[1])).total_seconds() / 3600
+    if age_h > cfg["run"]["ownership_stale_note_hours"]:
+        print(f"[WARN] roster-% snapshot {found[0]} is {age_h:.0f}h old (taken {found[1]}) -- not this morning's; the "
+              f"under-{cfg['run']['sleeper_owned_pct_max']}% pool uses it anyway (limit {max_age}h) and reports will footnote it")
     return "ok", found[0], ownership.ownership_by_player(con, found[0])
 
 

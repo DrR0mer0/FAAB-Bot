@@ -33,6 +33,7 @@
     "pools": ["all", "u50"],
     "sleeper_owned_pct_max": 50,
     "ownership_max_age_hours": 36,
+    "ownership_stale_note_hours": 12,
     "pool_exclude_injury_statuses": ["Out", "Doubtful"],
     "injury_report_max_age_hours": 20
   },
