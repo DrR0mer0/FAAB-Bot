@@ -1204,6 +1204,68 @@ class TestOwnership(unittest.TestCase):
             self.assertFalse(ok)
             self.assertEqual(rows, [])
 
+    @staticmethod
+    def without_ownership(n_missing, n=400):
+        """A healthy payload in which the last n_missing players are listed with no `ownership` block yet."""
+        payload = espn_payload(n=n)
+        for e in payload["players"][n - n_missing:]:
+            del e["player"]["ownership"]
+        return payload
+
+    def test_record_without_ownership_is_skipped_and_counted_not_fatal(self):
+        """2026-10-05: one newly added player (of 961) had no `ownership` block and the whole snapshot failed."""
+        ok, reason, rows, skipped = ownership.parse_espn(self.without_ownership(1))
+        self.assertTrue(ok, reason)
+        self.assertEqual(len(rows), 399)
+        self.assertEqual(skipped, [{"external_id": "1399", "name": "P399"}])
+        self.assertNotIn("1399", {r["external_id"] for r in rows})
+        null_block = espn_payload()
+        null_block["players"][5]["player"]["ownership"] = None                 # present but empty: same thing
+        null_block["players"][6]["player"]["ownership"] = {"percentChange": 0.1}
+        self.assertEqual([s["name"] for s in ownership.parse_espn(null_block)[3]], ["P5", "P6"])
+
+    def test_snapshot_fails_only_when_too_few_records_carry_ownership(self):
+        self.assertEqual(ownership.MIN_ESPN_VALID_SHARE, 0.98)
+        self.assertTrue(ownership.parse_espn(self.without_ownership(8))[0])    # 392/400 = 98.0%: still a snapshot
+        ok, reason, rows, skipped = ownership.parse_espn(self.without_ownership(9))   # 97.75%
+        self.assertFalse(ok)
+        self.assertEqual(rows, [])
+        self.assertEqual(len(skipped), 9)
+        self.assertIn("only 391 of 400 player records carry ownership data", reason)
+        ok, reason, rows, _ = ownership.parse_espn(self.without_ownership(400))       # the field moved for everyone
+        self.assertFalse(ok)
+        self.assertIn("only 0 of 400", reason)
+        self.assertIn("the field has probably moved", reason)
+
+    def test_skipped_records_are_stored_as_a_count_and_reported(self):
+        con = mem_db()
+        payload = self.without_ownership(2)
+
+        def fetch(season):
+            ok, reason, rows, skipped = ownership.parse_espn(payload)
+            return {"ok": ok, "error": None if ok else reason, "http_status": 200, "url": "u", "raw_bytes": b"{}",
+                    "rows": rows, "skipped": skipped}
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(out):
+            s = ownership.take_snapshot(con, 2026, d, crosswalk={}, espn_fetch=fetch, include_sleeper=False)
+        self.assertEqual((s["espn_ok"], s["espn_rows"], s["espn_skipped"]), (True, 398, 2))
+        snap = con.execute("SELECT ok, n_rows, n_skipped FROM tr_ownership_snapshots").fetchone()
+        self.assertEqual(tuple(snap), (1, 398, 2))
+        self.assertEqual(con.execute("SELECT COUNT(*) FROM tr_ownership").fetchone()[0], 398)
+        self.assertIn("[OWNERSHIP NOTE] ESPN: skipped 2 of 400 player record(s)", out.getvalue())
+        self.assertIn("P398, P399", out.getvalue())
+        self.assertIsNotNone(ownership.latest_ok_espn(con, datetime.now(timezone.utc) + timedelta(seconds=5), 36))  # usable by `log`
+
+    def test_existing_snapshots_table_gets_the_skip_count_column(self):
+        con = sqlite3.connect(":memory:")
+        con.row_factory = sqlite3.Row
+        con.execute("CREATE TABLE tr_ownership_snapshots (snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT, taken_at TEXT NOT NULL, "
+                    "source TEXT NOT NULL, url TEXT, ok INTEGER NOT NULL, error TEXT, http_status INTEGER, n_rows INTEGER, "
+                    "raw_sha256 TEXT, raw_file TEXT)")
+        con.execute("INSERT INTO tr_ownership_snapshots (taken_at, source, ok, n_rows) VALUES ('t', 'espn', 1, 960)")
+        ledger.init_schema(con)
+        self.assertIsNone(con.execute("SELECT n_skipped FROM tr_ownership_snapshots").fetchone()[0])
+
     def test_failure_is_recorded_loudly_and_never_raises(self):
         con = mem_db()
         failing = lambda season: {"ok": False, "error": "HTTP 500", "rows": [], "raw_bytes": b"oops", "http_status": 500, "url": "u"}

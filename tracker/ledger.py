@@ -162,7 +162,8 @@ CREATE TABLE IF NOT EXISTS tr_ownership_snapshots (
   http_status INTEGER,
   n_rows INTEGER,
   raw_sha256 TEXT,
-  raw_file TEXT
+  raw_file TEXT,
+  n_skipped INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS tr_ownership (
@@ -224,6 +225,9 @@ def init_schema(con):
     # raw_zlib is the explicit one-time `migrate-ownership-raw` command.
     if "raw_file" not in table_columns(con, "tr_ownership_snapshots"):
         con.execute("ALTER TABLE tr_ownership_snapshots ADD COLUMN raw_file TEXT")
+    # player records left out of an otherwise valid response for lack of ownership data (NULL before 2026-10-05)
+    if "n_skipped" not in table_columns(con, "tr_ownership_snapshots"):
+        con.execute("ALTER TABLE tr_ownership_snapshots ADD COLUMN n_skipped INTEGER")
     # ESPN's injuryStatus, parsed from the same response from 2026-10-04 on (NULL in earlier snapshots)
     if "injury_status" not in table_columns(con, "tr_ownership"):
         con.execute("ALTER TABLE tr_ownership ADD COLUMN injury_status TEXT")

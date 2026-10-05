@@ -768,7 +768,9 @@ def cmd_report(args, con):
 @with_db
 def cmd_snapshot(args, con):
     s = ownership.take_snapshot(con, args.season or default_season(), args.ownership_raw_dir)
-    print(f"[OWNERSHIP] ESPN {'ok' if s['espn_ok'] else 'FAILED'}: {s['espn_rows']} players, {s['espn_matched']} matched to gsis_id "
+    print(f"[OWNERSHIP] ESPN {'ok' if s['espn_ok'] else 'FAILED'}: {s['espn_rows']} players"
+          + (f" ({s['espn_skipped']} record(s) skipped: no ownership data)" if s["espn_ok"] and s["espn_skipped"] else "")
+          + f", {s['espn_matched']} matched to gsis_id "
           f"(snapshot {s['espn_snapshot_id']}); Sleeper trending {'ok' if s['sleeper_ok'] else 'FAILED'}")
     return 0 if s["espn_ok"] else 1
 

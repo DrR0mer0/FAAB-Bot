@@ -57,6 +57,12 @@ SLEEPER_PLAYERS_URL = "https://api.sleeper.app/v1/players/nfl"
 
 MIN_ESPN_ROWS = 300       # a healthy response is ~960 QB/RB/WR/TE
 MIN_ESPN_HIGH_OWNED = 5   # sanity: at least this many players >= 90% owned
+# Share of player records that must carry ownership data. ESPN lists a newly added player for a while
+# before it gives him an `ownership` block (first seen 2026-10-05: 1 of 961 records, 99.9% valid; the
+# five responses before that were 960/960). Such a record is skipped, not fatal. A real shape change
+# moves or renames the field for everyone, which takes the share to ~0%. 98% tolerates up to 19 such
+# records in a ~960-player response.
+MIN_ESPN_VALID_SHARE = 0.98
 
 
 def _banner(msg):
@@ -107,21 +113,28 @@ def build_name_index(con):
     return {k: v for k, v in idx.items() if k not in dup}
 
 
-def validate_espn(payload):
-    """(ok, reason, rows). rows: parsed dicts. Strict on purpose -- an
-    undocumented endpoint changing shape should be loud, not silently produce
-    garbage ownership numbers."""
+def parse_espn(payload):
+    """(ok, reason, rows, skipped). rows: parsed dicts. skipped: records left
+    out because they carry no ownership data -- [{external_id, name}] -- which
+    is tolerated only while at least MIN_ESPN_VALID_SHARE of the records are
+    valid. Everything else stays strict on purpose: an undocumented endpoint
+    changing shape should be loud, not silently produce garbage ownership
+    numbers. On failure rows is [] (skipped still says what was missing)."""
+    skipped = []
     try:
         players = payload["players"]
         if not isinstance(players, list):
-            return False, "'players' is not a list", []
+            return False, "'players' is not a list", [], skipped
         rows = []
         for e in players:
             pl = e["player"]
-            own = pl["ownership"]
+            own = pl.get("ownership")
+            if not isinstance(own, dict) or own.get("percentOwned") is None:
+                skipped.append({"external_id": str(pl["id"]), "name": pl.get("fullName")})
+                continue
             pct = float(own["percentOwned"])
             if not (0.0 <= pct <= 100.0):
-                return False, f"percentOwned out of range: {pct} for {pl.get('fullName')}", []
+                return False, f"percentOwned out of range: {pct} for {pl.get('fullName')}", [], skipped
             rows.append({
                 "external_id": str(pl["id"]), "name": pl.get("fullName"),
                 "position": ESPN_POSITIONS.get(pl.get("defaultPositionId")),
@@ -132,18 +145,28 @@ def validate_espn(payload):
                 "injury_status": pl.get("injuryStatus"),
             })
     except (KeyError, TypeError, ValueError) as e:
-        return False, f"unexpected response shape ({type(e).__name__}: {e})", []
+        return False, f"unexpected response shape ({type(e).__name__}: {e})", [], skipped
+    total = len(rows) + len(skipped)
+    if skipped and len(rows) < MIN_ESPN_VALID_SHARE * total:
+        return False, (f"only {len(rows)} of {total} player records carry ownership data ({100 * len(rows) / total:.1f}%, "
+                       f"need {100 * MIN_ESPN_VALID_SHARE:.0f}%) -- the field has probably moved; first without it: "
+                       f"{', '.join(str(s['name']) for s in skipped[:5])}"), [], skipped
     if len(rows) < MIN_ESPN_ROWS:
-        return False, f"only {len(rows)} players returned (expected >= {MIN_ESPN_ROWS})", []
+        return False, f"only {len(rows)} players returned (expected >= {MIN_ESPN_ROWS})", [], skipped
     if sum(1 for r in rows if r["percent_owned"] >= 90) < MIN_ESPN_HIGH_OWNED:
-        return False, "implausible ownership distribution (almost nobody >= 90% owned)", []
-    return True, "ok", rows
+        return False, "implausible ownership distribution (almost nobody >= 90% owned)", [], skipped
+    return True, "ok", rows, skipped
+
+
+def validate_espn(payload):
+    """(ok, reason, rows) -- parse_espn without the skipped-record list."""
+    return parse_espn(payload)[:3]
 
 
 def fetch_espn(season, session=None, timeout=90):
-    """-> dict(ok, http_status, raw_bytes, rows, error, url). Never raises."""
+    """-> dict(ok, http_status, raw_bytes, rows, skipped, error, url). Never raises."""
     url = ESPN_URL.format(season=season)
-    out = {"ok": False, "http_status": None, "raw_bytes": None, "rows": [], "error": None, "url": url}
+    out = {"ok": False, "http_status": None, "raw_bytes": None, "rows": [], "skipped": [], "error": None, "url": url}
     try:
         resp = (session or requests).get(url, headers={"x-fantasy-filter": json.dumps(ESPN_FILTER)}, timeout=timeout)
         out["http_status"] = resp.status_code
@@ -151,8 +174,8 @@ def fetch_espn(season, session=None, timeout=90):
         if resp.status_code != 200:
             out["error"] = f"HTTP {resp.status_code}"
             return out
-        ok, reason, rows = validate_espn(resp.json())
-        out.update(ok=ok, rows=rows, error=None if ok else reason)
+        ok, reason, rows, skipped = parse_espn(resp.json())
+        out.update(ok=ok, rows=rows, skipped=skipped, error=None if ok else reason)
     except Exception as e:  # noqa: BLE001 -- the whole point is not to raise
         out["error"] = f"{type(e).__name__}: {e}"
     return out
@@ -229,11 +252,11 @@ def store_snapshot(con, source, taken_at, fetched, parsed_rows, raw_dir):
             _banner(f"could not write the raw {source} response under {raw_dir} ({type(e).__name__}: {e}). The parsed "
                     f"rows and the response's SHA-256 are still recorded; the raw bytes are NOT kept.")
     cur = con.execute(
-        "INSERT INTO tr_ownership_snapshots (taken_at, source, url, ok, error, http_status, n_rows, raw_sha256, raw_file) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO tr_ownership_snapshots (taken_at, source, url, ok, error, http_status, n_rows, raw_sha256, raw_file, "
+        "n_skipped) VALUES (?,?,?,?,?,?,?,?,?,?)",
         (taken_at, source, fetched.get("url"), 1 if fetched.get("ok") else 0, fetched.get("error"),
          fetched.get("http_status"), len(parsed_rows),
-         hashlib.sha256(raw).hexdigest() if raw else None, raw_file))
+         hashlib.sha256(raw).hexdigest() if raw else None, raw_file, len(fetched.get("skipped") or [])))
     sid = cur.lastrowid
     con.executemany(
         "INSERT INTO tr_ownership (snapshot_id, source, external_id, player_id, name, position, team, "
@@ -250,11 +273,11 @@ def take_snapshot(con, season, raw_dir, now=None, crosswalk=None, espn_fetch=fet
     """Fetch + store ESPN (primary) and Sleeper trending (secondary); raw
     responses go to files under raw_dir (deliberately no default here, so a
     test can't write into the real raw/ownership/). Returns
-    {'espn_ok', 'espn_snapshot_id', 'sleeper_ok', 'espn_matched', 'espn_rows', 'errors'}. Never raises."""
+    {'espn_ok', 'espn_snapshot_id', 'sleeper_ok', 'espn_matched', 'espn_rows', 'espn_skipped', 'errors'}. Never raises."""
     taken_at = (now or now_utc()).isoformat()
     crosswalk = crosswalk if crosswalk is not None else load_espn_crosswalk()
     summary = {"espn_ok": False, "espn_snapshot_id": None, "sleeper_ok": None, "espn_matched": 0,
-               "espn_rows": 0, "errors": []}
+               "espn_rows": 0, "espn_skipped": 0, "errors": []}
 
     espn = espn_fetch(season)
     rows = espn.get("rows", [])
@@ -264,6 +287,12 @@ def take_snapshot(con, season, raw_dir, now=None, crosswalk=None, espn_fetch=fet
     summary["espn_snapshot_id"] = store_snapshot(con, "espn", taken_at, espn, rows, raw_dir)
     summary["espn_ok"], summary["espn_rows"] = bool(espn["ok"]), len(rows)
     summary["espn_matched"] = sum(1 for r in rows if r.get("player_id"))
+    skipped = espn.get("skipped") or []
+    summary["espn_skipped"] = len(skipped)
+    if espn["ok"] and skipped:
+        print(f"[OWNERSHIP NOTE] ESPN: skipped {len(skipped)} of {len(rows) + len(skipped)} player record(s) that carry no "
+              f"ownership data (typically a newly added player): "
+              f"{', '.join(str(s['name']) for s in skipped[:10])}{' ...' if len(skipped) > 10 else ''}")
     if not espn["ok"]:
         msg = f"ESPN percentOwned fetch FAILED ({espn.get('error')}). Stored as a failed snapshot; roster-% is stale/unavailable."
         summary["errors"].append(msg)
