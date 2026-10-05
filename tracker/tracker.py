@@ -58,6 +58,11 @@ BASELINE_VERSIONS = {"dart": "dart-v1", "heuristic": "heuristic-v1", "last_week"
 METRICS = ("top24_hits", "spike_hits", "total_points")
 MAIN_SLATE_ET = (13, 0)  # the Sunday main slate opens with the 1:00 PM Eastern window
 SLOT_RULE = "main-slate-v2"  # recorded with every run; v1 closed `sun` at the earliest Sunday kickoff
+# Who is in the sleeper ("u50") pool, recorded with every run. v1 (2026 week 4 only, no key in run_config_json):
+# strictly under the threshold, and a pool player with no row in the roster-% snapshot was silently dropped.
+# v2: such a player stays IN, with percent_owned NULL as the "ownership unknown" flag -- he is not assumed to be
+# under the threshold or at 0%, he just isn't lost, and reports show how many there are.
+SLEEPER_POOL_RULE = "under-threshold-or-unknown-v2"
 AUTO_MAX_DAYS_AHEAD = 7  # `log --auto` never logs a slot whose cutoff is further out than this
 
 
@@ -518,14 +523,23 @@ def cmd_log(args, con):
     for r in pool_src:
         pid = r["player_id"]
         pct = own.get(pid)
+        # Only when a snapshot was actually used: with no snapshot at all, everyone is "unknown" and there is no sleeper pool.
+        unknown = status == "ok" and pct is None
         pool.append({
             "run_id": None, "player_id": pid, "name": r["name"], "position": r["pos"], "team": r["team"],
-            "percent_owned": pct, "in_u50": 1 if (pct is not None and pct < thr) else 0,
+            "percent_owned": pct, "in_u50": 1 if (unknown or (pct is not None and pct < thr)) else 0,
             "odds_prod_score": r["score"], "odds_shadow_score": shadow_scores.get(pid),
             **lw[pid], **snaps[pid]})
     n_matched = sum(1 for r in pool if r["percent_owned"] is not None)
+    unknown_ids = {r["player_id"] for r in pool if r["in_u50"] and r["percent_owned"] is None}
+    if unknown_ids:
+        print(f"[INFO] {len(unknown_ids)} pool player(s) have no row in roster-% snapshot {snap_id}: ownership unknown, kept in "
+              f"the under-{thr}% pool and flagged -- "
+              + ", ".join(sorted(r["name"] for r in pool if r["player_id"] in unknown_ids)[:15])
+              + (" ..." if len(unknown_ids) > 15 else ""))
     if status == "ok" and n_matched < 0.8 * len(pool):
-        ownership._banner(f"ownership matched only {n_matched}/{len(pool)} pool players -- the sleeper pool will be thin")
+        ownership._banner(f"ownership matched only {n_matched}/{len(pool)} pool players -- {len(unknown_ids)} players of "
+                          f"UNKNOWN ownership are in the sleeper pool, which may include widely owned ones")
     latest_snap = baselines.latest_snap_week(con, season, week)
     if latest_snap is None or latest_snap < (season, week - 1):
         print(f"[WARN] snap counts only run through {latest_snap}; the heuristic baseline is using older snap data "
@@ -549,6 +563,7 @@ def cmd_log(args, con):
         "run_config_json": json.dumps({
             "run": cfg["run"], "hit_config_hash": scoring.config_hash(cfg), "slot_rule": SLOT_RULE,
             "excluded_before_cutoff": sorted(r["player_id"] for r in early), "pool_rule": injuries.POOL_RULE,
+            "sleeper_pool_rule": SLEEPER_POOL_RULE, "ownership_unknown_in_sleeper_pool": sorted(unknown_ids),
             "injury": {"source": inj["source"], "reason": inj["reason"], "exclude_statuses": list(exclude),
                        "excluded": held_out, "disagreements": differ, "nflverse_sha256": inj["sha256"],
                        "nflverse_last_modified": inj["last_modified"].isoformat() if inj["last_modified"] else None,
@@ -559,15 +574,16 @@ def cmd_log(args, con):
         ledger.insert_rows(con, "tr_predictions", preds)
     export = ledger.export_jsonl(Path(args.export_dir) / f"{season}_week{week:02d}_{slot}_log.jsonl",
                                  {"tr_runs": [run_row], "tr_pool": pool, "tr_predictions": preds})
-    print(f"\n[LOGGED] {run_id}: pool {len(pool)} players ({sum(r['in_u50'] for r in pool)} under {thr}% owned; "
-          f"ownership {status}), {len(preds)} pick rows, dart seed {seed}, {run_row['n_draws']} draws at score time")
+    print(f"\n[LOGGED] {run_id}: pool {len(pool)} players ({sum(r['in_u50'] for r in pool)} in the under-{thr}% pool"
+          + (f", {len(unknown_ids)} of them ownership unknown" if unknown_ids else "")
+          + f"; ownership {status}), {len(preds)} pick rows, dart seed {seed}, {run_row['n_draws']} draws at score time")
     print(f"[SAVED] {pred_path} (+ shadow, markdown)  |  ledger export: {export}")
     for ps in sorted({p["pick_set"] for p in preds}):
         if not ps.endswith("_k10"):
             continue
         print(f"\n  {ps}:")
         for m in ("odds_prod", "odds_shadow", "heuristic", "last_week", "dart"):
-            names = {r["player_id"]: r["name"] for r in pool}
+            names = {r["player_id"]: r["name"] + (" (ownership unknown)" if r["player_id"] in unknown_ids else "") for r in pool}
             picks = [names[p["player_id"]] for p in preds if p["model_name"] == m and p["pick_set"] == ps]
             if picks:
                 print(f"    {m:12} {', '.join(picks)}")

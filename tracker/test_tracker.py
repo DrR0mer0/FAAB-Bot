@@ -1029,14 +1029,54 @@ class TestLogInjuryPoolRule(TestLogInternationalWeek):
         self.json_as_written = payload
         return mock.Mock(returncode=0, stdout="", stderr="")
 
-    def add_espn_snapshot(self, statuses):
+    def add_espn_snapshot(self, statuses, owned=None, no_row=()):
+        """One ESPN snapshot row per scored player: 10% owned unless `owned` says otherwise; none at all for `no_row`."""
         con = ledger.connect(self.db)
         sid = con.execute("INSERT INTO tr_ownership_snapshots (taken_at, source, ok) VALUES ('2026-10-04T13:30:00+00:00', 'espn', 1)").lastrowid
         for r in self.scored_pool:
+            if r["player_id"] in no_row:
+                continue
             con.execute("INSERT INTO tr_ownership (snapshot_id, source, external_id, player_id, percent_owned, injury_status) "
-                        "VALUES (?, 'espn', ?, ?, 10.0, ?)", (sid, r["player_id"], r["player_id"], statuses.get(r["player_id"], "ACTIVE")))
+                        "VALUES (?, 'espn', ?, ?, ?, ?)", (sid, r["player_id"], r["player_id"], (owned or {}).get(r["player_id"], 10.0),
+                                                           statuses.get(r["player_id"], "ACTIVE")))
         con.commit()
         con.close()
+
+    def test_pool_player_with_no_ownership_row_stays_in_the_sleeper_pool_flagged_as_unknown(self):
+        """A player skipped by the ESPN parser, or simply absent from ESPN's list: not dropped, not treated as 0%."""
+        self.add_espn_snapshot({}, owned={"KC-RB0": 80.0, "KC-RB1": 49.9, "KC-WR2": 50.0}, no_row=("LV-WR3", "TEN-TE5"))
+        rc, out = self.log_live(self.fresh)
+        self.assertEqual(rc, 0)
+        pool = {r["player_id"]: (r["percent_owned"], r["in_u50"]) for r in self.rows("SELECT * FROM tr_pool")}
+        self.assertEqual(pool["LV-WR3"], (None, 1))        # unknown: in, with NULL ownership as the flag
+        self.assertEqual(pool["TEN-TE5"], (None, 1))
+        self.assertEqual(pool["KC-RB1"], (49.9, 1))
+        self.assertEqual(pool["KC-RB0"], (80.0, 0))        # known to be over the line: still out
+        self.assertEqual(pool["KC-WR2"], (50.0, 0))        # the line itself is strict, as before
+        cfg = self.run_config()
+        self.assertEqual(cfg["sleeper_pool_rule"], tracker.SLEEPER_POOL_RULE)
+        self.assertEqual(cfg["ownership_unknown_in_sleeper_pool"], ["LV-WR3", "TEN-TE5"])
+        self.assertIn("2 of them ownership unknown", out)
+        self.assertIn("TEN-TE5 (ownership unknown)", out)  # flagged where the picks are listed
+        run = self.rows("SELECT * FROM tr_runs")[0]
+        self.assertEqual((run["pool_size"], run["ownership_matched"]), (22, 20))
+        u50_picks = {r["player_id"] for r in self.rows("SELECT player_id FROM tr_predictions WHERE pick_set LIKE 'u50%'")}
+        self.assertTrue(u50_picks <= {p for p, (_o, in_u50) in pool.items() if in_u50})
+        self.assertFalse(u50_picks & {"KC-RB0", "KC-WR2"})
+        con = ledger.connect(self.db)
+        try:
+            lines = report.sleeper_pool_lines(con, [run])
+            self.assertIn("week 4 `sun` run:** 20 players, 2 of them with **ownership unknown**", lines[0])
+            self.assertEqual({r["player_id"] for r in tracker.rebuild_dart_sets(con, run["run_id"])["u50_k10"][0]},
+                             {p for p, (_o, in_u50) in pool.items() if in_u50})   # dart draws see the same pool at scoring time
+        finally:
+            con.close()
+
+    def test_no_snapshot_at_all_still_means_no_sleeper_pool_not_everyone_unknown(self):
+        self.assertEqual(self.log_live(self.fresh, "--skip-ownership")[0], 0)
+        self.assertEqual(self.rows("SELECT COALESCE(SUM(in_u50), 0) FROM tr_pool")[0][0], 0)
+        self.assertEqual(self.rows("SELECT COUNT(*) FROM tr_predictions WHERE pick_set LIKE 'u50%'")[0][0], 0)
+        self.assertEqual(self.run_config()["ownership_unknown_in_sleeper_pool"], [])
 
     def log_live(self, fetch, *extra):
         argv = ["log", "--season", "2026", "--week", "4", "--slot", "sun", "--db", str(self.db),
@@ -1683,6 +1723,21 @@ class TestScoreEndToEnd(unittest.TestCase):
             if expect:
                 self.assertIn(expect, notes[0])
                 self.assertIn("week 5 `thu` run", notes[0])
+
+    def test_report_shows_the_unknown_ownership_count_and_says_when_an_old_run_dropped_them(self):
+        self.con.execute("INSERT INTO tr_ownership_snapshots (snapshot_id, taken_at, source, ok) VALUES (1, '2026-10-08T11:30:00+00:00', 'espn', 1)")
+        run = dict(self.con.execute("SELECT * FROM tr_runs").fetchone(), ownership_snapshot_id=1)
+        v2 = dict(run, run_config_json=json.dumps({"sleeper_pool_rule": tracker.SLEEPER_POOL_RULE}))
+        # the fixture pool: 40 players, the 25 under 50% in the sleeper pool, everyone's ownership known
+        self.assertIn("25 players, 0 of them with **ownership unknown**", report.sleeper_pool_lines(self.con, [v2])[0])
+        self.assertEqual(report.sleeper_pool_lines(self.con, [v2], only_if_unknown=True), [])
+        self.assertIn("0 pool player(s) with unknown ownership were left OUT", report.sleeper_pool_lines(self.con, [run])[0])
+        for pid, in_u50 in (("kept_unknown", 1), ("dropped_unknown", 0)):
+            ledger.insert_rows(self.con, "tr_pool", [dict(run_id="r1", player_id=pid, position="WR", percent_owned=None, in_u50=in_u50)])
+        self.assertIn("26 players, 1 of them with **ownership unknown**", report.sleeper_pool_lines(self.con, [v2], only_if_unknown=True)[0])
+        legacy = report.sleeper_pool_lines(self.con, [run], only_if_unknown=True)[0]
+        self.assertIn("1 pool player(s) with unknown ownership were left OUT of it", legacy)
+        self.assertEqual(report.sleeper_pool_lines(self.con, [dict(v2, ownership_snapshot_id=None)]), [])   # no snapshot, no sleeper pool
 
     def test_run_on_a_roster_snapshot_older_than_twelve_hours_is_footnoted(self):
         self.assertEqual(CFG["run"]["ownership_stale_note_hours"], 12)

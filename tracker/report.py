@@ -66,6 +66,34 @@ def pool_rule_notes(runs):
     return notes
 
 
+def sleeper_pool_lines(con, runs, only_if_unknown=False):
+    """One line per run saying how big its under-50% pool was and how many of
+    those players had UNKNOWN ownership (no row in the roster-% snapshot the
+    run used). From `sleeper_pool_rule` v2 on they are kept in the pool and
+    counted here; the one earlier run dropped them, which is said instead."""
+    lines = []
+    for run in runs:
+        if run["ownership_snapshot_id"] is None:
+            continue
+        n_pool, n_in, n_out = con.execute(
+            "SELECT COALESCE(SUM(in_u50), 0), COALESCE(SUM(CASE WHEN in_u50=1 AND percent_owned IS NULL THEN 1 ELSE 0 END), 0), "
+            "COALESCE(SUM(CASE WHEN in_u50=0 AND percent_owned IS NULL THEN 1 ELSE 0 END), 0) FROM tr_pool WHERE run_id=?",
+            (run["run_id"],)).fetchone()
+        label = f"week {run['week']} `{run['run_slot']}` run"
+        if "sleeper_pool_rule" in json.loads(run["run_config_json"] or "{}"):
+            if only_if_unknown and not n_in:
+                continue
+            lines.append(f"**Under-50% pool, {label}:** {n_pool} players, {n_in} of them with **ownership unknown** (no "
+                         f"roster-% row for them in the snapshot used). Unknown is not treated as under 50% or as 0%: those "
+                         f"players are kept in the pool and counted here rather than dropped.")
+        else:
+            if only_if_unknown and not n_out:
+                continue
+            lines.append(f"**Under-50% pool, {label}:** {n_pool} players. {n_out} pool player(s) with unknown ownership were "
+                         f"left OUT of it -- the rule for this run only; later runs keep such players in, flagged.")
+    return lines
+
+
 STALE_NOTE_HOURS_DEFAULT = 12
 
 
@@ -227,10 +255,9 @@ def build_weekly_report(con, season, week):
                 if tbl is None:
                     continue
                 if not wrote and scope == "u50":
-                    n_u50 = con.execute("SELECT COUNT(*) FROM tr_pool WHERE run_id=? AND in_u50=1", (run["run_id"],)).fetchone()[0]
                     out += [f"_Pool restricted to players under {cfg_json['crowd_hit']['owned_pct_threshold']}% owned "
-                            f"at the time of the run; every model re-picks from that smaller pool. "
-                            f"({n_u50} players in the {run['run_slot']} pool.)_", ""]
+                            f"at the time of the run; every model re-picks from that smaller pool._", ""]
+                    out += [f"- {line}" for line in sleeper_pool_lines(con, runs)] + [""]
                 wrote = True
                 out += [f"### Top {k} -- {run['run_slot']} run ({run['run_timestamp'][:16].replace('T', ' ')} UTC)", ""] + tbl + [""]
         if not wrote:
@@ -334,7 +361,8 @@ def build_season_report(con, season, report_cfg):
                        f"(95% CI {100 * lo:+.1f} to {100 * hi:+.1f}) over {n} week(s) -- {verdict}"
                        + (" (but see the small-sample note)." if n_weeks < min_weeks else "."))
     crowd = build_crowd_section(con, season)
-    out += [""] + crowd + ["", "## Caveats", ""] + [f"- {c}" for c in KNOWN_CAVEATS + pool_rule_notes(used_runs) + ownership_notes(con, used_runs)] + [""]
+    out += [""] + crowd + ["", "## Caveats", ""] + [f"- {c}" for c in KNOWN_CAVEATS + pool_rule_notes(used_runs) + ownership_notes(con, used_runs)
+                                                           + sleeper_pool_lines(con, used_runs, only_if_unknown=True)] + [""]
     return "\n".join(out)
 
 
