@@ -100,7 +100,7 @@ The three recurring commands run from Windows Task Scheduler (`tracker/scheduled
 - **Spike week** — he scores ≥1.5× his trailing 3-game average and ≥10 points. "Does O.D.D.S. beat chance at its own job."
 - **Dart percentile** — where a model's result falls among the 1,000 random draws; 50% is chance.
 - **Crowd hit** (secondary) — a pick that started under 50% owned and rose above 50% within 14 days. Ownership is ESPN's `percentOwned` (unofficial endpoint, so it's validated and a failure is logged loudly, never fatal), not Yahoo's; the database keeps the parsed rows and a SHA-256 of each raw response, and the raw responses themselves are gzip files under `raw/ownership/` (not committed); collection started 2026-10-03, so this is excluded from any backtest.
-- **Sleeper pool** — every scoreboard is also produced for just the players under 50% owned at pick time, with each model re-picking from that smaller pool. That's the actual sleeper test.
+- **Sleeper pool** — every scoreboard is also produced for just the players under 50% owned at pick time, with each model re-picking from that smaller pool. That's the actual sleeper test. A pool player the ownership snapshot has no row for stays in this pool flagged as "ownership unknown" (not assumed to be 0%), and the report shows how many there were.
 
 The scoreboard says plainly when the sample is too small to call a winner. Two known issues are flagged in every report rather than hidden: the production model's `starter_absent_proxy` feature leaks (see `CLAUDE.md`), and its training labels used a 4-pt passing TD. Both are queued for a separate retrain. Backtesting (`backtest`) is phase 2 and not built yet.
 
