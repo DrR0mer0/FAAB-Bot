@@ -1,6 +1,6 @@
 # O.D.D.S. vs the baselines -- 2026 Week 4
 
-_Scored 2026-10-06 14:39 UTC; hit definition `b5b540cb6e`._
+_Scored 2026-10-06 14:46 UTC; hit definition `b5b540cb6e`._
 
 **How a pick is scored** (league settings: 0.5 PPR, 5-pt passing TDs, 6-pt rushing/receiving TDs, -2 INT, -2 fumbles lost, +2 per 2-pt conversion):
 - **Top-24 finish** -- the player finishes top-24 at his position that week ("does it help me win").
