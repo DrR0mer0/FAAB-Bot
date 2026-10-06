@@ -1495,6 +1495,53 @@ class TestScheduledRun(unittest.TestCase):
     def summary(self):
         return (self.logs / scheduled_run.SUMMARY_LOG).read_text(encoding="utf-8").splitlines()
 
+    # ---- the Thursday job's advisory check-stats step
+
+    STATS_OK = (0, "[STATS] 2026 week 4 (scoring 2, scored 2026-10-06 14:46 UTC): stats unchanged\n")
+    STATS_CHANGED = (1, "\n" + "!" * 78 + "\n[STATS CHANGED] 2026 week 4 (scoring 2, scored 2026-10-06 14:46 UTC): STATS CHANGED "
+                        "SINCE IT WAS SCORED -- 3 of 358 week-4 player scores differ. Its results are from the earlier stats; "
+                        "append a corrected scoring with: score --season 2026 --week 4 --force\n" + "!" * 78 + "\n")
+    LOGGED = (0, "[LOGGED] 2026w05-thu-20261008T140003Z: pool 380 players\n")
+
+    def test_thursday_job_runs_check_stats_after_the_log_step_and_sunday_does_not(self):
+        self.assertEqual(self.run_job("log-thu", self.THURSDAY, [(0, ""), self.LOGGED, self.STATS_OK]), 0)
+        self.assertEqual(len(self.calls), 3)
+        self.assertEqual(self.calls[1][-4:], ["log", "--auto", "--slot", "thu"])
+        self.assertEqual(self.calls[2][-3:], ["check-stats", "--season", "2026"])
+        self.assertEqual(self.alerts, [])
+        self.assertNotIn("note:", self.summary()[-1])
+        self.calls.clear()
+        self.run_job("log-sun", self.SUNDAY, [(0, ""), (0, "[LOGGED] 2026w05-sun\n")])
+        self.assertEqual(len(self.calls), 2)
+
+    def test_changed_stats_raise_a_message_box_without_touching_the_log_result(self):
+        rc = self.run_job("log-thu", self.THURSDAY, [(0, ""), self.LOGGED, self.STATS_CHANGED])
+        self.assertEqual(rc, 0)                                     # the log run's own exit status
+        line = self.summary()[-1]
+        self.assertIn("OK", line)
+        self.assertNotIn("FAILED", line)
+        self.assertIn("[LOGGED] 2026w05-thu", line)                 # still the log step's headline
+        self.assertIn("note: stats changed for an already-scored week", line)
+        (title, text), = self.alerts
+        self.assertEqual(title, "FAAB tracker: stats corrected for an already-scored week")
+        self.assertIn("3 of 358 week-4 player scores differ", text)
+        self.assertIn("score --season 2026 --week 4 --force", text)
+        self.assertIn("did not affect today's log-thu run (OK)", text)
+        self.assertNotIn("Nothing was written to the ledger", text)  # that's the failure box's wording, not this one's
+
+    def test_changed_stats_do_not_hide_or_alter_a_refused_log(self):
+        rc = self.run_job("log-thu", self.THURSDAY, [(0, ""), (2, "[REFUSED] REFUSED: the thu slot closed at ...\n"), self.STATS_CHANGED])
+        self.assertEqual(rc, 2)
+        self.assertIn("FAILED", self.summary()[-1])
+        self.assertEqual([t for t, _ in self.alerts], ["FAAB tracker: log-thu FAILED", "FAAB tracker: stats corrected for an already-scored week"])
+
+    def test_check_stats_that_cannot_run_is_only_a_note(self):
+        crash = (1, "Traceback (most recent call last):\n  ...\nsqlite3.OperationalError: database is locked\n")   # exit 1, like "changed"
+        rc = self.run_job("log-thu", self.THURSDAY, [(0, ""), self.LOGGED, crash])
+        self.assertEqual((rc, self.alerts), (0, []))
+        self.assertIn("OK", self.summary()[-1])
+        self.assertIn("note: check-stats could not run (exit 1)", self.summary()[-1])
+
     def test_log_job_refreshes_then_logs_in_auto_mode_and_writes_both_logs(self):
         rc = self.run_job("log-sun", self.SUNDAY, [(0, "[DONE] refreshed\n"), (0, "noise\n[LOGGED] 2026w05-sun: pool 300\n  all_k10:\n")])
         self.assertEqual(rc, 0)
@@ -1511,7 +1558,7 @@ class TestScheduledRun(unittest.TestCase):
         self.assertIn("[exit 0]", detail)
 
     def test_quiet_skip_is_not_a_failure(self):
-        rc = self.run_job("log-thu", self.THURSDAY, [(0, ""), (0, "[SKIP] 2026 week 18 has no thu slot: ...\n")])
+        rc = self.run_job("log-thu", self.THURSDAY, [(0, ""), (0, "[SKIP] 2026 week 18 has no thu slot: ...\n"), self.STATS_OK])
         self.assertEqual((rc, self.alerts), (0, []))
         self.assertIn("[SKIP]", self.summary()[-1])
 
@@ -1526,7 +1573,7 @@ class TestScheduledRun(unittest.TestCase):
 
     def test_db_missing_prior_games_refusal_gets_the_failed_line_and_the_message_box(self):
         refusal = "[REFUSED] the DB is missing data for 1 already-played game(s)/week(s) before week 5, so O.D.D.S. would ...\n"
-        rc = self.run_job("log-thu", self.THURSDAY, [(0, ""), (2, refusal)])
+        rc = self.run_job("log-thu", self.THURSDAY, [(0, ""), (2, refusal), self.STATS_OK])
         self.assertEqual(rc, 2)
         self.assertIn("FAILED", self.summary()[-1])
         self.assertIn("the DB is missing data", self.summary()[-1])
@@ -1561,7 +1608,8 @@ class TestScheduledRun(unittest.TestCase):
         self.assertEqual(len(self.summary()), 2)
 
     def test_failed_refresh_is_noted_but_the_log_step_still_decides(self):
-        rc = self.run_job("log-thu", self.THURSDAY, [(1, "[WARN] 1 file(s) failed to refresh\n"), (0, "[LOGGED] 2026w05-thu\n")])
+        rc = self.run_job("log-thu", self.THURSDAY, [(1, "[WARN] 1 file(s) failed to refresh\n"), (0, "[LOGGED] 2026w05-thu\n"),
+                                                     self.STATS_OK])
         self.assertEqual((rc, self.alerts), (0, []))
         self.assertIn("refresh nflverse files FAILED (exit 1)", self.summary()[-1])
 

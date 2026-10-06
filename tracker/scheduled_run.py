@@ -9,7 +9,8 @@ the commands that (un)register the tasks.
 
   job        when (local time)   what it runs
   snapshot   every day 06:30     tracker.py snapshot-ownership
-  log-thu    Thursdays 07:00     data/fetch_weekly_update.py, then tracker.py log --auto --slot thu
+  log-thu    Thursdays 07:00     data/fetch_weekly_update.py, then tracker.py log --auto --slot thu,
+                                 then tracker.py check-stats (advisory only -- see below)
   log-sun    Sundays   07:00     data/fetch_weekly_update.py, then tracker.py log --auto --slot sun
 
 Every run writes its full output to tracker/logs/<timestamp>_<job>.log and one
@@ -20,6 +21,14 @@ weekly-roster file more than 3 days old -- without the refresh a Sunday run
 could never pass. A failed refresh is noted and the log is still attempted: the
 tracker's own freshness guards decide. Nothing here loads the DB; the weekly
 loader / fetch-snaps cycle stays a manual step, and `log` refuses if it's behind.
+
+STAT CORRECTIONS. After its log step the Thursday job also runs `tracker.py
+check-stats`: has nflverse corrected the stats of a week that is already
+scored? If so a message box shows which week and the `score --force` command
+to append a corrected scoring. This is advisory only -- it never changes the
+job's exit status or its OK/FAILED line (it adds a note to that line), it runs
+whether the log step logged, skipped or refused, and a check that can't run at
+all is just noted.
 
 FAILING LOUDLY BUT HARMLESSLY. `log --auto` resolves the week itself and skips
 quietly (exit 0) when the week has no such slot or the slot is already in the
@@ -80,17 +89,26 @@ def default_season(now):
     return now.year if now.month >= 3 else now.year - 1
 
 
+STATS_CHANGED_TAG = "[STATS CHANGED]"
+
+
 def job_steps(job, now):
-    """[(label, argv, decides_outcome)] -- the last step's exit code is the run's."""
+    """[(label, argv, role)]. role: 'decides' -- this step's exit code and
+    headline are the run's; 'prep' -- a failure is noted, nothing more;
+    'advisory' -- may raise its own message box but never affects the run's
+    outcome."""
     py = console_python()
     tracker = [py, str(TRACKER_DIR / "tracker.py")]
+    season = str(default_season(now))
     if job == "snapshot":
-        return [("snapshot-ownership", tracker + ["snapshot-ownership"], True)]
-    return [
-        ("refresh nflverse files", [py, str(REPO_ROOT / "data" / "fetch_weekly_update.py"),
-                                    "--season", str(default_season(now))], False),
-        (f"log --auto --slot {JOBS[job]['slot']}", tracker + ["log", "--auto", "--slot", JOBS[job]["slot"]], True),
+        return [("snapshot-ownership", tracker + ["snapshot-ownership"], "decides")]
+    steps = [
+        ("refresh nflverse files", [py, str(REPO_ROOT / "data" / "fetch_weekly_update.py"), "--season", season], "prep"),
+        (f"log --auto --slot {JOBS[job]['slot']}", tracker + ["log", "--auto", "--slot", JOBS[job]["slot"]], "decides"),
     ]
+    if job == "log-thu":
+        steps.append(("check-stats", tracker + ["check-stats", "--season", season], "advisory"))
+    return steps
 
 
 def run_step(argv):
@@ -131,6 +149,7 @@ def run_job(job, now=None, log_dir=LOG_DIR, run=run_step, alert=show_alert, forc
     log_dir.mkdir(parents=True, exist_ok=True)
     detail = log_dir / f"{now:%Y%m%d_%H%M%S}_{job}.log"
     parts, notes, rc, summary = [f"# {job} started {now:%Y-%m-%d %H:%M:%S} (local)\n"], [], 0, ""
+    stats_changed = []
 
     weekday = JOBS[job]["weekday"]
     if weekday is not None and now.weekday() != weekday and not force_day:
@@ -140,11 +159,19 @@ def run_job(job, now=None, log_dir=LOG_DIR, run=run_step, alert=show_alert, forc
                    f"still open, log it by hand: python tracker/tracker.py log --season Y --week W --slot {JOBS[job]['slot']}")
         parts.append(summary + "\n")
     else:
-        for label, argv, decides in job_steps(job, now):
+        for label, argv, role in job_steps(job, now):
             code, out = run(argv)
             parts.append(f"\n## {label}\n$ {' '.join(argv)}\n{out.rstrip()}\n[exit {code}]\n")
-            if decides:
+            if role == "decides":
                 rc, summary = code, headline(out)
+            elif role == "advisory":
+                # check-stats exits 1 when something changed -- but so does a crash, so go by what it printed
+                found = [ln.strip() for ln in out.splitlines() if ln.strip().startswith(STATS_CHANGED_TAG)]
+                if found:
+                    stats_changed += found
+                    notes.append("stats changed for an already-scored week (see the message box)")
+                elif code != 0:
+                    notes.append(f"{label} could not run (exit {code})")
             elif code != 0:
                 notes.append(f"{label} FAILED (exit {code})")
 
@@ -160,6 +187,10 @@ def run_job(job, now=None, log_dir=LOG_DIR, run=run_step, alert=show_alert, forc
         alert(f"FAAB tracker: {job} FAILED",
               f"{summary}\n\n" + ("\n".join(notes) + "\n\n" if notes else "") +
               f"Nothing was written to the ledger by this run.\nFull output: {detail}")
+    if stats_changed:
+        alert("FAAB tracker: stats corrected for an already-scored week",
+              "\n\n".join(ln[len(STATS_CHANGED_TAG):].strip() for ln in stats_changed)
+              + f"\n\nThis is a heads-up only: it did not affect today's {job} run ({status}).\nFull output: {detail}")
     return rc
 
 
