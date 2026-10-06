@@ -84,6 +84,7 @@ python tracker/tracker.py fetch-snaps                             # nflverse sna
 python tracker/tracker.py log --season 2026 --week 5 --slot thu   # Thursday morning, before kickoff
 python tracker/tracker.py log --season 2026 --week 5 --slot sun   # Sunday morning, before the first 1 PM ET kickoff
 python tracker/tracker.py score --season 2026 --week 5            # after Monday night
+python tracker/tracker.py check-stats --season 2026               # did nflverse correct an already-scored week?
 python tracker/tracker.py report --season 2026 --week 5           # newsletter-ready scoreboard
 python tracker/tracker.py report --season 2026                    # season to date, with bootstrap 95% CIs
 python tracker/scheduled_run.py install                           # Windows Task Scheduler: daily snapshot + Thu/Sun morning logs

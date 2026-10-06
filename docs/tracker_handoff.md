@@ -23,7 +23,7 @@ Answer one question honestly: **is O.D.D.S. better than chance?** Every run is l
 0.5 PPR · 6-pt rushing/receiving TD · **5-pt passing TD** · −2 INT · 0.04/passing yd · 0.1/rush & rec yd · −2 fumble lost · +2 per 2-pt conversion. Lives in `tracker/hit_config.json`; `scoring`, `hit` and `crowd_hit` sections are hashed and the hash is stored with every scored week.
 
 ## Current state
-- **Built and tested (132 tests, plus 8 in `data/test_through_week.py` -- `python -m unittest discover -s data -v`):** ledger + triggers on all 10 append-only tables; `log` (plus `log --auto`), `score`, `report`, `snapshot-ownership`, `fetch-snaps`; baselines; league scoring (cross-checked against nflverse's own `fantasy_points_ppr` on real rows); crowd-hit; bootstrap CIs (shown only from 3+ weeks; "too early to call" until 8, configurable); the scheduled-task runner (`tracker/scheduled_run.py`).
+- **Built and tested (139 tests, plus 8 in `data/test_through_week.py` -- `python -m unittest discover -s data -v`):** ledger + triggers on all 10 append-only tables; `log` (plus `log --auto`), `score`, `report`, `snapshot-ownership`, `fetch-snaps`; baselines; league scoring (cross-checked against nflverse's own `fantasy_points_ppr` on real rows); crowd-hit; bootstrap CIs (shown only from 3+ weeks; "too early to call" until 8, configurable); the scheduled-task runner (`tracker/scheduled_run.py`).
 - **Validated on real data** via a scratch DB copy only. **The real ledger had 0 runs at handoff**; snap counts (2022–26) and 6 ownership snapshot rows (3 fetches x ESPN + Sleeper) are in the real DB.
 - **The real DB was migrated on 2026-10-03** (`tracker.py migrate-ownership-raw`): the 4 raw blobs then in `tr_ownership_snapshots.raw_zlib` were written to `raw/ownership/`, checked against their stored SHA-256, and the column was dropped (the one sanctioned bypass of that table's append-only triggers; they were recreated in the same transaction). The untouched pre-migration DB is `faab_history_core_v0_1.pre_ownership_migration.bak.db` in the repo root (gitignored) — delete it once you're satisfied.
 - **Not built:** `backtest` (stub, exits 2), the as-of feature mode, the walk-forward training wrapper, the label-shuffle check. Both phase-2 pieces touch model code — **show the diff to the user first.** The backtest must also apply the Out/Doubtful pool rule from historical nflverse injury reports so its pools match live ones; history only has final designations, so backtest pools correspond to the `sun` slot, not `thu` (see the Backlog in `CLAUDE.md`).
@@ -47,6 +47,7 @@ W = the week about to be played; W-1 = the week that just finished.
 **Tuesday, after Monday night's stats are published** — the only time the DB is loaded:
 ```
 python data/fetch_weekly_update.py --season 2026
+python tracker/tracker.py check-stats --season 2026        # were earlier, already-scored weeks corrected? (exit 1 if so)
 python data/load_nflverse_into_history_SAFE_v3.py --seasons 2026 --through-week <W-1>
 python model/generate_labels_and_breakouts.py --seasons <all loaded seasons incl. 2026> --through-week <W-1>
 python tracker/tracker.py fetch-snaps
@@ -54,6 +55,8 @@ python tracker/tracker.py score --season 2026 --week <W-1>
 python tracker/tracker.py report --season 2026 --week <W-1>
 ```
 (`evaluation/verify_week.py` for W-1 belongs here too, as before.) Always pass `--through-week <W-1>`, even on a Tuesday when the CSV can't contain week W yet: it's what makes a late or repeated load (Friday, Saturday) safe.
+
+**Stat corrections.** nflverse revises stats after the fact. Every scoring stores the stats file's SHA-256 and a *fingerprint* of what it actually read (`scoring.stats_fingerprint`: week, player, position, team and league points for every regular-season row through the scored week — the week itself for points and ranks, earlier weeks for the spike baselines). The file hash alone is useless for this: the season file gains a week of rows every Tuesday. `check-stats` compares each scored week's latest scoring with the file as it is now; `score` runs the same check on every already-scored week each time it is used (including when it skips a week already scored), and `report` puts a warning at the top of any report whose week changed. A changed week says how many of its own player scores differ (0 = the correction is in an earlier week, i.e. only baselines moved). Nothing re-scores by itself: run `score --season Y --week N --force`, which **appends** a corrected scoring (results are never overwritten; reports always read a week's newest scoring) and clears the warning. Week 4 has two identical scorings for this reason: scoring 1 predates fingerprints, so scoring 2 was appended the same morning from the same file to set a baseline. Limits: a baseline that reaches into the prior season (weeks 1-3) is outside the fingerprint, and `verify_week.py` has its own record (DB labels) that a re-score doesn't touch.
 
 **Thursday and Sunday mornings** — the `log` tasks run on schedule; nothing to do by hand unless one fails. They refresh the nflverse *files* only and never load the DB.
 
