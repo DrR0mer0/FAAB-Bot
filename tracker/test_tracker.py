@@ -1702,6 +1702,118 @@ class TestScoreEndToEnd(unittest.TestCase):
         self.assertEqual(self.con.execute("SELECT COUNT(*) FROM tr_scorings").fetchone()[0], 2)
         self.assertEqual(self.con.execute("SELECT COUNT(*) FROM tr_run_results WHERE scoring_id=?", (first["scoring_id"],)).fetchone()[0] > 0, True)
 
+    # ---- stat corrections after a week was scored
+
+    COLS = ["player_id", "season", "week", "season_type", "position", "team", "receptions", "receiving_yards", "target_share"]
+
+    def rewrite_stats(self, change):
+        """Rewrite the season file as nflverse would after a correction; `change(row)` edits or drops (returns None) each row."""
+        path = self.raw / "stats_player_week_2026.csv"
+        with open(path, encoding="utf-8", newline="") as f:
+            rows = [r for r in (change(dict(r)) for r in csv.DictReader(f)) if r is not None]
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=self.COLS)
+            w.writeheader()
+            w.writerows(rows)
+        return scoring.StatsStore(self.raw, RULES)   # a fresh reader, as every command gets
+
+    def test_scoring_stores_the_file_hash_and_a_fingerprint_of_what_it_read(self):
+        self.score()
+        row = self.con.execute("SELECT stats_sha256, stats_fingerprint FROM tr_scorings").fetchone()
+        self.assertEqual(row["stats_sha256"], hashlib.sha256((self.raw / "stats_player_week_2026.csv").read_bytes()).hexdigest())
+        self.assertEqual(row["stats_fingerprint"], scoring.stats_fingerprint(self.store, 2026, 5))
+        self.assertEqual([c["status"] for c in tracker.stats_changes(self.con, self.store, 2026)], ["unchanged"])
+
+    def test_fingerprint_ignores_what_scoring_never_reads_and_catches_what_it_does(self):
+        base = scoring.stats_fingerprint(self.store, 2026, 5)
+
+        def fp(change):
+            return scoring.stats_fingerprint(self.rewrite_stats(change), 2026, 5)
+        # next Tuesday the file gains a week: must NOT look like a correction to week 5
+        self.rewrite_stats(lambda r: r)
+        with open(self.raw / "stats_player_week_2026.csv", "a", newline="", encoding="utf-8") as f:
+            csv.DictWriter(f, fieldnames=self.COLS).writerow(dict(player_id="p00", season=2026, week=6, season_type="REG",
+                                                                  position="WR", team="AAA", receptions=9, receiving_yards=90))
+        self.assertEqual(scoring.stats_fingerprint(scoring.StatsStore(self.raw, RULES), 2026, 5), base)
+        self.assertEqual(fp(lambda r: dict(r, target_share=0.99)), base)              # a column scoring doesn't use
+        self.assertNotEqual(fp(lambda r: dict(r, receiving_yards=11) if (r["player_id"], r["week"]) == ("p07", "5") else r), base)
+        self.assertNotEqual(fp(lambda r: dict(r, position="TE") if (r["player_id"], r["week"]) == ("p07", "5") else r), base)
+        self.assertNotEqual(fp(lambda r: dict(r, receiving_yards=81) if (r["player_id"], r["week"]) == ("p07", "3") else r), base)
+        self.assertNotEqual(fp(lambda r: None if (r["player_id"], r["week"]) == ("p07", "5") else r), base)   # a row withdrawn
+
+    def test_correction_to_the_scored_week_is_noticed_counted_and_fixed_by_a_forced_rescore(self):
+        first = self.score()
+        store = self.rewrite_stats(lambda r: dict(r, receiving_yards=int(r["receiving_yards"]) + 30)
+                                   if r["week"] == "5" and r["player_id"] in ("p30", "p31") else r)
+        (c,) = tracker.stats_changes(self.con, store, 2026)
+        self.assertEqual((c["status"], c["n_differ"], c["scoring_id"]), ("changed", 2, first["scoring_id"]))
+        self.assertIn("STATS CHANGED SINCE IT WAS SCORED -- 2 of 39 week-5 player scores differ", c["message"])
+        self.assertIn("score --season 2026 --week 5 --force", c["message"])
+        # the old scoring is left exactly as it was; a forced re-score appends the corrected one, and the check clears
+        before = self.con.execute("SELECT * FROM tr_run_results WHERE scoring_id=? ORDER BY model_name, pick_set", (first["scoring_id"],)).fetchall()
+        again = tracker.score_one_week(self.con, CFG, store, 2026, 5, datetime(2026, 10, 15, tzinfo=timezone.utc), force=True,
+                                       export_dir=self.export)
+        self.assertEqual(self.con.execute("SELECT * FROM tr_run_results WHERE scoring_id=? ORDER BY model_name, pick_set",
+                                          (first["scoring_id"],)).fetchall(), before)
+        rr = {(r["model_name"], r["pick_set"]): r for r in again["run_results"]}
+        self.assertAlmostEqual(rr[("odds_prod", "all_k10")]["total_points"], sum(range(30, 39)) + 6.0)   # +30 yds each = +3.0 pts each
+        (c,) = tracker.stats_changes(self.con, store, 2026)
+        self.assertEqual((c["status"], c["scoring_id"]), ("unchanged", again["scoring_id"]))
+
+    def test_correction_to_an_earlier_week_is_noticed_as_a_baseline_change(self):
+        self.score()
+        store = self.rewrite_stats(lambda r: dict(r, receiving_yards=120) if (r["player_id"], r["week"]) == ("p10", "3") else r)
+        (c,) = tracker.stats_changes(self.con, store, 2026)
+        self.assertEqual((c["status"], c["n_differ"]), ("changed", 0))
+        self.assertIn("the correction is in an earlier week, which feeds the spike baselines", c["message"])
+
+    def test_scoring_from_before_fingerprints_is_unknown_not_unchanged(self):
+        self.con.execute("INSERT INTO tr_scorings (season, week, scored_at, hit_config_hash, hit_config_json) VALUES (2026, 5, 't', 'h', '{}')")
+        (c,) = tracker.stats_changes(self.con, self.store, 2026)
+        self.assertEqual(c["status"], "unknown")
+        self.assertIn("re-score once to set a baseline", c["message"])
+
+    def test_report_carries_the_warning_and_a_clean_report_does_not(self):
+        self.score()
+        self.assertNotIn("stats corrected after scoring", report.build_weekly_report(self.con, 2026, 5))
+        note = "2026 week 5 (scoring 1, ...): STATS CHANGED SINCE IT WAS SCORED -- 2 of 39 week-5 player scores differ."
+        for md in (report.build_weekly_report(self.con, 2026, 5, stats_notes=[note]),
+                   report.build_season_report(self.con, 2026, CFG["report"], stats_notes=[note])):
+            self.assertIn("> **Warning -- stats corrected after scoring.** 2026 week 5", md)
+            self.assertLess(md.index("stats corrected after scoring"), md.index("## All eligible players"))   # above the numbers
+
+    def test_score_report_and_check_stats_commands_all_raise_the_flag(self):
+        db = Path(self.tmp.name) / "cli.db"
+        disk = sqlite3.connect(db)
+        self.con.backup(disk)
+        disk.close()
+        common = ["--db", str(db), "--raw-dir", str(self.raw), "--export-dir", str(self.export)]
+
+        def run(*argv):
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = tracker.main(list(argv) + common)
+            return rc, out.getvalue(), err.getvalue()
+        self.assertEqual(run("score", "--season", "2026", "--week", "5")[0], 0)
+        rc, out, err = run("check-stats", "--season", "2026")
+        self.assertEqual((rc, err), (0, ""))
+        self.assertIn("stats unchanged", out)
+        self.rewrite_stats(lambda r: dict(r, receiving_yards=400) if (r["player_id"], r["week"]) == ("p30", "5") else r)
+        rc, _out, err = run("check-stats", "--season", "2026")
+        self.assertEqual(rc, 1)                                            # non-zero, so a script or task notices
+        self.assertIn("[STATS CHANGED] 2026 week 5", err)
+        rc, out, err = run("score", "--season", "2026", "--week", "5")     # same hit definition: skipped, but not silently
+        self.assertEqual(rc, 0)
+        self.assertIn("[SKIP]", out)
+        self.assertIn("[STATS CHANGED] 2026 week 5", err)
+        rc, out, err = run("report", "--season", "2026", "--week", "5", "--out-dir", str(Path(self.tmp.name) / "reports"))
+        self.assertIn("[STATS CHANGED]", err)
+        self.assertIn("> **Warning -- stats corrected after scoring.**", out)
+        rc, out, err = run("score", "--season", "2026", "--week", "5", "--force")
+        self.assertIn("[SCORED]", out)
+        self.assertNotIn("[STATS CHANGED]", err)
+        self.assertEqual(run("check-stats", "--season", "2026")[0], 0)
+
     def test_incomplete_week_and_stale_stats_are_refused(self):
         self.con.execute("UPDATE nfl_games SET home_score = NULL")
         with self.assertRaises(tracker.Refused):

@@ -233,7 +233,14 @@ def _hit_defs_block(cfg_json):
     ]
 
 
-def build_weekly_report(con, season, week):
+def stats_warning(stats_notes):
+    """Lines for the top of a report whose numbers were scored from stats that have since been corrected."""
+    if not stats_notes:
+        return []
+    return [f"> **Warning -- stats corrected after scoring.** {n}" for n in stats_notes] + [""]
+
+
+def build_weekly_report(con, season, week, stats_notes=None):
     sid = latest_scoring_id(con, season, week)
     if sid is None:
         return None
@@ -244,6 +251,7 @@ def build_weekly_report(con, season, week):
         "SELECT DISTINCT pick_set FROM tr_run_results WHERE scoring_id=?", (sid,))})
     out = [f"# O.D.D.S. vs the baselines -- {season} Week {week}", "",
            f"_Scored {sc['scored_at'][:16].replace('T', ' ')} UTC; hit definition `{sc['hit_config_hash'][:10]}`._", ""]
+    out += stats_warning(stats_notes)
     out += _hit_defs_block(cfg_json) + [""]
     for scope in ("all", "u50"):
         out += [f"## {SCOPE_TITLES[scope]}", ""]
@@ -272,7 +280,7 @@ def _week_run(con, season, week):
     return r[0] if r else None
 
 
-def build_season_report(con, season, report_cfg):
+def build_season_report(con, season, report_cfg, stats_notes=None):
     weeks = scored_weeks(con, season)
     if not weeks:
         return None
@@ -289,6 +297,7 @@ def build_season_report(con, season, report_cfg):
     ks = sorted({int(ps.split("_k")[1]) for (res, _p) in per_week.values() for (_m, ps) in res})
     out = [f"# O.D.D.S. vs the baselines -- {season} season to date", "",
            f"_{len(weeks)} scored week(s): {', '.join(str(w) for w in weeks)}. One run per week (the first snapshot)._", ""]
+    out += stats_warning(stats_notes)
     if len(hashes) > 1:
         out += [f"> **Warning:** these weeks were scored under {len(hashes)} different hit definitions "
                 f"({', '.join(h[:8] for h in sorted(hashes))}); cumulative numbers mix definitions.", ""]

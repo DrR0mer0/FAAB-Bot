@@ -93,7 +93,9 @@ CREATE TABLE IF NOT EXISTS tr_scorings (
   hit_config_json TEXT NOT NULL,
   n_runs INTEGER,
   n_players_ranked INTEGER,
-  stats_source TEXT
+  stats_source TEXT,
+  stats_sha256 TEXT,
+  stats_fingerprint TEXT
 );
 
 CREATE TABLE IF NOT EXISTS tr_player_results (
@@ -225,6 +227,10 @@ def init_schema(con):
     # raw_zlib is the explicit one-time `migrate-ownership-raw` command.
     if "raw_file" not in table_columns(con, "tr_ownership_snapshots"):
         con.execute("ALTER TABLE tr_ownership_snapshots ADD COLUMN raw_file TEXT")
+    # what a scoring was computed from: the stats file's hash, and scoring.stats_fingerprint (NULL before 2026-10-06)
+    for col in ("stats_sha256", "stats_fingerprint"):
+        if col not in table_columns(con, "tr_scorings"):
+            con.execute(f"ALTER TABLE tr_scorings ADD COLUMN {col} TEXT")
     # player records left out of an otherwise valid response for lack of ownership data (NULL before 2026-10-05)
     if "n_skipped" not in table_columns(con, "tr_ownership_snapshots"):
         con.execute("ALTER TABLE tr_ownership_snapshots ADD COLUMN n_skipped INTEGER")

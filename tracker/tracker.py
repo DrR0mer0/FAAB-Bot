@@ -4,6 +4,7 @@
   python tracker/tracker.py log --season 2026 --week 5 --slot thu
   python tracker/tracker.py log --auto --slot sun       # scheduled form (tracker/scheduled_run.py)
   python tracker/tracker.py score --season 2026 --week 5
+  python tracker/tracker.py check-stats --season 2026   # were any scored weeks' stats corrected since?
   python tracker/tracker.py report --season 2026 [--week 5]
   python tracker/tracker.py snapshot-ownership          # daily roster-% collection
   python tracker/tracker.py migrate-ownership-raw       # one-time: raw responses out of the DB into raw/ownership/
@@ -674,11 +675,13 @@ def score_one_week(con, cfg, store, season, week, now, force=False, export_dir=D
 
     scoring_row = {"season": season, "week": week, "scored_at": now.isoformat(), "hit_config_hash": h,
                    "hit_config_json": scoring.hash_input(cfg), "n_runs": len(runs), "n_players_ranked": len(ranks),
-                   "stats_source": str(store.path(season))}
+                   "stats_source": str(store.path(season)), "stats_sha256": scoring.file_sha256(store.path(season)),
+                   "stats_fingerprint": scoring.stats_fingerprint(store, season, week)}
     with con:
         sid = con.execute(
-            "INSERT INTO tr_scorings (season, week, scored_at, hit_config_hash, hit_config_json, n_runs, n_players_ranked, stats_source) "
-            "VALUES (:season,:week,:scored_at,:hit_config_hash,:hit_config_json,:n_runs,:n_players_ranked,:stats_source)",
+            "INSERT INTO tr_scorings (season, week, scored_at, hit_config_hash, hit_config_json, n_runs, n_players_ranked, "
+            "stats_source, stats_sha256, stats_fingerprint) VALUES (:season,:week,:scored_at,:hit_config_hash,:hit_config_json,"
+            ":n_runs,:n_players_ranked,:stats_source,:stats_sha256,:stats_fingerprint)",
             scoring_row).lastrowid
         player_rows = [{"scoring_id": sid, "player_id": pid, "position": r["position"] or "?", "points": r["points"],
                         "pos_rank": r["rank"], "top24": r["top24"], "spike": r["spike"], "trailing_baseline": r["baseline"],
@@ -695,6 +698,56 @@ def score_one_week(con, cfg, store, season, week, now, force=False, export_dir=D
                         {"tr_scorings": [scoring_row], "tr_run_results": run_results, "tr_percentiles": percentiles,
                          "tr_player_results": player_rows})
     return {"scoring_id": sid, "n_runs": len(runs), "run_results": run_results, "percentiles": percentiles}
+
+
+def stats_changes(con, store, season):
+    """Has the stats file changed, in a way that matters, since each scored week
+    of `season` was (last) scored? One dict per scored week:
+      status   'unchanged' | 'changed' | 'unknown' (scored before fingerprints
+               were stored, or the stats file is missing now)
+      message  one line for a human
+    A changed week also gets n_differ / n_compared: how many of the scored
+    week's own player scores now differ (0 means the correction is in an
+    earlier week, which only feeds the spike baselines). Read-only."""
+    out = []
+    for sc in con.execute("SELECT * FROM tr_scorings WHERE season=? AND scoring_id IN "
+                          "(SELECT MAX(scoring_id) FROM tr_scorings WHERE season=? GROUP BY week) ORDER BY week", (season, season)):
+        week, sid = sc["week"], sc["scoring_id"]
+        row = {"week": week, "scoring_id": sid, "scored_at": sc["scored_at"], "status": "unchanged", "n_differ": 0, "n_compared": 0}
+        label = f"{season} week {week} (scoring {sid}, scored {sc['scored_at'][:16].replace('T', ' ')} UTC)"
+        now_fp = scoring.stats_fingerprint(store, season, week)
+        if sc["stats_fingerprint"] is None or now_fp is None:
+            row.update(status="unknown", message=f"{label}: cannot tell whether its stats changed -- "
+                       + ("the stats file is missing" if now_fp is None else "it was scored before fingerprints were stored; "
+                          f"re-score once to set a baseline (score --season {season} --week {week} --force)"))
+        elif now_fp == sc["stats_fingerprint"]:
+            row["message"] = f"{label}: stats unchanged"
+        else:
+            scored = {r[0]: r[1] for r in con.execute("SELECT player_id, points FROM tr_player_results WHERE scoring_id=?", (sid,))}
+            current = store.week_rows(season, week)
+            differ = sum(1 for pid, pts in scored.items() if pid not in current or abs(current[pid]["points"] - pts) > 1e-6)
+            row.update(status="changed", n_differ=differ, n_compared=len(scored))
+            what = (f"{differ} of {len(scored)} week-{week} player scores differ" if differ else
+                    f"week {week}'s own scores are identical; the correction is in an earlier week, which feeds the spike baselines")
+            row["message"] = (f"{label}: STATS CHANGED SINCE IT WAS SCORED -- {what}. Its results are from the earlier stats; "
+                              f"append a corrected scoring with: score --season {season} --week {week} --force")
+        out.append(row)
+    return out
+
+
+def warn_stats_changes(changes, skip_week=None):
+    """Print the check's findings; -> number of weeks whose stats changed."""
+    n = 0
+    for c in changes:
+        if c["week"] == skip_week:
+            continue
+        if c["status"] == "changed":
+            n += 1
+            bar = "!" * 78
+            print(f"\n{bar}\n[STATS CHANGED] {c['message']}\n{bar}\n", file=sys.stderr)
+        elif c["status"] == "unknown":
+            print(f"[STATS] {c['message']}")
+    return n
 
 
 def compute_crowd(con, cfg, now, export_dir=DEFAULT_EXPORT_DIR):
@@ -759,6 +812,9 @@ def cmd_score(args, con):
                 if r["pick_set"] in ("all_k10", "u50_k10"):
                     print(f"  {r['run_id']:34} {r['pick_set']:8} {r['model_name']:12} top-24 {r['top24_hits']:.1f}/{r['n_picks']:.0f}  "
                           f"spike {r['spike_hits']:.1f}  pts {r['total_points']:.1f}")
+        # Every `score` also looks back: were any already-scored weeks' stats corrected since? (The week just
+        # scored is fresh by construction; a week that was SKIPPED above is exactly the one to check.)
+        warn_stats_changes(stats_changes(con, store, args.season), skip_week=args.week if out else None)
     n = compute_crowd(con, cfg, now, export_dir=args.export_dir)
     print(f"[CROWD] appended {n} crowd-hit row(s) for runs whose {cfg['crowd_hit']['window_days']}-day window has closed")
     return 0
@@ -767,13 +823,32 @@ def cmd_score(args, con):
 # ------------------------------------------------------------ report etc.
 
 @with_db
+def cmd_check_stats(args, con):
+    """Exit 1 if any scored week's stats changed since it was scored, else 0."""
+    cfg = scoring.load_config(args.config)
+    changes = stats_changes(con, scoring.StatsStore(args.raw_dir, cfg["scoring"]), args.season)
+    if not changes:
+        print(f"[STATS] nothing scored yet for {args.season}")
+        return 0
+    for c in changes:
+        if c["status"] == "unchanged":
+            print(f"[STATS] {c['message']}")
+    return 1 if warn_stats_changes(changes) else 0
+
+
+@with_db
 def cmd_report(args, con):
     cfg = scoring.load_config(args.config)
+    changes = stats_changes(con, scoring.StatsStore(args.raw_dir, cfg["scoring"]), args.season)
     if args.week is not None:
-        md = report.build_weekly_report(con, args.season, args.week)
+        changes = [c for c in changes if c["week"] == args.week]
+    stale = [c["message"] for c in changes if c["status"] == "changed"]
+    warn_stats_changes(changes)
+    if args.week is not None:
+        md = report.build_weekly_report(con, args.season, args.week, stats_notes=stale)
         name = f"{args.season}_week{args.week:02d}_scoreboard.md"
     else:
-        md = report.build_season_report(con, args.season, cfg["report"])
+        md = report.build_season_report(con, args.season, cfg["report"], stats_notes=stale)
         name = f"{args.season}_season_summary.md"
     if md is None:
         raise Refused(f"nothing scored yet for {args.season}" + (f" week {args.week}" if args.week else "")
@@ -861,6 +936,11 @@ def build_parser():
     p.add_argument("--force", action="store_true", help="append a re-score even under an unchanged hit definition")
     p.add_argument("--crowd-only", action="store_true")
     p.set_defaults(fn=cmd_score)
+
+    p = sub.add_parser("check-stats", help="have any scored weeks' stats been corrected since they were scored? (exit 1 if so)")
+    common(p)
+    p.add_argument("--season", type=int, required=True)
+    p.set_defaults(fn=cmd_check_stats)
 
     p = sub.add_parser("report", help="scoreboard (--week) or season summary")
     common(p)
