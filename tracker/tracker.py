@@ -490,7 +490,8 @@ def cmd_log(args, con):
     # Pool rule: nobody designated Out/Doubtful at log time, for every model alike (see injuries.py).
     exclude = tuple(cfg["run"]["pool_exclude_injury_statuses"])
     inj = resolve_injuries(args, con, cfg, season, week, as_of, snap_id)
-    differ = injuries.disagreements(pool_src, inj["nflverse"], inj["espn"], exclude)
+    # a cross-check only means something when the official report is the one deciding
+    differ = injuries.disagreements(pool_src, inj["nflverse"], inj["espn"], exclude) if inj["source"] == "nflverse" else []
     names = {r["player_id"]: r["name"] for r in pool_src}
     pool_src, held_out = injuries.split_pool(pool_src, inj["status"], exclude)
     print(f"[INJURY] source {inj['source']}" + (f" ({inj['reason']})" if inj["reason"] else "") + f": {len(held_out)} scored "

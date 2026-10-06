@@ -1139,6 +1139,7 @@ class TestLogInjuryPoolRule(TestLogInternationalWeek):
         self.assertEqual(inj["source"], "espn-fallback")
         self.assertIn("nightly update is missing", inj["reason"])
         self.assertEqual(inj["excluded"], {"LV-WR3": "Out", "KC-RB1": "Doubtful"})
+        self.assertEqual(inj["disagreements"], [])   # ESPN decided this pool; there is nothing to cross-check it against
         self.assertEqual(self.rows("SELECT COUNT(*) FROM tr_pool")[0][0], 22)
         self.assertIn("ESPN's injury status", (self.dir / "preds" / "2026_week04.md").read_text(encoding="utf-8"))
 
