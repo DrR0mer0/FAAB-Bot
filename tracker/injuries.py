@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Pre-game injury designations for the tracker's pool rule.
 
-POOL RULE (from 2026 week 5; recorded with every run as `pool_rule`): a player
+POOL RULE (from 2026 week 5; part of the `pool_rule` recorded with every run --
+see tracker.POOL_RULE): a player
 designated Out or Doubtful on the week's NFL injury report at log time is left
 out of the pool -- for every model alike, the same way players whose game has
 already kicked off are. He can't be a pick for O.D.D.S., the shadow model, a
@@ -37,7 +38,6 @@ from email.utils import parsedate_to_datetime
 
 import requests
 
-POOL_RULE = "exclude-out-doubtful-v1"
 NFLVERSE_URL = "https://github.com/nflverse/nflverse-data/releases/download/injuries/injuries_{season}.csv"
 ESPN_TO_REPORT = {"OUT": "Out", "DOUBTFUL": "Doubtful", "QUESTIONABLE": "Questionable"}
 

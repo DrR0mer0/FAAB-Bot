@@ -15,9 +15,10 @@
 frozen JSON into the append-only ledger, then draws the dart / heuristic /
 last_week baselines from that SAME pool. It REFUSES to log a run once the
 slot's kickoff cutoff has passed (see check_slot_window), and a slot's pool
-only ever holds players whose game kicks off at or after that cutoff (see
-split_pool_at_cutoff) and who are not designated Out or Doubtful on the
-week's injury report at log time (see injuries.py). `log --auto` is the scheduled-task form: it works out
+only ever holds players whose team has a game that week (split_pool_no_game),
+whose game kicks off at or after that cutoff (split_pool_at_cutoff), and who
+are not designated Out or Doubtful on the week's injury report at log time
+(injuries.py). `log --auto` is the scheduled-task form: it works out
 the current week itself and quietly skips a week that has no such slot. See
 README.md ("Baseline tracker") for the hit definition and the full workflow.
 """
@@ -59,6 +60,14 @@ BASELINE_VERSIONS = {"dart": "dart-v1", "heuristic": "heuristic-v1", "last_week"
 METRICS = ("top24_hits", "spike_hits", "total_points")
 MAIN_SLATE_ET = (13, 0)  # the Sunday main slate opens with the 1:00 PM Eastern window
 SLOT_RULE = "main-slate-v2"  # recorded with every run; v1 closed `sun` at the earliest Sunday kickoff
+# Who can be in a run's pool at all, recorded with every run as `pool_rule`. Every version applies to all models,
+# baselines and dart draws alike.
+#   (no key)                         2026 week 4 sun: whoever score_week.py scored, minus the slot cutoff.
+#   exclude-out-doubtful-v1          2026 week 5 thu: + nobody designated Out/Doubtful at log time (injuries.py).
+#   exclude-no-game-out-doubtful-v2  + nobody whose team has no game that week. score_week.py scores bye-week
+#                                    players like everyone else (its kickoff guard is a no-op for a team with no
+#                                    game), and the v1 run had 26 of them in its pool.
+POOL_RULE = "exclude-no-game-out-doubtful-v2"
 # Who is in the sleeper ("u50") pool, recorded with every run. v1 (2026 week 4 only, no key in run_config_json):
 # strictly under the threshold, and a pool player with no row in the roster-% snapshot was silently dropped.
 # v2: such a player stays IN, with percent_owned NULL as the "ownership unknown" flag -- he is not assumed to be
@@ -154,6 +163,29 @@ def slot_cutoff(kickoffs, slot):
     return None, f"unknown slot {slot!r}"
 
 
+def teams_with_a_game(con, season, week):
+    """Every team on the schedule for (season, week), in current team codes.
+    Straight from nfl_games' team columns, so it doesn't depend on a kickoff
+    time being present or parseable."""
+    return {norm_team(t) for row in con.execute(
+        "SELECT home_team, away_team FROM nfl_games WHERE season=? AND week=? AND is_playoffs=0", (season, week)) for t in row}
+
+
+def split_pool_no_game(pool_src, playing_teams, roster_team_of):
+    """(kept, no_game). A player whose team has no game this week -- a bye --
+    cannot score, so he is not in the pool for any model, baseline or dart
+    draw. score_week.py scores him regardless: its kickoff guard is a no-op for
+    a team without a game, and nothing else there asks whether one is
+    scheduled. Team resolution is the kickoff guard's: the weekly-roster team
+    if known (so a player traded off a bye team stays in, and one traded onto
+    it goes out), else the team on the scored-pool row."""
+    kept, no_game = [], []
+    for r in pool_src:
+        team = roster_team_of.get(r["player_id"]) or r["team"]
+        (kept if team in playing_teams else no_game).append(r)
+    return kept, no_game
+
+
 def split_pool_at_cutoff(pool_src, team_kickoffs, roster_team_of, cutoff):
     """(kept, excluded). A slot's pool holds only players whose game kicks off
     at or AFTER the slot's cutoff, no matter when the run happens -- so the sun
@@ -162,7 +194,8 @@ def split_pool_at_cutoff(pool_src, team_kickoffs, roster_team_of, cutoff):
     only drops a game that has already started). For `thu` the cutoff IS the
     week's first kickoff, so nothing is excluded. Team resolution mirrors the
     kickoff guard: the weekly-roster team if known, else the team on the
-    scored-pool row; a player with no game this week is kept, as there."""
+    scored-pool row. A team with no kickoff on record is left alone here;
+    players without a game are split_pool_no_game's job, which runs first."""
     kept, excluded = [], []
     for r in pool_src:
         info = team_kickoffs.get(roster_team_of.get(r["player_id"]) or r["team"])
@@ -376,8 +409,18 @@ def resolve_injuries(args, con, cfg, season, week, as_of, snap_id):
                             fetch=injuries.fetch_nflverse)
 
 
+BYE_FLAG_NOTE = ("**(BYE)** = his team has no game this week. Display only -- scores and ranks are unchanged. Flagged "
+                 "players are not in the tracker's pool.")
+
+
+def flag_note(inj, exclude, any_bye):
+    """The line(s) printed above the prediction markdown's table, or None to leave the markdown as score_week.py wrote it."""
+    parts = ([BYE_FLAG_NOTE] if any_bye else []) + [n for n in (injury_flag_note(inj, exclude),) if n]
+    return " ".join(parts) or None
+
+
 def injury_flag_note(inj, exclude):
-    """The line printed above the prediction markdown's table, or None to leave the markdown as score_week.py wrote it."""
+    """The injury part of flag_note, or None when the run has no say on injuries (a skipped source)."""
     labels = " / ".join(f"**({s.upper()})**" for s in exclude)
     if inj["source"] == "nflverse":
         return (f"Injury flags: {labels} = designated on the NFL injury report (nflverse, last updated "
@@ -388,8 +431,8 @@ def injury_flag_note(inj, exclude):
                 f"unavailable: {inj['reason']}). Display only -- scores and ranks are unchanged. Flagged players are not "
                 f"in the tracker's pool.")
     if inj["source"] == "unavailable":
-        return ("Injury flags: no injury designations were available when this was generated, so NOBODY is flagged -- "
-                "players already ruled out may appear below.")
+        return ("Injury flags: no injury designations were available when this was generated, so NOBODY is flagged for "
+                "injury -- players already ruled out may appear below.")
     return None
 
 
@@ -477,6 +520,11 @@ def cmd_log(args, con):
     if shadow and set(shadow_scores) != {r["player_id"] for r in pool_src}:
         raise RuntimeError("production and shadow pools differ -- they must be identical by construction")
     roster_team_of = load_current_roster(str(weekly_roster), season, week)[0] if weekly_roster.exists() else {}
+    # Pool rule, part 1: nobody whose team has no game this week, for every model alike.
+    pool_src, idle = split_pool_no_game(pool_src, teams_with_a_game(con, season, week), roster_team_of)
+    if idle:
+        print(f"[INFO] {len(idle)} scored player(s) left out of the pool: their team has no game in week {week} -- teams "
+              f"{sorted({roster_team_of.get(r['player_id']) or r['team'] for r in idle})}")
     pool_src, early = split_pool_at_cutoff(pool_src, load_kickoffs(con, season, week), roster_team_of, cutoff)
     if early:
         print(f"[INFO] {len(early)} scored player(s) left out of the {slot} pool: their game kicks off before the "
@@ -488,7 +536,7 @@ def cmd_log(args, con):
     else:
         status, snap_id, own = resolve_ownership(con, cfg, season, as_of, allow_live, args.ownership_raw_dir)
 
-    # Pool rule: nobody designated Out/Doubtful at log time, for every model alike (see injuries.py).
+    # Pool rule, part 2: nobody designated Out/Doubtful at log time, for every model alike (see injuries.py).
     exclude = tuple(cfg["run"]["pool_exclude_injury_statuses"])
     inj = resolve_injuries(args, con, cfg, season, week, as_of, snap_id)
     # a cross-check only means something when the official report is the one deciding
@@ -511,9 +559,10 @@ def cmd_log(args, con):
     if not pool_src:
         raise Refused("O.D.D.S. scored an empty pool -- nothing to log")
     # Display only: flag those players in the prediction markdown. Scores, ranks and the JSON stay as score_week.py wrote them.
-    note = injury_flag_note(inj, exclude)
+    note = flag_note(inj, exclude, bool(idle))
     if note:
         flags = {pid: st.upper() for pid, st in inj["status"].items() if st in exclude}
+        flags.update({r["player_id"]: "BYE" for r in idle})   # no game at all outranks an injury designation
         for path, output in ((pred_path, prod), (shadow_path, shadow)):
             if output is not None:
                 path.with_suffix(".md").write_text(render_markdown_report(output, flags, note), encoding="utf-8")
@@ -564,7 +613,8 @@ def cmd_log(args, con):
         "ownership_snapshot_id": snap_id, "ownership_status": status, "ownership_matched": n_matched,
         "run_config_json": json.dumps({
             "run": cfg["run"], "hit_config_hash": scoring.config_hash(cfg), "slot_rule": SLOT_RULE,
-            "excluded_before_cutoff": sorted(r["player_id"] for r in early), "pool_rule": injuries.POOL_RULE,
+            "excluded_before_cutoff": sorted(r["player_id"] for r in early), "pool_rule": POOL_RULE,
+            "excluded_no_game": sorted(r["player_id"] for r in idle),
             "sleeper_pool_rule": SLEEPER_POOL_RULE, "ownership_unknown_in_sleeper_pool": sorted(unknown_ids),
             "injury": {"source": inj["source"], "reason": inj["reason"], "exclude_statuses": list(exclude),
                        "excluded": held_out, "disagreements": differ, "nflverse_sha256": inj["sha256"],

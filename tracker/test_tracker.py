@@ -753,6 +753,24 @@ class TestSlotPool(unittest.TestCase):
         self.assertEqual({r["team"] for r in out}, {"PIT", "CLE", "IND", "WAS"})
         self.assertEqual({r["team"] for r in kept}, {"TEN", "BAL", "KC", "DEN"})  # 1 PM game itself is in; a bye team is untouched
 
+    def test_players_whose_team_has_no_game_are_split_off_first(self):
+        playing = set(self.KICKOFFS)
+        pool = self.pool("PIT", "TEN", "DEN", "KC") + [{"player_id": "traded-off-the-bye-team", "team": "DEN"},
+                                                        {"player_id": "traded-onto-the-bye-team", "team": "KC"}]
+        kept, idle = tracker.split_pool_no_game(pool, playing, {"traded-off-the-bye-team": "TEN", "traded-onto-the-bye-team": "DEN"})
+        self.assertEqual(sorted(r["player_id"] for r in idle), ["DEN-0", "DEN-1", "traded-onto-the-bye-team"])
+        self.assertEqual(len(kept), 7)                             # Thursday players are still here: that's the cutoff's job
+        self.assertEqual(tracker.split_pool_no_game(pool[:4], playing, {}), (pool[:4], []))
+
+    def test_teams_with_a_game_does_not_depend_on_a_usable_kickoff_time(self):
+        con = mem_db()
+        con.execute("CREATE TABLE nfl_games (season INTEGER, week INTEGER, game_id TEXT, kickoff_utc TEXT, home_team TEXT, "
+                    "away_team TEXT, is_playoffs INTEGER DEFAULT 0)")
+        con.executemany("INSERT INTO nfl_games VALUES (2026, 5, ?, ?, ?, ?, 0)",
+                        [("a", "2026-10-11T13:00:00", "TEN", "BAL"), ("b", "not a time", "OAK", "DEN"), ("c", "", "KC", "PIT")])
+        con.execute("INSERT INTO nfl_games VALUES (2026, 6, 'd', '2026-10-18T13:00:00', 'CAR', 'NO', 0)")
+        self.assertEqual(tracker.teams_with_a_game(con, 2026, 5), {"TEN", "BAL", "LV", "DEN", "KC", "PIT"})
+
     def test_thu_pool_excludes_nobody(self):
         pool = self.pool("PIT", "IND", "TEN", "KC")
         kept, out = tracker.split_pool_at_cutoff(pool, self.KICKOFFS, {}, self.THU)
@@ -1042,6 +1060,59 @@ class TestLogInjuryPoolRule(TestLogInternationalWeek):
         con.commit()
         con.close()
 
+    # ---- bye weeks: a team with no game
+
+    def add_bye_team(self):
+        """Six CAR players near the top of what O.D.D.S. scored; CAR has no game in this fixture's week 4."""
+        self.scored_pool[2:2] = [{"player_id": f"CAR-{pos}{i}", "name": f"CAR-{pos}{i}", "pos": pos, "team": "CAR", "score": 0.95}
+                                 for i, pos in enumerate(("RB", "RB", "WR", "WR", "WR", "TE"))]
+
+    def test_bye_week_players_are_out_of_the_pool_for_every_model_recorded_and_flagged(self):
+        self.add_bye_team()
+        rc, out = self.log_live(self.fresh, "--skip-ownership")
+        self.assertEqual(rc, 0)
+        self.assertIn("6 scored player(s) left out of the pool: their team has no game in week 4 -- teams ['CAR']", out)
+        self.assertEqual({r["team"] for r in self.rows("SELECT team FROM tr_pool")}, {"TEN", "BAL", "KC", "LV"})
+        picks = self.rows("SELECT DISTINCT model_name, player_id FROM tr_predictions")
+        self.assertEqual({r["model_name"] for r in picks}, {"odds_prod", "odds_shadow", "heuristic", "last_week", "dart"})
+        self.assertFalse([r for r in picks if r["player_id"].startswith("CAR-")])
+        cfg = self.run_config()
+        self.assertEqual(cfg["pool_rule"], tracker.POOL_RULE)
+        self.assertEqual(cfg["excluded_no_game"], sorted(f"CAR-{pos}{i}" for i, pos in enumerate(("RB", "RB", "WR", "WR", "WR", "TE"))))
+        self.assertEqual(cfg["injury"]["excluded"], {"TEN-RB0": "Out", "BAL-WR2": "Doubtful"})    # the injury rule still runs
+        for stem in ("2026_week04", "2026_week04_shadow"):
+            self.assertEqual((self.dir / "preds" / f"{stem}.json").read_text(encoding="utf-8"), self.json_as_written)   # JSON untouched
+            md = (self.dir / "preds" / f"{stem}.md").read_text(encoding="utf-8")
+            self.assertIn("| 3 | CAR-RB0 **(BYE)** | RB | CAR | 0.9500 |", md)    # rank and score exactly as scored
+            self.assertIn("**(BYE)** = his team has no game this week.", md)
+            self.assertIn("TEN-RB0 **(OUT)**", md)
+            self.assertIn("Injury flags:", md)
+
+    def test_bye_flag_does_not_need_an_injury_report(self):
+        """An --as-of run fetches no injury report, but the schedule alone says who is on a bye."""
+        self.add_bye_team()
+        self.assertEqual(self.log("sun", "2026-10-04T14:00:00+00:00"), 0)
+        self.assertEqual(len(self.run_config()["excluded_no_game"]), 6)
+        md = (self.dir / "preds" / "2026_week04.md").read_text(encoding="utf-8")
+        self.assertIn("CAR-TE5 **(BYE)**", md)
+        self.assertNotIn("Injury flags:", md)
+        self.assertNotIn("**(OUT)**", md)
+
+    def test_roster_team_decides_who_is_on_a_bye(self):
+        self.add_bye_team()
+        with open(self.dir / "raw" / "roster_weekly_2026.csv", "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=["season", "week", "gsis_id", "team", "position", "status", "rookie_year", "draft_number"])
+            w.writeheader()
+            w.writerow(dict(season=2026, week=4, gsis_id="CAR-RB0", team="LV", position="RB", status="ACT"))    # traded to a team that plays
+            w.writerow(dict(season=2026, week=4, gsis_id="KC-RB0", team="CAR", position="RB", status="ACT"))    # traded onto the bye team
+        self.assertEqual(self.log_live(self.fresh, "--skip-ownership")[0], 0)
+        cfg = self.run_config()
+        self.assertIn("KC-RB0", cfg["excluded_no_game"])
+        self.assertNotIn("CAR-RB0", cfg["excluded_no_game"])
+        pool = {r["player_id"] for r in self.rows("SELECT player_id FROM tr_pool")}
+        self.assertIn("CAR-RB0", pool)
+        self.assertNotIn("KC-RB0", pool)
+
     def test_pool_player_with_no_ownership_row_stays_in_the_sleeper_pool_flagged_as_unknown(self):
         """A player skipped by the ESPN parser, or simply absent from ESPN's list: not dropped, not treated as 0%."""
         self.add_espn_snapshot({}, owned={"KC-RB0": 80.0, "KC-RB1": 49.9, "KC-WR2": 50.0}, no_row=("LV-WR3", "TEN-TE5"))
@@ -1108,7 +1179,8 @@ class TestLogInjuryPoolRule(TestLogInternationalWeek):
         self.assertEqual({r["model_name"] for r in picks}, {"odds_prod", "odds_shadow", "heuristic", "last_week", "dart"})
         self.assertFalse([r for r in picks if r["player_id"] in ("TEN-RB0", "BAL-WR2")])
         cfg = self.run_config()
-        self.assertEqual(cfg["pool_rule"], injuries.POOL_RULE)
+        self.assertEqual(cfg["pool_rule"], tracker.POOL_RULE)
+        self.assertEqual(cfg["excluded_no_game"], [])              # all eight teams in this fixture play
         inj = cfg["injury"]
         self.assertEqual((inj["source"], inj["reason"], inj["exclude_statuses"]), ("nflverse", None, ["Out", "Doubtful"]))
         self.assertEqual(inj["excluded"], {"TEN-RB0": "Out", "BAL-WR2": "Doubtful"})   # IND-RB0 was already out via the cutoff
@@ -1878,12 +1950,31 @@ class TestScoreEndToEnd(unittest.TestCase):
         row = {k: self.con.execute("SELECT * FROM tr_runs").fetchone()[k] for k in ("run_id", "week", "run_slot")}
         for source, expect in (("nflverse", None), ("espn-fallback", "using ESPN's injury status instead"),
                                ("unavailable", "exclusion was NOT applied")):
-            cfg = json.dumps({"pool_rule": injuries.POOL_RULE, "injury": {"source": source}})
+            cfg = json.dumps({"pool_rule": tracker.POOL_RULE, "injury": {"source": source}})
             notes = report.pool_rule_notes([dict(row, run_config_json=cfg)])
             self.assertEqual(len(notes), 0 if expect is None else 1)
             if expect:
                 self.assertIn(expect, notes[0])
                 self.assertIn("week 5 `thu` run", notes[0])
+
+    def test_run_logged_with_bye_week_players_in_its_pool_is_footnoted_from_the_ledger(self):
+        run = dict(self.con.execute("SELECT * FROM tr_runs").fetchone())
+        self.assertEqual(report.no_game_notes(self.con, [run]), [])          # everyone in this pool plays (AAA vs BBB)
+        for i, model in enumerate(("odds_prod", "last_week", "last_week")):   # three bye-week players, three top-10 picks among them
+            ledger.insert_rows(self.con, "tr_pool", [dict(run_id="r1", player_id=f"bye{i}", position="WR", team="ZZZ" if i else "YYY")])
+            ledger.insert_rows(self.con, "tr_predictions", [dict(run_id="r1", model_name=model, pick_set="all_k10", rank=90 + i,
+                                                                 player_id=f"bye{i}", position="WR")])
+        (note,) = report.no_game_notes(self.con, [run])
+        self.assertIn("week 5 `thu` run was logged before players whose team has no game that week were excluded", note)
+        self.assertIn("3 of its 43 pool players were on a bye (YYY, ZZZ)", note)
+        self.assertIn("O.D.D.S. 1, shadow 0, snap-share heuristic 0, last week's points 2", note)
+        self.assertIn("about 7% of every dart draw", note)
+        with contextlib.redirect_stderr(io.StringIO()):   # the pool was edited after logging, so the dart self-check complains
+            self.score()
+        self.assertIn("were on a bye (YYY, ZZZ)", report.build_weekly_report(self.con, 2026, 5))
+        self.assertIn("were on a bye (YYY, ZZZ)", report.build_season_report(self.con, 2026, CFG["report"]))
+        v2 = dict(run, run_config_json=json.dumps({"pool_rule": tracker.POOL_RULE, "excluded_no_game": []}))
+        self.assertEqual(report.no_game_notes(self.con, [v2]), [])            # a run under the rule can't have any
 
     def test_report_shows_the_unknown_ownership_count_and_says_when_an_old_run_dropped_them(self):
         self.con.execute("INSERT INTO tr_ownership_snapshots (snapshot_id, taken_at, source, ok) VALUES (1, '2026-10-08T11:30:00+00:00', 'espn', 1)")

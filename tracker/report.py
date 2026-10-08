@@ -10,9 +10,14 @@ dart percentile, and bootstrap 95% confidence intervals -- resampling WEEKS
 week (the first snapshot: thu if it exists, else sun), like verify_week.py.
 """
 import json
+import sys
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "data"))
+from team_crosswalk import norm_team  # noqa: E402
 
 # A bootstrap over fewer weeks than this is a zero-width or meaningless interval; show the point estimate only.
 MIN_WEEKS_FOR_CI = 3
@@ -63,6 +68,35 @@ def pool_rule_notes(runs):
         elif source in ("unavailable", "skipped"):
             notes.append(f"**Pool rule:** for the {label} no injury designations were available, so the Out/Doubtful "
                          f"exclusion was NOT applied; players already ruled out may have been in its pool.")
+    return notes
+
+
+def no_game_notes(con, runs):
+    """Footnotes for runs logged before players without a game that week were
+    excluded (no `excluded_no_game` in run_config_json) whose pool actually
+    held some. Counted from the ledger: the team stored with each pool row
+    against that week's schedule."""
+    notes = []
+    for run in runs:
+        if "excluded_no_game" in json.loads(run["run_config_json"] or "{}"):
+            continue
+        playing = {norm_team(t) for row in con.execute(
+            "SELECT home_team, away_team FROM nfl_games WHERE season=? AND week=? AND is_playoffs=0",
+            (run["season"], run["week"])) for t in row}
+        pool = con.execute("SELECT player_id, team FROM tr_pool WHERE run_id=?", (run["run_id"],)).fetchall()
+        idle = {r["player_id"]: r["team"] for r in pool if r["team"] not in playing}
+        if not idle or not playing:
+            continue
+        top10 = {m: 0 for m in ("odds_prod", "odds_shadow", "heuristic", "last_week")}
+        for r in con.execute("SELECT model_name, player_id FROM tr_predictions WHERE run_id=? AND pick_set='all_k10'", (run["run_id"],)):
+            if r["player_id"] in idle and r["model_name"] in top10:
+                top10[r["model_name"]] += 1
+        notes.append(
+            f"**Pool rule:** the week {run['week']} `{run['run_slot']}` run was logged before players whose team has no game "
+            f"that week were excluded. {len(idle)} of its {len(pool)} pool players were on a bye "
+            f"({', '.join(sorted(set(idle.values())))}) and could not score. Top-10 picks among them: O.D.D.S. {top10['odds_prod']}, "
+            f"shadow {top10['odds_shadow']}, snap-share heuristic {top10['heuristic']}, last week's points {top10['last_week']}; "
+            f"about {100 * len(idle) / len(pool):.0f}% of every dart draw. Its numbers are left as logged.")
     return notes
 
 
@@ -270,7 +304,8 @@ def build_weekly_report(con, season, week, stats_notes=None):
                 out += [f"### Top {k} -- {run['run_slot']} run ({run['run_timestamp'][:16].replace('T', ' ')} UTC)", ""] + tbl + [""]
         if not wrote:
             out += ["_No results for this section (no roster-% was available when the run was logged)._", ""]
-    out += ["## Caveats", ""] + [f"- {c}" for c in KNOWN_CAVEATS + pool_rule_notes(runs) + ownership_notes(con, runs)] + [""]
+    out += ["## Caveats", ""] + [f"- {c}" for c in KNOWN_CAVEATS + pool_rule_notes(runs) + no_game_notes(con, runs)
+                                 + ownership_notes(con, runs)] + [""]
     return "\n".join(out)
 
 
@@ -370,7 +405,8 @@ def build_season_report(con, season, report_cfg, stats_notes=None):
                        f"(95% CI {100 * lo:+.1f} to {100 * hi:+.1f}) over {n} week(s) -- {verdict}"
                        + (" (but see the small-sample note)." if n_weeks < min_weeks else "."))
     crowd = build_crowd_section(con, season)
-    out += [""] + crowd + ["", "## Caveats", ""] + [f"- {c}" for c in KNOWN_CAVEATS + pool_rule_notes(used_runs) + ownership_notes(con, used_runs)
+    out += [""] + crowd + ["", "## Caveats", ""] + [f"- {c}" for c in KNOWN_CAVEATS + pool_rule_notes(used_runs) + no_game_notes(con, used_runs)
+                                                           + ownership_notes(con, used_runs)
                                                            + sleeper_pool_lines(con, used_runs, only_if_unknown=True)] + [""]
     return "\n".join(out)
 
