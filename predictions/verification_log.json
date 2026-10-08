@@ -16,6 +16,27 @@
       ]
     }
   ],
+  "pool_changes": [
+    {
+      "changed_at": "2026-10-08T15:00:23.712084+00:00",
+      "first_week_applied": {
+        "season": 2026,
+        "week": 6
+      },
+      "score_week_git_commit": "95e41edaf3441f79835f28e6f0ff950451b56fe3",
+      "note": "From 2026 week 6, model/score_week.py no longer scores a player whose team has no game that week (a bye): he is listed in no_game_watch_list instead of being ranked. Before this, bye-week players were ranked like everyone else and counted here as DNP misses. Weeks 1-4 had no byes, so they are the same either way. Week 5 is the one week affected: its first snapshot (predictions/2026_week05.json, generated 2026-10-08 before the change) is frozen WITH bye-week players in it (CAR and KC), and they are guaranteed misses for that week. Do not average week 5's precision with other weeks without accounting for that. The historical table the model was trained and evaluated on only ever held player-weeks that were played, so from week 6 the live pool matches it.",
+      "week_5_first_snapshot_bye_players": {
+        "production": {
+          "top_10": 3,
+          "top_25": 6
+        },
+        "shadow": {
+          "top_10": 0,
+          "top_25": 4
+        }
+      }
+    }
+  ],
   "weeks": [
     {
       "season": 2026,
