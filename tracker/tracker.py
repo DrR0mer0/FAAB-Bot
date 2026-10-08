@@ -731,7 +731,7 @@ def score_one_week(con, cfg, store, season, week, now, force=False, export_dir=D
     scoring_row = {"season": season, "week": week, "scored_at": now.isoformat(), "hit_config_hash": h,
                    "hit_config_json": scoring.hash_input(cfg), "n_runs": len(runs), "n_players_ranked": len(ranks),
                    "stats_source": str(store.path(season)), "stats_sha256": scoring.file_sha256(store.path(season)),
-                   "stats_fingerprint": scoring.stats_fingerprint(store, season, week)}
+                   "stats_fingerprint": scoring.stats_fingerprint(store, season, week, hit["positions"], pool_ids)}
     with con:
         sid = con.execute(
             "INSERT INTO tr_scorings (season, week, scored_at, hit_config_hash, hit_config_json, n_runs, n_players_ranked, "
@@ -770,11 +770,17 @@ def stats_changes(con, store, season):
         week, sid = sc["week"], sc["scoring_id"]
         row = {"week": week, "scoring_id": sid, "scored_at": sc["scored_at"], "status": "unchanged", "n_differ": 0, "n_compared": 0}
         label = f"{season} week {week} (scoring {sid}, scored {sc['scored_at'][:16].replace('T', ' ')} UTC)"
-        now_fp = scoring.stats_fingerprint(store, season, week)
-        if sc["stats_fingerprint"] is None or now_fp is None:
-            row.update(status="unknown", message=f"{label}: cannot tell whether its stats changed -- "
-                       + ("the stats file is missing" if now_fp is None else "it was scored before fingerprints were stored; "
-                          f"re-score once to set a baseline (score --season {season} --week {week} --force)"))
+        pool_ids = {r[0] for r in con.execute(
+            "SELECT DISTINCT p.player_id FROM tr_pool p JOIN tr_runs r ON r.run_id = p.run_id WHERE r.season=? AND r.week=?",
+            (season, week))}
+        now_fp = scoring.stats_fingerprint(store, season, week, json.loads(sc["hit_config_json"])["hit"]["positions"], pool_ids)
+        comparable = (sc["stats_fingerprint"] or "").startswith(scoring.FINGERPRINT_VERSION + ":")
+        if not comparable or now_fp is None:
+            why = ("the stats file is missing" if now_fp is None else
+                   "it was scored before fingerprints were stored" if sc["stats_fingerprint"] is None else
+                   "its fingerprint is from an earlier version of this check")
+            row.update(status="unknown", message=f"{label}: cannot tell whether its stats changed -- {why}"
+                       + ("" if now_fp is None else f"; re-score once to set a baseline (score --season {season} --week {week} --force)"))
         elif now_fp == sc["stats_fingerprint"]:
             row["message"] = f"{label}: stats unchanged"
         else:

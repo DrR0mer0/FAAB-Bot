@@ -44,26 +44,39 @@ def file_sha256(path):
     return hashlib.sha256(p.read_bytes()).hexdigest() if p.exists() else None
 
 
-def stats_fingerprint(store, season, week):
-    """SHA-256 over everything a scoring of (season, week) reads from the
-    season's stats file: (week, player, position, team, league points) for
-    every regular-season row of weeks <= `week` -- the week itself for points
-    and position ranks, the earlier weeks for the spike baselines. Stored with
-    each scoring so a later stat correction can be noticed.
+FINGERPRINT_VERSION = "v2"
+
+
+def stats_fingerprint(store, season, week, positions, player_ids=()):
+    """'v2:<sha256>' over everything a scoring of (season, week) reads from
+    the season's stats file: (week, player, position, team, league points) for
+    the regular-season rows of weeks <= `week` (the week itself for points and
+    position ranks, the earlier weeks for the spike baselines) that scoring
+    can actually see -- rows at one of the hit definition's `positions`, plus
+    any row of a player in `player_ids` (the week's pool, whose points count
+    whatever position a row lists him at). Stored with each scoring so a later
+    stat correction can be noticed.
 
     Deliberately NOT the hash of the file: the season file gains a week of rows
     every Tuesday, so its hash changes weekly whether or not anything already
     scored was corrected. This one is unaffected by later weeks being added, by
-    row order, and by columns scoring never reads; it does change when a
-    correction moves any player's points, position or team in a week the
-    scoring used. (A baseline reaching back into the PRIOR season -- weeks 1-3
-    -- is outside it.) None if the season file is missing."""
+    row order, by columns scoring never reads, and by edits to players scoring
+    never looks at -- nflverse re-labels a guard as a center, or a DE as an
+    LB, all the time (v1, 2026-10-06 to 08, covered every row and raised its
+    first alarm over exactly that). It does change when a correction moves a
+    skill-position or pool player's points, position or team in a week the
+    scoring used, including a move into or out of the hit positions. (A
+    baseline reaching back into the PRIOR season -- weeks 1-3 -- is outside
+    it.) The version prefix keeps fingerprints of different definitions from
+    being compared. None if the season file is missing."""
     data = store.season_data(season)
     if data is None:
         return None
+    positions, player_ids = set(positions), set(player_ids)
     rows = sorted((w, pid, r["position"], r["team"], round(r["points"], 4))
-                  for w, players in data.items() if w <= week for pid, r in players.items())
-    return hashlib.sha256(json.dumps(rows, separators=(",", ":")).encode("utf-8")).hexdigest()
+                  for w, players in data.items() if w <= week for pid, r in players.items()
+                  if r["position"] in positions or pid in player_ids)
+    return f"{FINGERPRINT_VERSION}:" + hashlib.sha256(json.dumps(rows, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 def _num(stats, key):

@@ -1879,24 +1879,53 @@ class TestScoreEndToEnd(unittest.TestCase):
             w.writerows(rows)
         return scoring.StatsStore(self.raw, RULES)   # a fresh reader, as every command gets
 
+    def fingerprint(self, store, pool=None):
+        ids = {r["player_id"] for r in self.pool} if pool is None else pool
+        return scoring.stats_fingerprint(store, 2026, 5, CFG["hit"]["positions"], ids)
+
+    def test_fingerprint_only_covers_players_scoring_can_see(self):
+        """2026-10-08: the check's first alarm was nflverse re-labelling a guard as a center and a DE as an LB."""
+        def with_linemen(pos):
+            store = self.rewrite_stats(lambda r: r)
+            with open(self.raw / "stats_player_week_2026.csv", "a", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(f, fieldnames=self.COLS)
+                w.writerow(dict(player_id="lineman", season=2026, week=3, season_type="REG", position=pos, team="AAA"))
+                w.writerow(dict(player_id="edge", season=2026, week=5, season_type="REG", position="DE" if pos == "G" else "LB", team="BBB"))
+            return scoring.StatsStore(self.raw, RULES)
+        base = self.fingerprint(self.store)
+        self.assertEqual(self.fingerprint(with_linemen("G")), base)       # players at positions scoring never ranks: invisible
+        self.assertEqual(self.fingerprint(with_linemen("C")), base)       # ...so re-labelling them changes nothing
+        # but a skill player leaving the hit positions is visible, and so is anything about a pool player
+        self.assertNotEqual(self.fingerprint(self.rewrite_stats(lambda r: dict(r, position="DB") if r["player_id"] == "p05" else r)), base)
+        g = with_linemen("G")
+        self.assertNotEqual(self.fingerprint(g, pool={"lineman"}), self.fingerprint(g, pool=set()))
+
+    def test_fingerprint_from_an_earlier_version_is_unknown_not_changed(self):
+        self.con.execute("INSERT INTO tr_scorings (season, week, scored_at, hit_config_hash, hit_config_json, stats_fingerprint) "
+                         "VALUES (2026, 5, 't', 'h', ?, 'c97a470dbd8c0000')", (scoring.hash_input(CFG),))
+        (c,) = tracker.stats_changes(self.con, self.store, 2026)
+        self.assertEqual(c["status"], "unknown")
+        self.assertIn("its fingerprint is from an earlier version of this check; re-score once", c["message"])
+
     def test_scoring_stores_the_file_hash_and_a_fingerprint_of_what_it_read(self):
         self.score()
         row = self.con.execute("SELECT stats_sha256, stats_fingerprint FROM tr_scorings").fetchone()
         self.assertEqual(row["stats_sha256"], hashlib.sha256((self.raw / "stats_player_week_2026.csv").read_bytes()).hexdigest())
-        self.assertEqual(row["stats_fingerprint"], scoring.stats_fingerprint(self.store, 2026, 5))
+        self.assertEqual(row["stats_fingerprint"], self.fingerprint(self.store))
+        self.assertTrue(row["stats_fingerprint"].startswith("v2:"))
         self.assertEqual([c["status"] for c in tracker.stats_changes(self.con, self.store, 2026)], ["unchanged"])
 
     def test_fingerprint_ignores_what_scoring_never_reads_and_catches_what_it_does(self):
-        base = scoring.stats_fingerprint(self.store, 2026, 5)
+        base = self.fingerprint(self.store)
 
         def fp(change):
-            return scoring.stats_fingerprint(self.rewrite_stats(change), 2026, 5)
+            return self.fingerprint(self.rewrite_stats(change))
         # next Tuesday the file gains a week: must NOT look like a correction to week 5
         self.rewrite_stats(lambda r: r)
         with open(self.raw / "stats_player_week_2026.csv", "a", newline="", encoding="utf-8") as f:
             csv.DictWriter(f, fieldnames=self.COLS).writerow(dict(player_id="p00", season=2026, week=6, season_type="REG",
                                                                   position="WR", team="AAA", receptions=9, receiving_yards=90))
-        self.assertEqual(scoring.stats_fingerprint(scoring.StatsStore(self.raw, RULES), 2026, 5), base)
+        self.assertEqual(self.fingerprint(scoring.StatsStore(self.raw, RULES)), base)
         self.assertEqual(fp(lambda r: dict(r, target_share=0.99)), base)              # a column scoring doesn't use
         self.assertNotEqual(fp(lambda r: dict(r, receiving_yards=11) if (r["player_id"], r["week"]) == ("p07", "5") else r), base)
         self.assertNotEqual(fp(lambda r: dict(r, position="TE") if (r["player_id"], r["week"]) == ("p07", "5") else r), base)
@@ -1930,7 +1959,8 @@ class TestScoreEndToEnd(unittest.TestCase):
         self.assertIn("the correction is in an earlier week, which feeds the spike baselines", c["message"])
 
     def test_scoring_from_before_fingerprints_is_unknown_not_unchanged(self):
-        self.con.execute("INSERT INTO tr_scorings (season, week, scored_at, hit_config_hash, hit_config_json) VALUES (2026, 5, 't', 'h', '{}')")
+        self.con.execute("INSERT INTO tr_scorings (season, week, scored_at, hit_config_hash, hit_config_json) VALUES (2026, 5, 't', 'h', ?)",
+                         (scoring.hash_input(CFG),))
         (c,) = tracker.stats_changes(self.con, self.store, 2026)
         self.assertEqual(c["status"], "unknown")
         self.assertIn("re-score once to set a baseline", c["message"])
