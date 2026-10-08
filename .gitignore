@@ -21,3 +21,6 @@ raw/
 
 # Tracker: scheduled-task run logs
 tracker/logs/
+
+# Unofficial prediction re-runs, for viewing only -- never part of the tracked record
+predictions/scratch/
