@@ -1,0 +1,6443 @@
+{
+  "season": 2026,
+  "week": 5,
+  "generated_at": "2026-10-08T14:00:27.656615+00:00",
+  "model": {
+    "path": "C:\\FAAB\\history\\odds_xgb_model_production_10feature.joblib",
+    "filename": "odds_xgb_model_production_10feature.joblib",
+    "git_commit": "262a04fda4a39cb4c16e568f1d28034a399169e7",
+    "role": "superseded_production"
+  },
+  "counts": {
+    "total_eligible": 2070,
+    "after_position_filter": 630,
+    "stable_scored": 404,
+    "released_from_offseason_suppression": 316,
+    "unavailable_suppressed": 64,
+    "already_played": 0,
+    "team_changed_suppressed": 55,
+    "new_competitor_suppressed": 107,
+    "new_competitor_via_production_only": 54,
+    "new_competitor_via_draft_only": 15,
+    "new_competitor_via_both": 38
+  },
+  "top": [
+    {
+      "player_id": "00-0036358",
+      "name": "CeeDee Lamb",
+      "pos": "WR",
+      "team": "DAL",
+      "score": 0.3398154377937317,
+      "rank": 1
+    },
+    {
+      "player_id": "00-0040730",
+      "name": "RJ Harvey",
+      "pos": "RB",
+      "team": "DEN",
+      "score": 0.3347453773021698,
+      "rank": 2
+    },
+    {
+      "player_id": "00-0038454",
+      "name": "Keaton Mitchell",
+      "pos": "RB",
+      "team": "LAC",
+      "score": 0.32613053917884827,
+      "rank": 3
+    },
+    {
+      "player_id": "00-0036875",
+      "name": "Rhamondre Stevenson",
+      "pos": "RB",
+      "team": "NE",
+      "score": 0.32438045740127563,
+      "rank": 4
+    },
+    {
+      "player_id": "00-0040198",
+      "name": "Ollie Gordon II",
+      "pos": "RB",
+      "team": "MIA",
+      "score": 0.32385221123695374,
+      "rank": 5
+    },
+    {
+      "player_id": "00-0040734",
+      "name": "TreVeyon Henderson",
+      "pos": "RB",
+      "team": "NE",
+      "score": 0.3135834038257599,
+      "rank": 6
+    },
+    {
+      "player_id": "00-0041438",
+      "name": "Carnell Tate",
+      "pos": "WR",
+      "team": "TEN",
+      "score": 0.31187108159065247,
+      "rank": 7
+    },
+    {
+      "player_id": "00-0037746",
+      "name": "Brian Robinson",
+      "pos": "RB",
+      "team": "ATL",
+      "score": 0.30037492513656616,
+      "rank": 8
+    },
+    {
+      "player_id": "00-0036139",
+      "name": "Rico Dowdle",
+      "pos": "RB",
+      "team": "PIT",
+      "score": 0.2977001667022705,
+      "rank": 9
+    },
+    {
+      "player_id": "00-0039811",
+      "name": "MarShawn Lloyd",
+      "pos": "RB",
+      "team": "GB",
+      "score": 0.2947797179222107,
+      "rank": 10
+    },
+    {
+      "player_id": "00-0039794",
+      "name": "Braelon Allen",
+      "pos": "RB",
+      "team": "NYJ",
+      "score": 0.29258599877357483,
+      "rank": 11
+    },
+    {
+      "player_id": "00-0036158",
+      "name": "J.K. Dobbins",
+      "pos": "RB",
+      "team": "DEN",
+      "score": 0.2924172580242157,
+      "rank": 12
+    },
+    {
+      "player_id": "00-0039337",
+      "name": "Malik Nabers",
+      "pos": "WR",
+      "team": "NYG",
+      "score": 0.29058730602264404,
+      "rank": 13
+    },
+    {
+      "player_id": "00-0035685",
+      "name": "David Montgomery",
+      "pos": "RB",
+      "team": "HOU",
+      "score": 0.28869426250457764,
+      "rank": 14
+    },
+    {
+      "player_id": "00-0035640",
+      "name": "DK Metcalf",
+      "pos": "WR",
+      "team": "PIT",
+      "score": 0.2884191572666168,
+      "rank": 15
+    },
+    {
+      "player_id": "00-0040242",
+      "name": "Jacory Croskey-Merritt",
+      "pos": "RB",
+      "team": "WAS",
+      "score": 0.2849920690059662,
+      "rank": 16
+    },
+    {
+      "player_id": "00-0038117",
+      "name": "Wan'Dale Robinson",
+      "pos": "WR",
+      "team": "TEN",
+      "score": 0.2847745418548584,
+      "rank": 17
+    },
+    {
+      "player_id": "00-0039067",
+      "name": "Rashee Rice",
+      "pos": "WR",
+      "team": "KC",
+      "score": 0.2813781797885895,
+      "rank": 18
+    },
+    {
+      "player_id": "00-0031610",
+      "name": "Darren Waller",
+      "pos": "TE",
+      "team": "CAR",
+      "score": 0.27602919936180115,
+      "rank": 19
+    },
+    {
+      "player_id": "00-0039880",
+      "name": "Malik Washington",
+      "pos": "WR",
+      "team": "MIA",
+      "score": 0.27560338377952576,
+      "rank": 20
+    },
+    {
+      "player_id": "00-0037240",
+      "name": "Jameson Williams",
+      "pos": "WR",
+      "team": "DET",
+      "score": 0.2746018171310425,
+      "rank": 21
+    },
+    {
+      "player_id": "00-0038104",
+      "name": "Tyquan Thornton",
+      "pos": "WR",
+      "team": "KC",
+      "score": 0.2728463411331177,
+      "rank": 22
+    },
+    {
+      "player_id": "00-0037256",
+      "name": "Rachaad White",
+      "pos": "RB",
+      "team": "WAS",
+      "score": 0.27277007699012756,
+      "rank": 23
+    },
+    {
+      "player_id": "00-0035659",
+      "name": "Terry McLaurin",
+      "pos": "WR",
+      "team": "WAS",
+      "score": 0.27202650904655457,
+      "rank": 24
+    },
+    {
+      "player_id": "00-0030506",
+      "name": "Travis Kelce",
+      "pos": "TE",
+      "team": "KC",
+      "score": 0.27129364013671875,
+      "rank": 25
+    }
+  ],
+  "scored_pool": [
+    {
+      "player_id": "00-0036358",
+      "name": "CeeDee Lamb",
+      "pos": "WR",
+      "team": "DAL",
+      "score": 0.3398154377937317
+    },
+    {
+      "player_id": "00-0040730",
+      "name": "RJ Harvey",
+      "pos": "RB",
+      "team": "DEN",
+      "score": 0.3347453773021698
+    },
+    {
+      "player_id": "00-0038454",
+      "name": "Keaton Mitchell",
+      "pos": "RB",
+      "team": "LAC",
+      "score": 0.32613053917884827
+    },
+    {
+      "player_id": "00-0036875",
+      "name": "Rhamondre Stevenson",
+      "pos": "RB",
+      "team": "NE",
+      "score": 0.32438045740127563
+    },
+    {
+      "player_id": "00-0040198",
+      "name": "Ollie Gordon II",
+      "pos": "RB",
+      "team": "MIA",
+      "score": 0.32385221123695374
+    },
+    {
+      "player_id": "00-0040734",
+      "name": "TreVeyon Henderson",
+      "pos": "RB",
+      "team": "NE",
+      "score": 0.3135834038257599
+    },
+    {
+      "player_id": "00-0041438",
+      "name": "Carnell Tate",
+      "pos": "WR",
+      "team": "TEN",
+      "score": 0.31187108159065247
+    },
+    {
+      "player_id": "00-0037746",
+      "name": "Brian Robinson",
+      "pos": "RB",
+      "team": "ATL",
+      "score": 0.30037492513656616
+    },
+    {
+      "player_id": "00-0036139",
+      "name": "Rico Dowdle",
+      "pos": "RB",
+      "team": "PIT",
+      "score": 0.2977001667022705
+    },
+    {
+      "player_id": "00-0039811",
+      "name": "MarShawn Lloyd",
+      "pos": "RB",
+      "team": "GB",
+      "score": 0.2947797179222107
+    },
+    {
+      "player_id": "00-0039794",
+      "name": "Braelon Allen",
+      "pos": "RB",
+      "team": "NYJ",
+      "score": 0.29258599877357483
+    },
+    {
+      "player_id": "00-0036158",
+      "name": "J.K. Dobbins",
+      "pos": "RB",
+      "team": "DEN",
+      "score": 0.2924172580242157
+    },
+    {
+      "player_id": "00-0039337",
+      "name": "Malik Nabers",
+      "pos": "WR",
+      "team": "NYG",
+      "score": 0.29058730602264404
+    },
+    {
+      "player_id": "00-0035685",
+      "name": "David Montgomery",
+      "pos": "RB",
+      "team": "HOU",
+      "score": 0.28869426250457764
+    },
+    {
+      "player_id": "00-0035640",
+      "name": "DK Metcalf",
+      "pos": "WR",
+      "team": "PIT",
+      "score": 0.2884191572666168
+    },
+    {
+      "player_id": "00-0040242",
+      "name": "Jacory Croskey-Merritt",
+      "pos": "RB",
+      "team": "WAS",
+      "score": 0.2849920690059662
+    },
+    {
+      "player_id": "00-0038117",
+      "name": "Wan'Dale Robinson",
+      "pos": "WR",
+      "team": "TEN",
+      "score": 0.2847745418548584
+    },
+    {
+      "player_id": "00-0039067",
+      "name": "Rashee Rice",
+      "pos": "WR",
+      "team": "KC",
+      "score": 0.2813781797885895
+    },
+    {
+      "player_id": "00-0031610",
+      "name": "Darren Waller",
+      "pos": "TE",
+      "team": "CAR",
+      "score": 0.27602919936180115
+    },
+    {
+      "player_id": "00-0039880",
+      "name": "Malik Washington",
+      "pos": "WR",
+      "team": "MIA",
+      "score": 0.27560338377952576
+    },
+    {
+      "player_id": "00-0037240",
+      "name": "Jameson Williams",
+      "pos": "WR",
+      "team": "DET",
+      "score": 0.2746018171310425
+    },
+    {
+      "player_id": "00-0038104",
+      "name": "Tyquan Thornton",
+      "pos": "WR",
+      "team": "KC",
+      "score": 0.2728463411331177
+    },
+    {
+      "player_id": "00-0037256",
+      "name": "Rachaad White",
+      "pos": "RB",
+      "team": "WAS",
+      "score": 0.27277007699012756
+    },
+    {
+      "player_id": "00-0035659",
+      "name": "Terry McLaurin",
+      "pos": "WR",
+      "team": "WAS",
+      "score": 0.27202650904655457
+    },
+    {
+      "player_id": "00-0030506",
+      "name": "Travis Kelce",
+      "pos": "TE",
+      "team": "KC",
+      "score": 0.27129364013671875
+    },
+    {
+      "player_id": "00-0037263",
+      "name": "Tyler Allgeier",
+      "pos": "RB",
+      "team": "ARI",
+      "score": 0.27033746242523193
+    },
+    {
+      "player_id": "00-0033906",
+      "name": "Alvin Kamara",
+      "pos": "RB",
+      "team": "NO",
+      "score": 0.2673092782497406
+    },
+    {
+      "player_id": "00-0034960",
+      "name": "Jakobi Meyers",
+      "pos": "WR",
+      "team": "JAX",
+      "score": 0.26644912362098694
+    },
+    {
+      "player_id": "00-0036265",
+      "name": "AJ Dillon",
+      "pos": "RB",
+      "team": "CAR",
+      "score": 0.26575589179992676
+    },
+    {
+      "player_id": "00-0037740",
+      "name": "Garrett Wilson",
+      "pos": "WR",
+      "team": "NYJ",
+      "score": 0.26528629660606384
+    },
+    {
+      "player_id": "00-0039739",
+      "name": "Roman Wilson",
+      "pos": "WR",
+      "team": "PIT",
+      "score": 0.26414549350738525
+    },
+    {
+      "player_id": "00-0036912",
+      "name": "DeVonta Smith",
+      "pos": "WR",
+      "team": "PHI",
+      "score": 0.26322755217552185
+    },
+    {
+      "player_id": "00-0040142",
+      "name": "Kaleb Johnson",
+      "pos": "RB",
+      "team": "GB",
+      "score": 0.2602410316467285
+    },
+    {
+      "player_id": "00-0038559",
+      "name": "Michael Wilson",
+      "pos": "WR",
+      "team": "ARI",
+      "score": 0.2594876289367676
+    },
+    {
+      "player_id": "00-0033307",
+      "name": "Kendrick Bourne",
+      "pos": "WR",
+      "team": "ARI",
+      "score": 0.25925180315971375
+    },
+    {
+      "player_id": "00-0033921",
+      "name": "Chris Godwin Jr.",
+      "pos": "WR",
+      "team": "TB",
+      "score": 0.25800737738609314
+    },
+    {
+      "player_id": "00-0038611",
+      "name": "Chris Rodriguez Jr.",
+      "pos": "RB",
+      "team": "JAX",
+      "score": 0.2554644048213959
+    },
+    {
+      "player_id": "00-0034855",
+      "name": "Baker Mayfield",
+      "pos": "QB",
+      "team": "TB",
+      "score": 0.25493091344833374
+    },
+    {
+      "player_id": "00-0033857",
+      "name": "JuJu Smith-Schuster",
+      "pos": "WR",
+      "team": "KC",
+      "score": 0.2538550794124603
+    },
+    {
+      "player_id": "00-0039491",
+      "name": "Jalen Coker",
+      "pos": "WR",
+      "team": "CAR",
+      "score": 0.25284701585769653
+    },
+    {
+      "player_id": "00-0036410",
+      "name": "Tee Higgins",
+      "pos": "WR",
+      "team": "CIN",
+      "score": 0.2525542974472046
+    },
+    {
+      "player_id": "00-0037005",
+      "name": "Tommy Tremble",
+      "pos": "TE",
+      "team": "CAR",
+      "score": 0.2522999048233032
+    },
+    {
+      "player_id": "00-0037261",
+      "name": "Khalil Shakir",
+      "pos": "WR",
+      "team": "BUF",
+      "score": 0.2515242397785187
+    },
+    {
+      "player_id": "00-0041013",
+      "name": "Emmett Johnson",
+      "pos": "RB",
+      "team": "KC",
+      "score": 0.25088006258010864
+    },
+    {
+      "player_id": "00-0038393",
+      "name": "Dontayvion Wicks",
+      "pos": "WR",
+      "team": "PHI",
+      "score": 0.25082722306251526
+    },
+    {
+      "player_id": "00-0039064",
+      "name": "Zay Flowers",
+      "pos": "WR",
+      "team": "BAL",
+      "score": 0.2503845691680908
+    },
+    {
+      "player_id": "00-0040138",
+      "name": "Jaylin Noel",
+      "pos": "WR",
+      "team": "HOU",
+      "score": 0.2499842643737793
+    },
+    {
+      "player_id": "00-0033119",
+      "name": "Jacoby Brissett",
+      "pos": "QB",
+      "team": "ARI",
+      "score": 0.24834363162517548
+    },
+    {
+      "player_id": "00-0039894",
+      "name": "Xavier Worthy",
+      "pos": "WR",
+      "team": "KC",
+      "score": 0.24815066158771515
+    },
+    {
+      "player_id": "00-0040129",
+      "name": "Emeka Egbuka",
+      "pos": "WR",
+      "team": "TB",
+      "score": 0.24745003879070282
+    },
+    {
+      "player_id": "00-0040669",
+      "name": "Isaac TeSlaa",
+      "pos": "WR",
+      "team": "DET",
+      "score": 0.24672730267047882
+    },
+    {
+      "player_id": "00-0038994",
+      "name": "Jordan Addison",
+      "pos": "WR",
+      "team": "MIN",
+      "score": 0.24653634428977966
+    },
+    {
+      "player_id": "00-0039391",
+      "name": "Kimani Vidal",
+      "pos": "RB",
+      "team": "LAC",
+      "score": 0.24519333243370056
+    },
+    {
+      "player_id": "00-0036613",
+      "name": "Jaylen Waddle",
+      "pos": "WR",
+      "team": "DEN",
+      "score": 0.24464277923107147
+    },
+    {
+      "player_id": "00-0037744",
+      "name": "Trey McBride",
+      "pos": "TE",
+      "team": "ARI",
+      "score": 0.24404080212116241
+    },
+    {
+      "player_id": "00-0038606",
+      "name": "Parker Washington",
+      "pos": "WR",
+      "team": "JAX",
+      "score": 0.24300898611545563
+    },
+    {
+      "player_id": "00-0038618",
+      "name": "Xavier Hutchinson",
+      "pos": "WR",
+      "team": "HOU",
+      "score": 0.24258683621883392
+    },
+    {
+      "player_id": "00-0038685",
+      "name": "Chris Brooks",
+      "pos": "RB",
+      "team": "GB",
+      "score": 0.24183985590934753
+    },
+    {
+      "player_id": "00-0037238",
+      "name": "Drake London",
+      "pos": "WR",
+      "team": "ATL",
+      "score": 0.24121986329555511
+    },
+    {
+      "player_id": "00-0039874",
+      "name": "Jaylen Wright",
+      "pos": "RB",
+      "team": "MIA",
+      "score": 0.24121065437793732
+    },
+    {
+      "player_id": "00-0037239",
+      "name": "Chris Olave",
+      "pos": "WR",
+      "team": "NO",
+      "score": 0.24056695401668549
+    },
+    {
+      "player_id": "00-0039451",
+      "name": "Isaiah Williams",
+      "pos": "WR",
+      "team": "NYJ",
+      "score": 0.24043013155460358
+    },
+    {
+      "player_id": "00-0039299",
+      "name": "George Holani",
+      "pos": "RB",
+      "team": "SEA",
+      "score": 0.23987792432308197
+    },
+    {
+      "player_id": "00-0040727",
+      "name": "Tre Harris",
+      "pos": "WR",
+      "team": "LAC",
+      "score": 0.2393321692943573
+    },
+    {
+      "player_id": "00-0037816",
+      "name": "Romeo Doubs",
+      "pos": "WR",
+      "team": "NE",
+      "score": 0.2372456043958664
+    },
+    {
+      "player_id": "00-0038608",
+      "name": "Kayshon Boutte",
+      "pos": "WR",
+      "team": "HOU",
+      "score": 0.23696047067642212
+    },
+    {
+      "player_id": "00-0035228",
+      "name": "Kyler Murray",
+      "pos": "QB",
+      "team": "MIN",
+      "score": 0.23666778206825256
+    },
+    {
+      "player_id": "00-0038563",
+      "name": "Tre Tucker",
+      "pos": "WR",
+      "team": "LV",
+      "score": 0.23639753460884094
+    },
+    {
+      "player_id": "00-0040466",
+      "name": "Raheim Sanders",
+      "pos": "RB",
+      "team": "CLE",
+      "score": 0.23619604110717773
+    },
+    {
+      "player_id": "00-0036355",
+      "name": "Justin Herbert",
+      "pos": "QB",
+      "team": "LAC",
+      "score": 0.23546355962753296
+    },
+    {
+      "player_id": "00-0040867",
+      "name": "Makai Lemon",
+      "pos": "WR",
+      "team": "PHI",
+      "score": 0.2354557365179062
+    },
+    {
+      "player_id": "00-0036550",
+      "name": "Rashod Bateman",
+      "pos": "WR",
+      "team": "BAL",
+      "score": 0.2344743013381958
+    },
+    {
+      "player_id": "00-0037252",
+      "name": "Greg Dulcich",
+      "pos": "TE",
+      "team": "MIA",
+      "score": 0.23369532823562622
+    },
+    {
+      "player_id": "00-0038041",
+      "name": "Jake Ferguson",
+      "pos": "TE",
+      "team": "DAL",
+      "score": 0.23351795971393585
+    },
+    {
+      "player_id": "00-0039424",
+      "name": "Devaughn Vele",
+      "pos": "WR",
+      "team": "NO",
+      "score": 0.23325008153915405
+    },
+    {
+      "player_id": "00-0040124",
+      "name": "Tetairoa McMillan",
+      "pos": "WR",
+      "team": "CAR",
+      "score": 0.23276731371879578
+    },
+    {
+      "player_id": "00-0035229",
+      "name": "T.J. Hockenson",
+      "pos": "TE",
+      "team": "MIN",
+      "score": 0.23259377479553223
+    },
+    {
+      "player_id": "00-0033077",
+      "name": "Dak Prescott",
+      "pos": "QB",
+      "team": "DAL",
+      "score": 0.23253507912158966
+    },
+    {
+      "player_id": "00-0034827",
+      "name": "DJ Moore",
+      "pos": "WR",
+      "team": "BUF",
+      "score": 0.23227378726005554
+    },
+    {
+      "player_id": "00-0041096",
+      "name": "Kaytron Allen",
+      "pos": "RB",
+      "team": "WAS",
+      "score": 0.23224274814128876
+    },
+    {
+      "player_id": "00-0039919",
+      "name": "Rome Odunze",
+      "pos": "WR",
+      "team": "CHI",
+      "score": 0.23218664526939392
+    },
+    {
+      "player_id": "00-0038840",
+      "name": "Brycen Tremayne",
+      "pos": "WR",
+      "team": "CAR",
+      "score": 0.2296137511730194
+    },
+    {
+      "player_id": "00-0036893",
+      "name": "Najee Harris",
+      "pos": "RB",
+      "team": "NYG",
+      "score": 0.22956429421901703
+    },
+    {
+      "player_id": "00-0037247",
+      "name": "George Pickens",
+      "pos": "WR",
+      "team": "DAL",
+      "score": 0.2291043996810913
+    },
+    {
+      "player_id": "00-0039075",
+      "name": "Puka Nacua",
+      "pos": "WR",
+      "team": "LA",
+      "score": 0.22831670939922333
+    },
+    {
+      "player_id": "00-0033319",
+      "name": "Nick Mullens",
+      "pos": "QB",
+      "team": "JAX",
+      "score": 0.2281038910150528
+    },
+    {
+      "player_id": "00-0036252",
+      "name": "Michael Pittman",
+      "pos": "WR",
+      "team": "PIT",
+      "score": 0.22798259556293488
+    },
+    {
+      "player_id": "00-0033526",
+      "name": "Samaje Perine",
+      "pos": "RB",
+      "team": "CIN",
+      "score": 0.22790245711803436
+    },
+    {
+      "player_id": "00-0040556",
+      "name": "Corey Kiner",
+      "pos": "RB",
+      "team": "NE",
+      "score": 0.22764576971530914
+    },
+    {
+      "player_id": "00-0036971",
+      "name": "Trevor Lawrence",
+      "pos": "QB",
+      "team": "JAX",
+      "score": 0.22752982378005981
+    },
+    {
+      "player_id": "00-0036919",
+      "name": "Kenny Gainwell",
+      "pos": "RB",
+      "team": "TB",
+      "score": 0.2274770587682724
+    },
+    {
+      "player_id": "00-0032464",
+      "name": "Kalif Raymond",
+      "pos": "WR",
+      "team": "CHI",
+      "score": 0.22720420360565186
+    },
+    {
+      "player_id": "00-0033555",
+      "name": "Mack Hollins",
+      "pos": "WR",
+      "team": "NE",
+      "score": 0.22708532214164734
+    },
+    {
+      "player_id": "00-0038124",
+      "name": "Christian Watson",
+      "pos": "WR",
+      "team": "GB",
+      "score": 0.22642123699188232
+    },
+    {
+      "player_id": "00-0037085",
+      "name": "Tyler Badie",
+      "pos": "RB",
+      "team": "DEN",
+      "score": 0.22637195885181427
+    },
+    {
+      "player_id": "00-0038543",
+      "name": "Jaxon Smith-Njigba",
+      "pos": "WR",
+      "team": "SEA",
+      "score": 0.22538618743419647
+    },
+    {
+      "player_id": "00-0041489",
+      "name": "Germie Bernard",
+      "pos": "WR",
+      "team": "PIT",
+      "score": 0.2251785695552826
+    },
+    {
+      "player_id": "00-0038705",
+      "name": "Emari Demercado",
+      "pos": "RB",
+      "team": "DAL",
+      "score": 0.2249366194009781
+    },
+    {
+      "player_id": "00-0034348",
+      "name": "Courtland Sutton",
+      "pos": "WR",
+      "team": "DEN",
+      "score": 0.22371424734592438
+    },
+    {
+      "player_id": "00-0041037",
+      "name": "Denzel Boston",
+      "pos": "WR",
+      "team": "CLE",
+      "score": 0.22315573692321777
+    },
+    {
+      "player_id": "00-0040667",
+      "name": "Matthew Golden",
+      "pos": "WR",
+      "team": "GB",
+      "score": 0.22297237813472748
+    },
+    {
+      "player_id": "00-0040676",
+      "name": "Cam Ward",
+      "pos": "QB",
+      "team": "TEN",
+      "score": 0.2222491353750229
+    },
+    {
+      "player_id": "00-0039901",
+      "name": "Keon Coleman",
+      "pos": "WR",
+      "team": "BUF",
+      "score": 0.22201545536518097
+    },
+    {
+      "player_id": "00-0031408",
+      "name": "Mike Evans",
+      "pos": "WR",
+      "team": "SF",
+      "score": 0.2218421995639801
+    },
+    {
+      "player_id": "00-0032951",
+      "name": "Laquon Treadwell",
+      "pos": "WR",
+      "team": "IND",
+      "score": 0.2218126356601715
+    },
+    {
+      "player_id": "00-0036322",
+      "name": "Justin Jefferson",
+      "pos": "WR",
+      "team": "MIN",
+      "score": 0.2208305448293686
+    },
+    {
+      "player_id": "00-0039738",
+      "name": "Blake Corum",
+      "pos": "RB",
+      "team": "LA",
+      "score": 0.22073590755462646
+    },
+    {
+      "player_id": "00-0039410",
+      "name": "Ryan Flournoy",
+      "pos": "WR",
+      "team": "DAL",
+      "score": 0.21948210895061493
+    },
+    {
+      "player_id": "00-0036894",
+      "name": "Pat Freiermuth",
+      "pos": "TE",
+      "team": "PIT",
+      "score": 0.21891316771507263
+    },
+    {
+      "player_id": "00-0034829",
+      "name": "Mike Gesicki",
+      "pos": "TE",
+      "team": "CIN",
+      "score": 0.2188587188720703
+    },
+    {
+      "player_id": "00-0041125",
+      "name": "Seth McGowan",
+      "pos": "RB",
+      "team": "IND",
+      "score": 0.21877209842205048
+    },
+    {
+      "player_id": "00-0039910",
+      "name": "Jayden Daniels",
+      "pos": "QB",
+      "team": "WAS",
+      "score": 0.2183450311422348
+    },
+    {
+      "player_id": "00-0038128",
+      "name": "Malik Willis",
+      "pos": "QB",
+      "team": "MIA",
+      "score": 0.21784047782421112
+    },
+    {
+      "player_id": "00-0038129",
+      "name": "Cade Otton",
+      "pos": "TE",
+      "team": "TB",
+      "score": 0.21665619313716888
+    },
+    {
+      "player_id": "00-0034796",
+      "name": "Lamar Jackson",
+      "pos": "QB",
+      "team": "BAL",
+      "score": 0.2165348380804062
+    },
+    {
+      "player_id": "00-0030279",
+      "name": "Keenan Allen",
+      "pos": "WR",
+      "team": "IND",
+      "score": 0.21590931713581085
+    },
+    {
+      "player_id": "00-0033090",
+      "name": "Hunter Henry",
+      "pos": "TE",
+      "team": "NE",
+      "score": 0.21571332216262817
+    },
+    {
+      "player_id": "00-0033110",
+      "name": "Tyler Higbee",
+      "pos": "TE",
+      "team": "LA",
+      "score": 0.21546177566051483
+    },
+    {
+      "player_id": "00-0040878",
+      "name": "Mike Washington Jr.",
+      "pos": "RB",
+      "team": "LV",
+      "score": 0.2151957005262375
+    },
+    {
+      "player_id": "00-0040648",
+      "name": "Tory Horton",
+      "pos": "WR",
+      "team": "SEA",
+      "score": 0.2151283174753189
+    },
+    {
+      "player_id": "00-0040785",
+      "name": "Dohnte Meyers",
+      "pos": "WR",
+      "team": "CIN",
+      "score": 0.21495507657527924
+    },
+    {
+      "player_id": "00-0035719",
+      "name": "Deebo Samuel Sr.",
+      "pos": "WR",
+      "team": "SF",
+      "score": 0.21442075073719025
+    },
+    {
+      "player_id": "00-0040583",
+      "name": "Woody Marks",
+      "pos": "RB",
+      "team": "HOU",
+      "score": 0.21407286822795868
+    },
+    {
+      "player_id": "00-0041040",
+      "name": "Antonio Williams",
+      "pos": "WR",
+      "team": "WAS",
+      "score": 0.21325267851352692
+    },
+    {
+      "player_id": "00-0031588",
+      "name": "Stefon Diggs",
+      "pos": "WR",
+      "team": "WAS",
+      "score": 0.2129642516374588
+    },
+    {
+      "player_id": "00-0035250",
+      "name": "Devin Singletary",
+      "pos": "RB",
+      "team": "NYG",
+      "score": 0.21265563368797302
+    },
+    {
+      "player_id": "00-0037545",
+      "name": "Rashid Shaheed",
+      "pos": "WR",
+      "team": "SEA",
+      "score": 0.21257875859737396
+    },
+    {
+      "player_id": "00-0039851",
+      "name": "Drake Maye",
+      "pos": "QB",
+      "team": "NE",
+      "score": 0.21217383444309235
+    },
+    {
+      "player_id": "00-0041104",
+      "name": "Demond Claiborne",
+      "pos": "RB",
+      "team": "MIN",
+      "score": 0.21159347891807556
+    },
+    {
+      "player_id": "00-0034975",
+      "name": "Justice Hill",
+      "pos": "RB",
+      "team": "BAL",
+      "score": 0.21064727008342743
+    },
+    {
+      "player_id": "00-0038935",
+      "name": "Brenton Strange",
+      "pos": "TE",
+      "team": "JAX",
+      "score": 0.210206538438797
+    },
+    {
+      "player_id": "00-0023459",
+      "name": "Aaron Rodgers",
+      "pos": "QB",
+      "team": "PIT",
+      "score": 0.21006432175636292
+    },
+    {
+      "player_id": "00-0034844",
+      "name": "Saquon Barkley",
+      "pos": "RB",
+      "team": "PHI",
+      "score": 0.2098282128572464
+    },
+    {
+      "player_id": "00-0040719",
+      "name": "Bhayshul Tuten",
+      "pos": "RB",
+      "team": "JAX",
+      "score": 0.20968903601169586
+    },
+    {
+      "player_id": "00-0041547",
+      "name": "KC Concepcion",
+      "pos": "WR",
+      "team": "CLE",
+      "score": 0.20967179536819458
+    },
+    {
+      "player_id": "00-0030565",
+      "name": "Geno Smith",
+      "pos": "QB",
+      "team": "NYJ",
+      "score": 0.2085903137922287
+    },
+    {
+      "player_id": "00-0041052",
+      "name": "Kaelon Black",
+      "pos": "RB",
+      "team": "SF",
+      "score": 0.2085544764995575
+    },
+    {
+      "player_id": "00-0038997",
+      "name": "Josh Downs",
+      "pos": "WR",
+      "team": "IND",
+      "score": 0.2084510326385498
+    },
+    {
+      "player_id": "00-0038996",
+      "name": "Tucker Kraft",
+      "pos": "TE",
+      "team": "GB",
+      "score": 0.20817460119724274
+    },
+    {
+      "player_id": "00-0035710",
+      "name": "Daniel Jones",
+      "pos": "QB",
+      "team": "IND",
+      "score": 0.2064761221408844
+    },
+    {
+      "player_id": "00-0041032",
+      "name": "Kenyon Sadiq",
+      "pos": "TE",
+      "team": "NYJ",
+      "score": 0.20628546178340912
+    },
+    {
+      "player_id": "00-0040735",
+      "name": "Luther Burden III",
+      "pos": "WR",
+      "team": "CHI",
+      "score": 0.2060343623161316
+    },
+    {
+      "player_id": "00-0036900",
+      "name": "Ja'Marr Chase",
+      "pos": "WR",
+      "team": "CIN",
+      "score": 0.20566999912261963
+    },
+    {
+      "player_id": "00-0038551",
+      "name": "Kendre Miller",
+      "pos": "RB",
+      "team": "NO",
+      "score": 0.2051706165075302
+    },
+    {
+      "player_id": "00-0036963",
+      "name": "Amon-Ra St. Brown",
+      "pos": "WR",
+      "team": "DET",
+      "score": 0.20511656999588013
+    },
+    {
+      "player_id": "00-0036040",
+      "name": "Juwan Johnson",
+      "pos": "TE",
+      "team": "NO",
+      "score": 0.20494674146175385
+    },
+    {
+      "player_id": "00-0039732",
+      "name": "Bo Nix",
+      "pos": "QB",
+      "team": "DEN",
+      "score": 0.2044963240623474
+    },
+    {
+      "player_id": "00-0036264",
+      "name": "Jordan Love",
+      "pos": "QB",
+      "team": "GB",
+      "score": 0.20336326956748962
+    },
+    {
+      "player_id": "00-0028986",
+      "name": "Case Keenum",
+      "pos": "QB",
+      "team": "CHI",
+      "score": 0.20319539308547974
+    },
+    {
+      "player_id": "00-0038797",
+      "name": "Emanuel Wilson",
+      "pos": "RB",
+      "team": "SEA",
+      "score": 0.20304930210113525
+    },
+    {
+      "player_id": "00-0037805",
+      "name": "Jeremy Ruckert",
+      "pos": "TE",
+      "team": "NYJ",
+      "score": 0.20297642052173615
+    },
+    {
+      "player_id": "00-0034857",
+      "name": "Josh Allen",
+      "pos": "QB",
+      "team": "BUF",
+      "score": 0.20205536484718323
+    },
+    {
+      "player_id": "00-0040134",
+      "name": "Pat Bryant",
+      "pos": "WR",
+      "team": "DEN",
+      "score": 0.2017187476158142
+    },
+    {
+      "player_id": "00-0040126",
+      "name": "Colston Loveland",
+      "pos": "TE",
+      "team": "CHI",
+      "score": 0.20133008062839508
+    },
+    {
+      "player_id": "00-0032268",
+      "name": "Marcus Mariota",
+      "pos": "QB",
+      "team": "WAS",
+      "score": 0.20073948800563812
+    },
+    {
+      "player_id": "00-0036626",
+      "name": "Dyami Brown",
+      "pos": "WR",
+      "team": "WAS",
+      "score": 0.2002268135547638
+    },
+    {
+      "player_id": "00-0038090",
+      "name": "Skyy Moore",
+      "pos": "WR",
+      "team": "GB",
+      "score": 0.19884686172008514
+    },
+    {
+      "player_id": "00-0039893",
+      "name": "Brian Thomas Jr.",
+      "pos": "WR",
+      "team": "JAX",
+      "score": 0.1982172727584839
+    },
+    {
+      "player_id": "00-0037838",
+      "name": "Isaiah Likely",
+      "pos": "TE",
+      "team": "NYG",
+      "score": 0.1979982703924179
+    },
+    {
+      "player_id": "00-0039065",
+      "name": "Sam LaPorta",
+      "pos": "TE",
+      "team": "DET",
+      "score": 0.1973375827074051
+    },
+    {
+      "player_id": "00-0039918",
+      "name": "Caleb Williams",
+      "pos": "QB",
+      "team": "CHI",
+      "score": 0.19665727019309998
+    },
+    {
+      "player_id": "00-0039032",
+      "name": "Tyjae Spears",
+      "pos": "RB",
+      "team": "TEN",
+      "score": 0.19655846059322357
+    },
+    {
+      "player_id": "00-0040024",
+      "name": "Darius Cooper",
+      "pos": "WR",
+      "team": "PHI",
+      "score": 0.19614684581756592
+    },
+    {
+      "player_id": "00-0033537",
+      "name": "Deshaun Watson",
+      "pos": "QB",
+      "team": "CLE",
+      "score": 0.19604073464870453
+    },
+    {
+      "player_id": "00-0036309",
+      "name": "Darnell Mooney",
+      "pos": "WR",
+      "team": "NYG",
+      "score": 0.19492505490779877
+    },
+    {
+      "player_id": "00-0037834",
+      "name": "Brock Purdy",
+      "pos": "QB",
+      "team": "SF",
+      "score": 0.19443398714065552
+    },
+    {
+      "player_id": "00-0026498",
+      "name": "Matthew Stafford",
+      "pos": "QB",
+      "team": "LA",
+      "score": 0.1927247792482376
+    },
+    {
+      "player_id": "00-0034753",
+      "name": "Mark Andrews",
+      "pos": "TE",
+      "team": "BAL",
+      "score": 0.19265905022621155
+    },
+    {
+      "player_id": "00-0036389",
+      "name": "Jalen Hurts",
+      "pos": "QB",
+      "team": "PHI",
+      "score": 0.19265905022621155
+    },
+    {
+      "player_id": "00-0036842",
+      "name": "Kene Nwangwu",
+      "pos": "RB",
+      "team": "NYJ",
+      "score": 0.19253534078598022
+    },
+    {
+      "player_id": "00-0039364",
+      "name": "Sione Vaki",
+      "pos": "RB",
+      "team": "DET",
+      "score": 0.19249731302261353
+    },
+    {
+      "player_id": "00-0038544",
+      "name": "Quentin Johnston",
+      "pos": "WR",
+      "team": "LAC",
+      "score": 0.19237016141414642
+    },
+    {
+      "player_id": "00-0040189",
+      "name": "Oronde Gadsden II",
+      "pos": "TE",
+      "team": "LAC",
+      "score": 0.1921849399805069
+    },
+    {
+      "player_id": "00-0039915",
+      "name": "Ladd McConkey",
+      "pos": "WR",
+      "team": "LAC",
+      "score": 0.19206374883651733
+    },
+    {
+      "player_id": "00-0032104",
+      "name": "Ameer Abdullah",
+      "pos": "RB",
+      "team": "JAX",
+      "score": 0.19142083823680878
+    },
+    {
+      "player_id": "00-0033288",
+      "name": "George Kittle",
+      "pos": "TE",
+      "team": "SF",
+      "score": 0.19068528711795807
+    },
+    {
+      "player_id": "00-0035993",
+      "name": "Tyler Huntley",
+      "pos": "QB",
+      "team": "BAL",
+      "score": 0.1899493932723999
+    },
+    {
+      "player_id": "00-0033106",
+      "name": "Jared Goff",
+      "pos": "QB",
+      "team": "DET",
+      "score": 0.1896338164806366
+    },
+    {
+      "player_id": "00-0033908",
+      "name": "Cooper Kupp",
+      "pos": "WR",
+      "team": "SEA",
+      "score": 0.18895627558231354
+    },
+    {
+      "player_id": "00-0039163",
+      "name": "C.J. Stroud",
+      "pos": "QB",
+      "team": "HOU",
+      "score": 0.18863117694854736
+    },
+    {
+      "player_id": "00-0036442",
+      "name": "Joe Burrow",
+      "pos": "QB",
+      "team": "CIN",
+      "score": 0.18857252597808838
+    },
+    {
+      "player_id": "00-0039746",
+      "name": "Will Shipley",
+      "pos": "RB",
+      "team": "PHI",
+      "score": 0.18526089191436768
+    },
+    {
+      "player_id": "00-0040128",
+      "name": "Tyler Warren",
+      "pos": "TE",
+      "team": "IND",
+      "score": 0.18511490523815155
+    },
+    {
+      "player_id": "00-0035631",
+      "name": "Drew Sample",
+      "pos": "TE",
+      "team": "CIN",
+      "score": 0.18466100096702576
+    },
+    {
+      "player_id": "00-0038476",
+      "name": "Tommy DeVito",
+      "pos": "QB",
+      "team": "NE",
+      "score": 0.18394827842712402
+    },
+    {
+      "player_id": "00-0033217",
+      "name": "Mo Alie-Cox",
+      "pos": "TE",
+      "team": "IND",
+      "score": 0.1837761253118515
+    },
+    {
+      "player_id": "00-0037809",
+      "name": "Chig Okonkwo",
+      "pos": "TE",
+      "team": "WAS",
+      "score": 0.1833186000585556
+    },
+    {
+      "player_id": "00-0041326",
+      "name": "CJ Donaldson",
+      "pos": "RB",
+      "team": "NO",
+      "score": 0.18231727182865143
+    },
+    {
+      "player_id": "00-0033280",
+      "name": "Christian McCaffrey",
+      "pos": "RB",
+      "team": "SF",
+      "score": 0.1821339875459671
+    },
+    {
+      "player_id": "00-0038558",
+      "name": "Darnell Washington",
+      "pos": "TE",
+      "team": "PIT",
+      "score": 0.18196050822734833
+    },
+    {
+      "player_id": "00-0034383",
+      "name": "Dalton Schultz",
+      "pos": "TE",
+      "team": "HOU",
+      "score": 0.1811886876821518
+    },
+    {
+      "player_id": "00-0035594",
+      "name": "Travis Homer",
+      "pos": "RB",
+      "team": "PIT",
+      "score": 0.18106387555599213
+    },
+    {
+      "player_id": "00-0041042",
+      "name": "Malachi Fields",
+      "pos": "WR",
+      "team": "NYG",
+      "score": 0.18055638670921326
+    },
+    {
+      "player_id": "00-0039338",
+      "name": "Brock Bowers",
+      "pos": "TE",
+      "team": "LV",
+      "score": 0.1788768321275711
+    },
+    {
+      "player_id": "00-0033873",
+      "name": "Patrick Mahomes",
+      "pos": "QB",
+      "team": "KC",
+      "score": 0.17871704697608948
+    },
+    {
+      "player_id": "00-0036972",
+      "name": "Mac Jones",
+      "pos": "QB",
+      "team": "SF",
+      "score": 0.1780422031879425
+    },
+    {
+      "player_id": "00-0036637",
+      "name": "Noah Gray",
+      "pos": "TE",
+      "team": "KC",
+      "score": 0.17736150324344635
+    },
+    {
+      "player_id": "00-0039793",
+      "name": "AJ Barner",
+      "pos": "TE",
+      "team": "SEA",
+      "score": 0.1754300594329834
+    },
+    {
+      "player_id": "00-0038794",
+      "name": "Jaleel McLaughlin",
+      "pos": "RB",
+      "team": "CLE",
+      "score": 0.1750134974718094
+    },
+    {
+      "player_id": "00-0040743",
+      "name": "Tyler Shough",
+      "pos": "QB",
+      "team": "NO",
+      "score": 0.17383623123168945
+    },
+    {
+      "player_id": "00-0035537",
+      "name": "Ty Johnson",
+      "pos": "RB",
+      "team": "BUF",
+      "score": 0.17291676998138428
+    },
+    {
+      "player_id": "00-0041027",
+      "name": "Jeremiyah Love",
+      "pos": "RB",
+      "team": "ARI",
+      "score": 0.1712392270565033
+    },
+    {
+      "player_id": "00-0035644",
+      "name": "Noah Fant",
+      "pos": "TE",
+      "team": "NO",
+      "score": 0.17108596861362457
+    },
+    {
+      "player_id": "00-0040663",
+      "name": "Harold Fannin Jr.",
+      "pos": "TE",
+      "team": "CLE",
+      "score": 0.1710415929555893
+    },
+    {
+      "player_id": "00-0040668",
+      "name": "Shedeur Sanders",
+      "pos": "QB",
+      "team": "CLE",
+      "score": 0.16884061694145203
+    },
+    {
+      "player_id": "00-0029604",
+      "name": "Kirk Cousins",
+      "pos": "QB",
+      "team": "LV",
+      "score": 0.16789771616458893
+    },
+    {
+      "player_id": "00-0039066",
+      "name": "Michael Mayer",
+      "pos": "TE",
+      "team": "LV",
+      "score": 0.1676248461008072
+    },
+    {
+      "player_id": "00-0040666",
+      "name": "Omarion Hampton",
+      "pos": "RB",
+      "team": "LAC",
+      "score": 0.166838139295578
+    },
+    {
+      "player_id": "00-0039814",
+      "name": "Erick All",
+      "pos": "TE",
+      "team": "CIN",
+      "score": 0.1661815643310547
+    },
+    {
+      "player_id": "00-0040237",
+      "name": "Tez Johnson",
+      "pos": "WR",
+      "team": "TB",
+      "score": 0.16595859825611115
+    },
+    {
+      "player_id": "00-0040590",
+      "name": "Konata Mumpfield",
+      "pos": "WR",
+      "team": "LA",
+      "score": 0.1631239950656891
+    },
+    {
+      "player_id": "00-0036425",
+      "name": "DeeJay Dallas",
+      "pos": "RB",
+      "team": "MIN",
+      "score": 0.1615486443042755
+    },
+    {
+      "player_id": "00-0033858",
+      "name": "Jonnu Smith",
+      "pos": "TE",
+      "team": "GB",
+      "score": 0.16073547303676605
+    },
+    {
+      "player_id": "00-0037614",
+      "name": "John Metchie III",
+      "pos": "WR",
+      "team": "CAR",
+      "score": 0.16048911213874817
+    },
+    {
+      "player_id": "00-0035261",
+      "name": "Tony Pollard",
+      "pos": "RB",
+      "team": "TEN",
+      "score": 0.16029980778694153
+    },
+    {
+      "player_id": "00-0036407",
+      "name": "Jerry Jeudy",
+      "pos": "WR",
+      "team": "CLE",
+      "score": 0.15878567099571228
+    },
+    {
+      "player_id": "00-0034981",
+      "name": "Foster Moreau",
+      "pos": "TE",
+      "team": "HOU",
+      "score": 0.1537516713142395
+    },
+    {
+      "player_id": "00-0038933",
+      "name": "Dalton Kincaid",
+      "pos": "TE",
+      "team": "BUF",
+      "score": 0.15283189713954926
+    },
+    {
+      "player_id": "00-0038783",
+      "name": "Nate Adkins",
+      "pos": "TE",
+      "team": "DEN",
+      "score": 0.14847320318222046
+    },
+    {
+      "player_id": "00-0039041",
+      "name": "Elijah Higgins",
+      "pos": "TE",
+      "team": "ARI",
+      "score": 0.14838583767414093
+    },
+    {
+      "player_id": "00-0040584",
+      "name": "Gunnar Helm",
+      "pos": "TE",
+      "team": "TEN",
+      "score": 0.14814423024654388
+    },
+    {
+      "player_id": "00-0031381",
+      "name": "Davante Adams",
+      "pos": "WR",
+      "team": "LA",
+      "score": 0.14452026784420013
+    },
+    {
+      "player_id": "00-0041048",
+      "name": "Ted Hurst III",
+      "pos": "WR",
+      "team": "TB",
+      "score": 0.14443251490592957
+    },
+    {
+      "player_id": "00-0037228",
+      "name": "Jaylen Warren",
+      "pos": "RB",
+      "team": "PIT",
+      "score": 0.14338883757591248
+    },
+    {
+      "player_id": "00-0036275",
+      "name": "D'Andre Swift",
+      "pos": "RB",
+      "team": "CHI",
+      "score": 0.140417218208313
+    },
+    {
+      "player_id": "00-0036555",
+      "name": "Chuba Hubbard",
+      "pos": "RB",
+      "team": "CAR",
+      "score": 0.13914547860622406
+    },
+    {
+      "player_id": "00-0035700",
+      "name": "Josh Jacobs",
+      "pos": "RB",
+      "team": "GB",
+      "score": 0.13724353909492493
+    },
+    {
+      "player_id": "00-0039150",
+      "name": "Bryce Young",
+      "pos": "QB",
+      "team": "CAR",
+      "score": 0.13567709922790527
+    },
+    {
+      "player_id": "00-0035689",
+      "name": "Dawson Knox",
+      "pos": "TE",
+      "team": "BUF",
+      "score": 0.13363686203956604
+    },
+    {
+      "player_id": "00-0031687",
+      "name": "Raheem Mostert",
+      "pos": "RB",
+      "team": "LV",
+      "score": 0.13183046877384186
+    },
+    {
+      "player_id": "00-0040187",
+      "name": "Mitchell Evans",
+      "pos": "TE",
+      "team": "CAR",
+      "score": 0.1306506246328354
+    },
+    {
+      "player_id": "00-0027973",
+      "name": "Andy Dalton",
+      "pos": "QB",
+      "team": "PHI",
+      "score": 0.12974150478839874
+    },
+    {
+      "player_id": "00-0037840",
+      "name": "Kyren Williams",
+      "pos": "RB",
+      "team": "LA",
+      "score": 0.12961338460445404
+    },
+    {
+      "player_id": "00-0034869",
+      "name": "Sam Darnold",
+      "pos": "QB",
+      "team": "SEA",
+      "score": 0.12911202013492584
+    },
+    {
+      "player_id": "00-0039021",
+      "name": "Roschon Johnson",
+      "pos": "RB",
+      "team": "CHI",
+      "score": 0.12835679948329926
+    },
+    {
+      "player_id": "00-0031503",
+      "name": "Jameis Winston",
+      "pos": "QB",
+      "team": "NYG",
+      "score": 0.12393862009048462
+    },
+    {
+      "player_id": "00-0037741",
+      "name": "Jahan Dotson",
+      "pos": "WR",
+      "team": "ATL",
+      "score": 0.12275999784469604
+    },
+    {
+      "player_id": "00-0038120",
+      "name": "Breece Hall",
+      "pos": "RB",
+      "team": "NYJ",
+      "score": 0.12122630327939987
+    },
+    {
+      "player_id": "00-0036187",
+      "name": "Reggie Gilliam",
+      "pos": "RB",
+      "team": "NE",
+      "score": 0.12064579129219055
+    },
+    {
+      "player_id": "00-0038542",
+      "name": "Bijan Robinson",
+      "pos": "RB",
+      "team": "ATL",
+      "score": 0.12041382491588593
+    },
+    {
+      "player_id": "00-0037291",
+      "name": "Jalen Nailor",
+      "pos": "WR",
+      "team": "LV",
+      "score": 0.12041322886943817
+    },
+    {
+      "player_id": "00-0035891",
+      "name": "Cody White",
+      "pos": "WR",
+      "team": "LV",
+      "score": 0.1191377341747284
+    },
+    {
+      "player_id": "00-0035100",
+      "name": "Jake Browning",
+      "pos": "QB",
+      "team": "CIN",
+      "score": 0.11887066811323166
+    },
+    {
+      "player_id": "00-0039849",
+      "name": "Marvin Harrison Jr.",
+      "pos": "WR",
+      "team": "ARI",
+      "score": 0.11850464344024658
+    },
+    {
+      "player_id": "00-0041044",
+      "name": "Zachariah Branch",
+      "pos": "WR",
+      "team": "ATL",
+      "score": 0.11669538915157318
+    },
+    {
+      "player_id": "00-0034613",
+      "name": "Tanner Hudson",
+      "pos": "TE",
+      "team": "CIN",
+      "score": 0.11659949272871017
+    },
+    {
+      "player_id": "00-0038102",
+      "name": "Kenny Pickett",
+      "pos": "QB",
+      "team": "CAR",
+      "score": 0.11655505001544952
+    },
+    {
+      "player_id": "00-0040170",
+      "name": "Elic Ayomanor",
+      "pos": "WR",
+      "team": "TEN",
+      "score": 0.11303917318582535
+    },
+    {
+      "player_id": "00-0036997",
+      "name": "Javonte Williams",
+      "pos": "RB",
+      "team": "DAL",
+      "score": 0.1125139594078064
+    },
+    {
+      "player_id": "00-0041525",
+      "name": "Chris Bell",
+      "pos": "WR",
+      "team": "MIA",
+      "score": 0.11125586926937103
+    },
+    {
+      "player_id": "00-0034365",
+      "name": "Ian Thomas",
+      "pos": "TE",
+      "team": "LV",
+      "score": 0.1104065328836441
+    },
+    {
+      "player_id": "00-0041100",
+      "name": "Josh Cameron",
+      "pos": "WR",
+      "team": "JAX",
+      "score": 0.10824942588806152
+    },
+    {
+      "player_id": "00-0040784",
+      "name": "Quinshon Judkins",
+      "pos": "RB",
+      "team": "CLE",
+      "score": 0.10823103040456772
+    },
+    {
+      "player_id": "00-0034837",
+      "name": "Calvin Ridley",
+      "pos": "WR",
+      "team": "TEN",
+      "score": 0.10706774890422821
+    },
+    {
+      "player_id": "00-0039361",
+      "name": "Bucky Irving",
+      "pos": "RB",
+      "team": "TB",
+      "score": 0.10600472241640091
+    },
+    {
+      "player_id": "00-0038824",
+      "name": "Ryan Miller",
+      "pos": "WR",
+      "team": "MIA",
+      "score": 0.1056608036160469
+    },
+    {
+      "player_id": "00-0034272",
+      "name": "Marquez Valdes-Scantling",
+      "pos": "WR",
+      "team": "LAC",
+      "score": 0.10556891560554504
+    },
+    {
+      "player_id": "00-0038839",
+      "name": "Mitchell Tinsley",
+      "pos": "WR",
+      "team": "CIN",
+      "score": 0.1051330417394638
+    },
+    {
+      "player_id": "00-0040506",
+      "name": "Myles Price",
+      "pos": "WR",
+      "team": "MIN",
+      "score": 0.1050824224948883
+    },
+    {
+      "player_id": "00-0038416",
+      "name": "Tyson Bagent",
+      "pos": "QB",
+      "team": "CHI",
+      "score": 0.10363411903381348
+    },
+    {
+      "player_id": "00-0038728",
+      "name": "Jared Wayne",
+      "pos": "WR",
+      "team": "HOU",
+      "score": 0.10330291837453842
+    },
+    {
+      "player_id": "00-0038547",
+      "name": "Luke Schoonmaker",
+      "pos": "TE",
+      "team": "DAL",
+      "score": 0.10329969227313995
+    },
+    {
+      "player_id": "00-0036862",
+      "name": "Ben Skowronek",
+      "pos": "WR",
+      "team": "PIT",
+      "score": 0.10289707779884338
+    },
+    {
+      "player_id": "00-0035628",
+      "name": "D'Ernest Johnson",
+      "pos": "RB",
+      "team": "NE",
+      "score": 0.1021922156214714
+    },
+    {
+      "player_id": "00-0038597",
+      "name": "Chase Brown",
+      "pos": "RB",
+      "team": "CIN",
+      "score": 0.10199756920337677
+    },
+    {
+      "player_id": "00-0036328",
+      "name": "Antonio Gibson",
+      "pos": "RB",
+      "team": "NE",
+      "score": 0.10163208097219467
+    },
+    {
+      "player_id": "00-0040563",
+      "name": "Efton Chism III",
+      "pos": "WR",
+      "team": "NE",
+      "score": 0.1012793481349945
+    },
+    {
+      "player_id": "00-0038621",
+      "name": "DeMario Douglas",
+      "pos": "WR",
+      "team": "NE",
+      "score": 0.10084526240825653
+    },
+    {
+      "player_id": "00-0039868",
+      "name": "Troy Franklin",
+      "pos": "WR",
+      "team": "DEN",
+      "score": 0.10043556988239288
+    },
+    {
+      "player_id": "00-0040879",
+      "name": "Matthew Hibner",
+      "pos": "TE",
+      "team": "BAL",
+      "score": 0.09954176098108292
+    },
+    {
+      "player_id": "00-0040948",
+      "name": "J. Michael Sturdivant",
+      "pos": "WR",
+      "team": "GB",
+      "score": 0.09953242540359497
+    },
+    {
+      "player_id": "00-0032392",
+      "name": "Austin Hooper",
+      "pos": "TE",
+      "team": "ATL",
+      "score": 0.09939555823802948
+    },
+    {
+      "player_id": "00-0036988",
+      "name": "Josh Palmer",
+      "pos": "WR",
+      "team": "BUF",
+      "score": 0.09747248142957687
+    },
+    {
+      "player_id": "00-0035291",
+      "name": "Trayveon Williams",
+      "pos": "RB",
+      "team": "CLE",
+      "score": 0.09688286483287811
+    },
+    {
+      "player_id": "00-0038488",
+      "name": "Brady Russell",
+      "pos": "RB",
+      "team": "SEA",
+      "score": 0.09546409547328949
+    },
+    {
+      "player_id": "00-0037267",
+      "name": "Jerome Ford",
+      "pos": "RB",
+      "team": "CLE",
+      "score": 0.09515155851840973
+    },
+    {
+      "player_id": "00-0040646",
+      "name": "Jalen Royals",
+      "pos": "WR",
+      "team": "KC",
+      "score": 0.09350831061601639
+    },
+    {
+      "player_id": "00-0033455",
+      "name": "Anthony Firkser",
+      "pos": "TE",
+      "team": "DET",
+      "score": 0.09255963563919067
+    },
+    {
+      "player_id": "00-0036970",
+      "name": "Kyle Pitts",
+      "pos": "TE",
+      "team": "ATL",
+      "score": 0.09149700403213501
+    },
+    {
+      "player_id": "00-0036849",
+      "name": "Tutu Atwell",
+      "pos": "WR",
+      "team": "LA",
+      "score": 0.08970323204994202
+    },
+    {
+      "player_id": "00-0037594",
+      "name": "Julius Chestnut",
+      "pos": "RB",
+      "team": "TEN",
+      "score": 0.08897845447063446
+    },
+    {
+      "player_id": "00-0035639",
+      "name": "Parris Campbell",
+      "pos": "WR",
+      "team": "DAL",
+      "score": 0.08745290338993073
+    },
+    {
+      "player_id": "00-0039139",
+      "name": "Jahmyr Gibbs",
+      "pos": "RB",
+      "team": "DET",
+      "score": 0.08694756031036377
+    },
+    {
+      "player_id": "00-0037742",
+      "name": "Treylon Burks",
+      "pos": "WR",
+      "team": "WAS",
+      "score": 0.08641556650400162
+    },
+    {
+      "player_id": "00-0034854",
+      "name": "KhaDarel Hodge",
+      "pos": "WR",
+      "team": "SF",
+      "score": 0.08611782640218735
+    },
+    {
+      "player_id": "00-0040208",
+      "name": "Tahj Brooks",
+      "pos": "RB",
+      "team": "CIN",
+      "score": 0.0849885493516922
+    },
+    {
+      "player_id": "00-0037801",
+      "name": "KaVontae Turpin",
+      "pos": "WR",
+      "team": "DAL",
+      "score": 0.08468320220708847
+    },
+    {
+      "player_id": "00-0035208",
+      "name": "Olamide Zaccheaus",
+      "pos": "WR",
+      "team": "ATL",
+      "score": 0.08421292155981064
+    },
+    {
+      "player_id": "00-0026158",
+      "name": "Joe Flacco",
+      "pos": "QB",
+      "team": "CIN",
+      "score": 0.08315292745828629
+    },
+    {
+      "player_id": "00-0033376",
+      "name": "Patrick Ricard",
+      "pos": "RB",
+      "team": "NYG",
+      "score": 0.0825563296675682
+    },
+    {
+      "player_id": "00-0040236",
+      "name": "Kyle Monangai",
+      "pos": "RB",
+      "team": "CHI",
+      "score": 0.0809793770313263
+    },
+    {
+      "player_id": "00-0039875",
+      "name": "Ray Davis",
+      "pos": "RB",
+      "team": "BUF",
+      "score": 0.08084529638290405
+    },
+    {
+      "player_id": "00-0037012",
+      "name": "Trey Lance",
+      "pos": "QB",
+      "team": "LAC",
+      "score": 0.08069539815187454
+    },
+    {
+      "player_id": "00-0032398",
+      "name": "Chris Moore",
+      "pos": "WR",
+      "team": "BAL",
+      "score": 0.08065284043550491
+    },
+    {
+      "player_id": "00-0035704",
+      "name": "Drew Lock",
+      "pos": "QB",
+      "team": "SEA",
+      "score": 0.07974683493375778
+    },
+    {
+      "player_id": "00-0038738",
+      "name": "Hunter Luepke",
+      "pos": "RB",
+      "team": "DAL",
+      "score": 0.07938320189714432
+    },
+    {
+      "player_id": "00-0036754",
+      "name": "Brock Wright",
+      "pos": "TE",
+      "team": "DET",
+      "score": 0.07840128242969513
+    },
+    {
+      "player_id": "00-0033246",
+      "name": "Johnny Mundt",
+      "pos": "TE",
+      "team": "PHI",
+      "score": 0.07813384383916855
+    },
+    {
+      "player_id": "00-0040179",
+      "name": "DJ Giddens",
+      "pos": "RB",
+      "team": "IND",
+      "score": 0.07762859761714935
+    },
+    {
+      "player_id": "00-0032434",
+      "name": "Brandon Allen",
+      "pos": "QB",
+      "team": "TEN",
+      "score": 0.07600979506969452
+    },
+    {
+      "player_id": "00-0036422",
+      "name": "Adam Trautman",
+      "pos": "TE",
+      "team": "DEN",
+      "score": 0.07580103725194931
+    },
+    {
+      "player_id": "00-0038564",
+      "name": "Cameron Latu",
+      "pos": "TE",
+      "team": "NE",
+      "score": 0.07532451301813126
+    },
+    {
+      "player_id": "00-0039757",
+      "name": "Terrell Jennings",
+      "pos": "RB",
+      "team": "NE",
+      "score": 0.07414346933364868
+    },
+    {
+      "player_id": "00-0036950",
+      "name": "Avery Williams",
+      "pos": "RB",
+      "team": "NYJ",
+      "score": 0.0740700289607048
+    },
+    {
+      "player_id": "00-0036898",
+      "name": "Davis Mills",
+      "pos": "QB",
+      "team": "HOU",
+      "score": 0.07295653223991394
+    },
+    {
+      "player_id": "00-0038465",
+      "name": "Malik Heath",
+      "pos": "WR",
+      "team": "GB",
+      "score": 0.07295477390289307
+    },
+    {
+      "player_id": "00-0041395",
+      "name": "Eli Raridon",
+      "pos": "TE",
+      "team": "NE",
+      "score": 0.07272695004940033
+    },
+    {
+      "player_id": "00-0040715",
+      "name": "Cam Skattebo",
+      "pos": "RB",
+      "team": "NYG",
+      "score": 0.07236231863498688
+    },
+    {
+      "player_id": "00-0040705",
+      "name": "Chimere Dike",
+      "pos": "WR",
+      "team": "TEN",
+      "score": 0.07198307663202286
+    },
+    {
+      "player_id": "00-0035264",
+      "name": "Jarrett Stidham",
+      "pos": "QB",
+      "team": "DEN",
+      "score": 0.07068823277950287
+    },
+    {
+      "player_id": "00-0037248",
+      "name": "James Cook",
+      "pos": "RB",
+      "team": "BUF",
+      "score": 0.07044168561697006
+    },
+    {
+      "player_id": "00-0039798",
+      "name": "Isaiah Davis",
+      "pos": "RB",
+      "team": "NYJ",
+      "score": 0.06978410482406616
+    },
+    {
+      "player_id": "00-0038115",
+      "name": "Daniel Bellinger",
+      "pos": "TE",
+      "team": "TEN",
+      "score": 0.06803177297115326
+    },
+    {
+      "player_id": "00-0035956",
+      "name": "Giovanni Ricci",
+      "pos": "TE",
+      "team": "DET",
+      "score": 0.06645715981721878
+    },
+    {
+      "player_id": "00-0039824",
+      "name": "Jared Wiley",
+      "pos": "TE",
+      "team": "KC",
+      "score": 0.06618638336658478
+    },
+    {
+      "player_id": "00-0040122",
+      "name": "Ashton Jeanty",
+      "pos": "RB",
+      "team": "LV",
+      "score": 0.06515620648860931
+    },
+    {
+      "player_id": "00-0036223",
+      "name": "Jonathan Taylor",
+      "pos": "RB",
+      "team": "IND",
+      "score": 0.06438640505075455
+    },
+    {
+      "player_id": "00-0031237",
+      "name": "Teddy Bridgewater",
+      "pos": "QB",
+      "team": "TB",
+      "score": 0.06315096467733383
+    },
+    {
+      "player_id": "00-0039407",
+      "name": "Dylan Laube",
+      "pos": "RB",
+      "team": "LV",
+      "score": 0.06295543164014816
+    },
+    {
+      "player_id": "00-0040673",
+      "name": "Jalen Milroe",
+      "pos": "QB",
+      "team": "SEA",
+      "score": 0.06273985654115677
+    },
+    {
+      "player_id": "00-0039751",
+      "name": "Jordan Whittington",
+      "pos": "WR",
+      "team": "LA",
+      "score": 0.06254406273365021
+    },
+    {
+      "player_id": "00-0036423",
+      "name": "Albert Okwuegbunam",
+      "pos": "TE",
+      "team": "LV",
+      "score": 0.061941999942064285
+    },
+    {
+      "player_id": "00-0039376",
+      "name": "Spencer Rattler",
+      "pos": "QB",
+      "team": "NO",
+      "score": 0.06120634078979492
+    },
+    {
+      "player_id": "00-0036259",
+      "name": "Jauan Jennings",
+      "pos": "WR",
+      "team": "MIN",
+      "score": 0.060811981558799744
+    },
+    {
+      "player_id": "00-0038134",
+      "name": "Kenneth Walker III",
+      "pos": "RB",
+      "team": "KC",
+      "score": 0.060640688985586166
+    },
+    {
+      "player_id": "00-0037745",
+      "name": "Velus Jones Jr.",
+      "pos": "WR",
+      "team": "SEA",
+      "score": 0.0605354830622673
+    },
+    {
+      "player_id": "00-0033576",
+      "name": "Eric Saubert",
+      "pos": "TE",
+      "team": "SEA",
+      "score": 0.06037919595837593
+    },
+    {
+      "player_id": "00-0036244",
+      "name": "Colby Parkinson",
+      "pos": "TE",
+      "team": "LA",
+      "score": 0.060233086347579956
+    },
+    {
+      "player_id": "00-0039062",
+      "name": "Jonathan Mingo",
+      "pos": "WR",
+      "team": "DAL",
+      "score": 0.06020465865731239
+    },
+    {
+      "player_id": "00-0038896",
+      "name": "Jacob Saylors",
+      "pos": "RB",
+      "team": "DET",
+      "score": 0.05991917476058006
+    },
+    {
+      "player_id": "00-0033757",
+      "name": "Robert Tonyan",
+      "pos": "TE",
+      "team": "PIT",
+      "score": 0.05959053337574005
+    },
+    {
+      "player_id": "00-0038400",
+      "name": "Tanner McKee",
+      "pos": "QB",
+      "team": "PHI",
+      "score": 0.059292152523994446
+    },
+    {
+      "player_id": "00-0041529",
+      "name": "Kevin Coleman Jr.",
+      "pos": "WR",
+      "team": "MIA",
+      "score": 0.05895073339343071
+    },
+    {
+      "player_id": "00-0036534",
+      "name": "Shane Zylstra",
+      "pos": "TE",
+      "team": "DET",
+      "score": 0.05821499973535538
+    },
+    {
+      "player_id": "00-0039398",
+      "name": "Joe Milton III",
+      "pos": "QB",
+      "team": "DAL",
+      "score": 0.05782889574766159
+    },
+    {
+      "player_id": "00-0038809",
+      "name": "Ben Sims",
+      "pos": "TE",
+      "team": "MIN",
+      "score": 0.05772162601351738
+    },
+    {
+      "player_id": "00-0037091",
+      "name": "Bo Melton",
+      "pos": "WR",
+      "team": "GB",
+      "score": 0.057177286595106125
+    },
+    {
+      "player_id": "00-0033881",
+      "name": "Evan Engram",
+      "pos": "TE",
+      "team": "DEN",
+      "score": 0.05684486776590347
+    },
+    {
+      "player_id": "00-0039796",
+      "name": "Rasheen Ali",
+      "pos": "RB",
+      "team": "BAL",
+      "score": 0.056052692234516144
+    },
+    {
+      "player_id": "00-0040238",
+      "name": "LeQuint Allen Jr.",
+      "pos": "RB",
+      "team": "JAX",
+      "score": 0.055800311267375946
+    },
+    {
+      "player_id": "00-0039365",
+      "name": "Jacob Cowing",
+      "pos": "WR",
+      "team": "SF",
+      "score": 0.05560656636953354
+    },
+    {
+      "player_id": "00-0039164",
+      "name": "Anthony Richardson",
+      "pos": "QB",
+      "team": "IND",
+      "score": 0.05554821714758873
+    },
+    {
+      "player_id": "00-0040206",
+      "name": "Riley Leonard",
+      "pos": "QB",
+      "team": "IND",
+      "score": 0.055302344262599945
+    },
+    {
+      "player_id": "00-0039792",
+      "name": "Devontez Walker",
+      "pos": "WR",
+      "team": "BAL",
+      "score": 0.05496671050786972
+    },
+    {
+      "player_id": "00-0039074",
+      "name": "Davis Allen",
+      "pos": "TE",
+      "team": "LA",
+      "score": 0.05458147078752518
+    },
+    {
+      "player_id": "00-0039530",
+      "name": "Brevyn Spann-Ford",
+      "pos": "TE",
+      "team": "DAL",
+      "score": 0.054416920989751816
+    },
+    {
+      "player_id": "00-0037539",
+      "name": "Lucas Krull",
+      "pos": "TE",
+      "team": "DEN",
+      "score": 0.053865786641836166
+    },
+    {
+      "player_id": "00-0040534",
+      "name": "Ke'Shawn Williams",
+      "pos": "WR",
+      "team": "CIN",
+      "score": 0.05385898798704147
+    },
+    {
+      "player_id": "00-0041524",
+      "name": "Will Kacmarek",
+      "pos": "TE",
+      "team": "MIA",
+      "score": 0.05373825132846832
+    },
+    {
+      "player_id": "00-0039589",
+      "name": "Kameron Johnson",
+      "pos": "WR",
+      "team": "TB",
+      "score": 0.053181856870651245
+    },
+    {
+      "player_id": "00-0037093",
+      "name": "Dareke Young",
+      "pos": "WR",
+      "team": "LV",
+      "score": 0.052949242293834686
+    },
+    {
+      "player_id": "00-0040131",
+      "name": "Kyle Williams",
+      "pos": "WR",
+      "team": "NE",
+      "score": 0.05273683741688728
+    },
+    {
+      "player_id": "00-0034073",
+      "name": "Ross Dwelley",
+      "pos": "TE",
+      "team": "DET",
+      "score": 0.05258551985025406
+    },
+    {
+      "player_id": "00-0039847",
+      "name": "Theo Johnson",
+      "pos": "TE",
+      "team": "NYG",
+      "score": 0.05247895419597626
+    },
+    {
+      "player_id": "00-0041099",
+      "name": "Barion Brown",
+      "pos": "WR",
+      "team": "NO",
+      "score": 0.052391838282346725
+    },
+    {
+      "player_id": "00-0041067",
+      "name": "Bryce Lance",
+      "pos": "WR",
+      "team": "NO",
+      "score": 0.05154232308268547
+    },
+    {
+      "player_id": "00-0039384",
+      "name": "Tyrone Tracy Jr.",
+      "pos": "RB",
+      "team": "NYG",
+      "score": 0.051051024347543716
+    },
+    {
+      "player_id": "00-0040194",
+      "name": "Jackson Hawes",
+      "pos": "TE",
+      "team": "BUF",
+      "score": 0.04583844542503357
+    },
+    {
+      "player_id": "00-0041503",
+      "name": "Nate Boerkircher",
+      "pos": "TE",
+      "team": "JAX",
+      "score": 0.04315377026796341
+    },
+    {
+      "player_id": "00-0039686",
+      "name": "Colson Yankoff",
+      "pos": "TE",
+      "team": "WAS",
+      "score": 0.042689114809036255
+    },
+    {
+      "player_id": "00-0037311",
+      "name": "Ko Kieft",
+      "pos": "TE",
+      "team": "TB",
+      "score": 0.03871170058846474
+    },
+    {
+      "player_id": "00-0041558",
+      "name": "Sam Roush",
+      "pos": "TE",
+      "team": "CHI",
+      "score": 0.037612639367580414
+    },
+    {
+      "player_id": "00-0038710",
+      "name": "Blake Whiteheart",
+      "pos": "TE",
+      "team": "CLE",
+      "score": 0.03757940232753754
+    },
+    {
+      "player_id": "00-0039648",
+      "name": "David Martin-Robinson",
+      "pos": "TE",
+      "team": "TEN",
+      "score": 0.0351957343518734
+    },
+    {
+      "player_id": "00-0039050",
+      "name": "Payne Durham",
+      "pos": "TE",
+      "team": "TB",
+      "score": 0.03446955233812332
+    },
+    {
+      "player_id": "00-0038573",
+      "name": "Derius Davis",
+      "pos": "WR",
+      "team": "LAC",
+      "score": 0.031620122492313385
+    },
+    {
+      "player_id": "00-0033293",
+      "name": "Aaron Jones",
+      "pos": "RB",
+      "team": "MIN",
+      "score": 0.03139008209109306
+    },
+    {
+      "player_id": "00-0041051",
+      "name": "Zavion Thomas",
+      "pos": "WR",
+      "team": "CHI",
+      "score": 0.03069877251982689
+    },
+    {
+      "player_id": "00-0032764",
+      "name": "Derrick Henry",
+      "pos": "RB",
+      "team": "BAL",
+      "score": 0.029817810282111168
+    },
+    {
+      "player_id": "00-0036590",
+      "name": "Quintin Morris",
+      "pos": "TE",
+      "team": "JAX",
+      "score": 0.029541272670030594
+    },
+    {
+      "player_id": "00-0040075",
+      "name": "LaJohntay Wester",
+      "pos": "WR",
+      "team": "BAL",
+      "score": 0.0295306034386158
+    },
+    {
+      "player_id": "00-0039816",
+      "name": "Anthony Gould",
+      "pos": "WR",
+      "team": "IND",
+      "score": 0.02940444089472294
+    },
+    {
+      "player_id": "00-0039920",
+      "name": "Malachi Corley",
+      "pos": "WR",
+      "team": "CLE",
+      "score": 0.029125496745109558
+    },
+    {
+      "player_id": "00-0036569",
+      "name": "Gary Brightwell",
+      "pos": "RB",
+      "team": "CIN",
+      "score": 0.02887943759560585
+    },
+    {
+      "player_id": "00-0040081",
+      "name": "Jake Briningstool",
+      "pos": "TE",
+      "team": "KC",
+      "score": 0.027112184092402458
+    },
+    {
+      "player_id": "00-0041094",
+      "name": "Bauer Sharp",
+      "pos": "TE",
+      "team": "TB",
+      "score": 0.023906687274575233
+    },
+    {
+      "player_id": "00-0022942",
+      "name": "Philip Rivers",
+      "pos": "QB",
+      "team": "IND",
+      "score": 0.022781595587730408
+    },
+    {
+      "player_id": "00-0035500",
+      "name": "Greg Dortch",
+      "pos": "WR",
+      "team": "BUF",
+      "score": 0.02261614240705967
+    },
+    {
+      "player_id": "00-0036290",
+      "name": "Cole Kmet",
+      "pos": "TE",
+      "team": "CHI",
+      "score": 0.02228584885597229
+    },
+    {
+      "player_id": "00-0040739",
+      "name": "Elijah Arroyo",
+      "pos": "TE",
+      "team": "SEA",
+      "score": 0.019051479175686836
+    },
+    {
+      "player_id": "00-0039754",
+      "name": "Devin Culp",
+      "pos": "TE",
+      "team": "TB",
+      "score": 0.018925365060567856
+    },
+    {
+      "player_id": "00-0036463",
+      "name": "Chris Blair",
+      "pos": "WR",
+      "team": "ATL",
+      "score": 0.01760655827820301
+    },
+    {
+      "player_id": "00-0038640",
+      "name": "Jalen Brooks",
+      "pos": "WR",
+      "team": "ARI",
+      "score": 0.013097471557557583
+    },
+    {
+      "player_id": "00-0036646",
+      "name": "Simi Fehoko",
+      "pos": "WR",
+      "team": "ARI",
+      "score": 0.012537196278572083
+    },
+    {
+      "player_id": "00-0038359",
+      "name": "Xavier Smith",
+      "pos": "WR",
+      "team": "LA",
+      "score": 0.012357993051409721
+    },
+    {
+      "player_id": "00-0041397",
+      "name": "Kaden Wetjen",
+      "pos": "WR",
+      "team": "PIT",
+      "score": 0.012195689603686333
+    },
+    {
+      "player_id": "00-0040894",
+      "name": "Malik Benson",
+      "pos": "WR",
+      "team": "LV",
+      "score": 0.011845923028886318
+    },
+    {
+      "player_id": "00-0036497",
+      "name": "Tim Jones",
+      "pos": "WR",
+      "team": "JAX",
+      "score": 0.011633810587227345
+    },
+    {
+      "player_id": "00-0037132",
+      "name": "Britain Covey",
+      "pos": "WR",
+      "team": "PHI",
+      "score": 0.010300840251147747
+    },
+    {
+      "player_id": "00-0036841",
+      "name": "Austin Trammell",
+      "pos": "WR",
+      "team": "JAX",
+      "score": 0.010017456486821175
+    },
+    {
+      "player_id": "00-0037524",
+      "name": "Tay Martin",
+      "pos": "WR",
+      "team": "DET",
+      "score": 0.010001320391893387
+    },
+    {
+      "player_id": "00-0035602",
+      "name": "Alex Bachman",
+      "pos": "WR",
+      "team": "LA",
+      "score": 0.009527938440442085
+    },
+    {
+      "player_id": "00-0036331",
+      "name": "Devin Duvernay",
+      "pos": "WR",
+      "team": "ARI",
+      "score": 0.009155086241662502
+    },
+    {
+      "player_id": "00-0024243",
+      "name": "Marcedes Lewis",
+      "pos": "TE",
+      "team": "DEN",
+      "score": 0.008477765135467052
+    },
+    {
+      "player_id": "00-0035544",
+      "name": "Tom Kennedy",
+      "pos": "WR",
+      "team": "DET",
+      "score": 0.007489333860576153
+    },
+    {
+      "player_id": "00-0036887",
+      "name": "Luke Farrell",
+      "pos": "TE",
+      "team": "SF",
+      "score": 0.004242163151502609
+    },
+    {
+      "player_id": "00-0037292",
+      "name": "Andrew Ogletree",
+      "pos": "TE",
+      "team": "IND",
+      "score": 0.004181463737040758
+    },
+    {
+      "player_id": "00-0040058",
+      "name": "Nick Kallerup",
+      "pos": "TE",
+      "team": "SEA",
+      "score": 0.0028295600786805153
+    },
+    {
+      "player_id": "00-0038643",
+      "name": "Brayden Willis",
+      "pos": "TE",
+      "team": "SF",
+      "score": 0.0027969274669885635
+    },
+    {
+      "player_id": "00-0040363",
+      "name": "Keleki Latu",
+      "pos": "TE",
+      "team": "BUF",
+      "score": 0.002560350811108947
+    },
+    {
+      "player_id": "00-0036825",
+      "name": "Feleipe Franks",
+      "pos": "TE",
+      "team": "CAR",
+      "score": 0.0022045832592993975
+    },
+    {
+      "player_id": "00-0038590",
+      "name": "Justin Shorter",
+      "pos": "TE",
+      "team": "LV",
+      "score": 0.002183769829571247
+    },
+    {
+      "player_id": "00-0038519",
+      "name": "Nikko Remigio",
+      "pos": "WR",
+      "team": "KC",
+      "score": 0.0019559182692319155
+    },
+    {
+      "player_id": "00-0038492",
+      "name": "Jason Brownlee",
+      "pos": "WR",
+      "team": "KC",
+      "score": 0.0014748829416930676
+    }
+  ],
+  "unavailable_watch_list": [
+    {
+      "player_id": "00-0032775",
+      "name": "Demarcus Robinson",
+      "pos": "WR",
+      "team": "SF",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0033375",
+      "name": "Tim Patrick",
+      "pos": "WR",
+      "team": "JAX",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0033553",
+      "name": "James Conner",
+      "pos": "RB",
+      "team": "ARI",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0033885",
+      "name": "David Njoku",
+      "pos": "TE",
+      "team": "LAC",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0033955",
+      "name": "Jeremy McNichols",
+      "pos": "RB",
+      "team": "WAS",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0034407",
+      "name": "Ray-Ray McCloud",
+      "pos": "WR",
+      "team": "NYG",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0034419",
+      "name": "Braxton Berrios",
+      "pos": "WR",
+      "team": "NYG",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0034775",
+      "name": "Christian Kirk",
+      "pos": "WR",
+      "team": "HOU",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0034798",
+      "name": "Durham Smythe",
+      "pos": "TE",
+      "team": "BAL",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0035249",
+      "name": "Josh Oliver",
+      "pos": "TE",
+      "team": "MIN",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0035359",
+      "name": "David Sills",
+      "pos": "WR",
+      "team": "ATL",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0035645",
+      "name": "Gunner Olszewski",
+      "pos": "WR",
+      "team": "NYG",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0035676",
+      "name": "A.J. Brown",
+      "pos": "WR",
+      "team": "NE",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0036973",
+      "name": "Travis Etienne",
+      "pos": "RB",
+      "team": "NO",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0036984",
+      "name": "Trey Sermon",
+      "pos": "RB",
+      "team": "PIT",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0037004",
+      "name": "Hunter Long",
+      "pos": "TE",
+      "team": "ARI",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0037031",
+      "name": "Nikola Kalinic",
+      "pos": "TE",
+      "team": "CHI",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0037086",
+      "name": "Grant Calcaterra",
+      "pos": "TE",
+      "team": "PHI",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0037112",
+      "name": "Jake Tonges",
+      "pos": "TE",
+      "team": "SF",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0037197",
+      "name": "Isiah Pacheco",
+      "pos": "RB",
+      "team": "KC",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0037276",
+      "name": "Ty Chandler",
+      "pos": "RB",
+      "team": "MIN",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0037324",
+      "name": "Chris Oladokun",
+      "pos": "QB",
+      "team": "KC",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0037329",
+      "name": "Brittain Brown",
+      "pos": "RB",
+      "team": "CHI",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0037525",
+      "name": "Jordan Mason",
+      "pos": "RB",
+      "team": "MIN",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0037557",
+      "name": "Ronnie Rivers",
+      "pos": "RB",
+      "team": "LA",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0037563",
+      "name": "Malik Davis",
+      "pos": "RB",
+      "team": "DAL",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0037664",
+      "name": "Alec Pierce",
+      "pos": "WR",
+      "team": "IND",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0037837",
+      "name": "Calvin Austin III",
+      "pos": "WR",
+      "team": "PIT",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0038394",
+      "name": "Will Mallory",
+      "pos": "TE",
+      "team": "IND",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0038555",
+      "name": "Tank Bigsby",
+      "pos": "RB",
+      "team": "PHI",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0038619",
+      "name": "Andrei Iosivas",
+      "pos": "WR",
+      "team": "CIN",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0038679",
+      "name": "Tyrell Shavers",
+      "pos": "WR",
+      "team": "BUF",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0038720",
+      "name": "Julian Hill",
+      "pos": "TE",
+      "team": "MIA",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0038752",
+      "name": "Jake Bobo",
+      "pos": "WR",
+      "team": "SEA",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0039040",
+      "name": "De'Von Achane",
+      "pos": "RB",
+      "team": "MIA",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0039144",
+      "name": "Luke Musgrave",
+      "pos": "TE",
+      "team": "GB",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0039146",
+      "name": "Jayden Reed",
+      "pos": "WR",
+      "team": "GB",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0039165",
+      "name": "Zach Charbonnet",
+      "pos": "RB",
+      "team": "SEA",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0039342",
+      "name": "Xavier Legette",
+      "pos": "WR",
+      "team": "CAR",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0039344",
+      "name": "Jonathon Brooks",
+      "pos": "RB",
+      "team": "CAR",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0039363",
+      "name": "Isaac Guerendo",
+      "pos": "RB",
+      "team": "SF",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0039603",
+      "name": "British Brooks",
+      "pos": "RB",
+      "team": "HOU",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0039623",
+      "name": "Mason Tipton",
+      "pos": "WR",
+      "team": "NO",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0039737",
+      "name": "Tip Reiman",
+      "pos": "TE",
+      "team": "ARI",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0039855",
+      "name": "Jalen McMillan",
+      "pos": "WR",
+      "team": "TB",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0039916",
+      "name": "Ricky Pearsall",
+      "pos": "WR",
+      "team": "SF",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0039921",
+      "name": "Trey Benson",
+      "pos": "RB",
+      "team": "ARI",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0040009",
+      "name": "Savion Williams",
+      "pos": "WR",
+      "team": "GB",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0040130",
+      "name": "Jayden Higgins",
+      "pos": "WR",
+      "team": "HOU",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0040162",
+      "name": "Dylan Sampson",
+      "pos": "RB",
+      "team": "CLE",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0040164",
+      "name": "Jaylin Lane",
+      "pos": "WR",
+      "team": "WAS",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0040184",
+      "name": "KeAndre Lambert-Smith",
+      "pos": "WR",
+      "team": "LAC",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0040432",
+      "name": "Beaux Collins",
+      "pos": "WR",
+      "team": "NYG",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0040488",
+      "name": "Carter Runyon",
+      "pos": "TE",
+      "team": "LV",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0040509",
+      "name": "Ben Yurosek",
+      "pos": "TE",
+      "team": "MIN",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0040581",
+      "name": "Dont'e Thornton Jr.",
+      "pos": "WR",
+      "team": "LV",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0040582",
+      "name": "Arian Smith",
+      "pos": "WR",
+      "team": "NYJ",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0040644",
+      "name": "Trevor Etienne",
+      "pos": "RB",
+      "team": "CAR",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0040649",
+      "name": "Robbie Ouzts",
+      "pos": "RB",
+      "team": "SEA",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0040691",
+      "name": "Jaxson Dart",
+      "pos": "QB",
+      "team": "NYG",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0040704",
+      "name": "Dillon Gabriel",
+      "pos": "QB",
+      "team": "CLE",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0040729",
+      "name": "Jack Bech",
+      "pos": "WR",
+      "team": "LV",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0040737",
+      "name": "Terrance Ferguson",
+      "pos": "TE",
+      "team": "LA",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    },
+    {
+      "player_id": "00-0041512",
+      "name": "Jadarian Price",
+      "pos": "RB",
+      "team": "SEA",
+      "status": "RES",
+      "reason": "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+    }
+  ],
+  "already_played_watch_list": [],
+  "team_changed_watch_list": [
+    {
+      "player_id": "00-0026300",
+      "name": "Josh Johnson",
+      "pos": "QB",
+      "old_team": "WAS",
+      "new_team": "CIN",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "MIA",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 17.375
+      }
+    },
+    {
+      "player_id": "00-0028118",
+      "name": "Tyrod Taylor",
+      "pos": "QB",
+      "old_team": "NYJ",
+      "new_team": "GB",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "CHI",
+        "is_home": 1,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 14.885
+      }
+    },
+    {
+      "player_id": "00-0031235",
+      "name": "Odell Beckham Jr.",
+      "pos": "WR",
+      "old_team": "NYG",
+      "new_team": "MIN",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "NO",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 24.625
+      }
+    },
+    {
+      "player_id": "00-0033439",
+      "name": "Pharaoh Brown",
+      "pos": "TE",
+      "old_team": "ARI",
+      "new_team": "IND",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "PIT",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 8.3
+      }
+    },
+    {
+      "player_id": "00-0033869",
+      "name": "Mitchell Trubisky",
+      "pos": "QB",
+      "old_team": "BUF",
+      "new_team": "TEN",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "HOU",
+        "is_home": 1,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 19.459999999999997
+      }
+    },
+    {
+      "player_id": "00-0033949",
+      "name": "Joshua Dobbs",
+      "pos": "QB",
+      "old_team": "NE",
+      "new_team": "DET",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "ARI",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 20.985
+      }
+    },
+    {
+      "player_id": "00-0034270",
+      "name": "Tyler Conklin",
+      "pos": "TE",
+      "old_team": "LAC",
+      "new_team": "DET",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "ARI",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 15.625000000000002
+      }
+    },
+    {
+      "player_id": "00-0034487",
+      "name": "Trent Sherfield",
+      "pos": "WR",
+      "old_team": "ARI",
+      "new_team": "BUF",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "LA",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 24.775
+      }
+    },
+    {
+      "player_id": "00-0034577",
+      "name": "Kyle Allen",
+      "pos": "QB",
+      "old_team": "DET",
+      "new_team": "BUF",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "LA",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 14.525
+      }
+    },
+    {
+      "player_id": "00-0034860",
+      "name": "Dante Pettis",
+      "pos": "WR",
+      "old_team": "NO",
+      "new_team": "SF",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "SEA",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 17.275
+      }
+    },
+    {
+      "player_id": "00-0034955",
+      "name": "Brett Rypien",
+      "pos": "QB",
+      "old_team": "CIN",
+      "new_team": "TB",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "DAL",
+        "is_home": 0,
+        "is_short_week": 1,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 23.400000000000002
+      }
+    },
+    {
+      "player_id": "00-0035289",
+      "name": "Gardner Minshew",
+      "pos": "QB",
+      "old_team": "KC",
+      "new_team": "ARI",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "DET",
+        "is_home": 1,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 27.38
+      }
+    },
+    {
+      "player_id": "00-0035298",
+      "name": "Scott Miller",
+      "pos": "WR",
+      "old_team": "PIT",
+      "new_team": "CHI",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "GB",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 25.375
+      }
+    },
+    {
+      "player_id": "00-0035535",
+      "name": "Darius Slayton",
+      "pos": "WR",
+      "old_team": "NYG",
+      "new_team": "IND",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "PIT",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 23.5
+      }
+    },
+    {
+      "player_id": "00-0036133",
+      "name": "James Proche",
+      "pos": "WR",
+      "old_team": "TEN",
+      "new_team": "CLE",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "NYJ",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 23.225
+      }
+    },
+    {
+      "player_id": "00-0036165",
+      "name": "Isaiah Hodgins",
+      "pos": "WR",
+      "old_team": "NYG",
+      "new_team": "PIT",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "IND",
+        "is_home": 1,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 29.45
+      }
+    },
+    {
+      "player_id": "00-0036212",
+      "name": "Tua Tagovailoa",
+      "pos": "QB",
+      "old_team": "MIA",
+      "new_team": "ATL",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "BAL",
+        "is_home": 1,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 15.485000000000001
+      }
+    },
+    {
+      "player_id": "00-0036332",
+      "name": "Josiah Deguara",
+      "pos": "TE",
+      "old_team": "ARI",
+      "new_team": "PHI",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "JAX",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 7.925
+      }
+    },
+    {
+      "player_id": "00-0036415",
+      "name": "Van Jefferson",
+      "pos": "WR",
+      "old_team": "TEN",
+      "new_team": "WAS",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "NYG",
+        "is_home": 1,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 27.475
+      }
+    },
+    {
+      "player_id": "00-0036741",
+      "name": "Jack Stoll",
+      "pos": "TE",
+      "old_team": "NO",
+      "new_team": "SF",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "SEA",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 8.325000000000001
+      }
+    },
+    {
+      "player_id": "00-0036755",
+      "name": "Jaret Patterson",
+      "pos": "RB",
+      "old_team": "LAC",
+      "new_team": "CLE",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "NYJ",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 25.0
+      }
+    },
+    {
+      "player_id": "00-0036876",
+      "name": "Kylen Granson",
+      "pos": "TE",
+      "old_team": "PHI",
+      "new_team": "TEN",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "HOU",
+        "is_home": 1,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 8.275
+      }
+    },
+    {
+      "player_id": "00-0036906",
+      "name": "Khalil Herbert",
+      "pos": "RB",
+      "old_team": "NYJ",
+      "new_team": "ATL",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "BAL",
+        "is_home": 1,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 16.475
+      }
+    },
+    {
+      "player_id": "00-0036924",
+      "name": "Michael Carter",
+      "pos": "RB",
+      "old_team": "ARI",
+      "new_team": "TEN",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "HOU",
+        "is_home": 1,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 15.425
+      }
+    },
+    {
+      "player_id": "00-0036945",
+      "name": "Justin Fields",
+      "pos": "QB",
+      "old_team": "NYJ",
+      "new_team": "KC",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": null,
+        "is_home": null,
+        "is_short_week": null,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": null
+      }
+    },
+    {
+      "player_id": "00-0036980",
+      "name": "Elijah Moore",
+      "pos": "WR",
+      "old_team": "BUF",
+      "new_team": "PHI",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "JAX",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 29.985000000000003
+      }
+    },
+    {
+      "player_id": "00-0037013",
+      "name": "Zach Wilson",
+      "pos": "QB",
+      "old_team": "MIA",
+      "new_team": "NO",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "MIN",
+        "is_home": 1,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 10.51
+      }
+    },
+    {
+      "player_id": "00-0037258",
+      "name": "Dameon Pierce",
+      "pos": "RB",
+      "old_team": "KC",
+      "new_team": "PHI",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "JAX",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 14.275
+      }
+    },
+    {
+      "player_id": "00-0037277",
+      "name": "Teagan Quitoriano",
+      "pos": "TE",
+      "old_team": "ATL",
+      "new_team": "ARI",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "DET",
+        "is_home": 1,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 23.8
+      }
+    },
+    {
+      "player_id": "00-0037282",
+      "name": "James Mitchell",
+      "pos": "TE",
+      "old_team": "CAR",
+      "new_team": "DAL",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "TB",
+        "is_home": 1,
+        "is_short_week": 1,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 14.65
+      }
+    },
+    {
+      "player_id": "00-0037306",
+      "name": "John FitzPatrick",
+      "pos": "TE",
+      "old_team": "GB",
+      "new_team": "CLE",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "NYJ",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 7.1000000000000005
+      }
+    },
+    {
+      "player_id": "00-0037340",
+      "name": "Zaire Mitchell-Paden",
+      "pos": "TE",
+      "old_team": "NO",
+      "new_team": "HOU",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "TEN",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 8.05
+      }
+    },
+    {
+      "player_id": "00-0037348",
+      "name": "Tanner Conner",
+      "pos": "TE",
+      "old_team": "MIA",
+      "new_team": "NE",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "LV",
+        "is_home": 1,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 14.600000000000001
+      }
+    },
+    {
+      "player_id": "00-0037475",
+      "name": "Stone Smartt",
+      "pos": "TE",
+      "old_team": "NYJ",
+      "new_team": "NO",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "MIN",
+        "is_home": 1,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 6.325
+      }
+    },
+    {
+      "player_id": "00-0037487",
+      "name": "Deven Thompkins",
+      "pos": "WR",
+      "old_team": "ATL",
+      "new_team": "LV",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "NE",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 28.375
+      }
+    },
+    {
+      "player_id": "00-0037617",
+      "name": "Hassan Haskins",
+      "pos": "RB",
+      "old_team": "LAC",
+      "new_team": "NE",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "LV",
+        "is_home": 1,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 19.325
+      }
+    },
+    {
+      "player_id": "00-0038040",
+      "name": "Zamir White",
+      "pos": "RB",
+      "old_team": "LV",
+      "new_team": "NO",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "MIN",
+        "is_home": 1,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 12.575000000000001
+      }
+    },
+    {
+      "player_id": "00-0038396",
+      "name": "Eric Gray",
+      "pos": "RB",
+      "old_team": "NYG",
+      "new_team": "CLE",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "NYJ",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 25.0
+      }
+    },
+    {
+      "player_id": "00-0038397",
+      "name": "Evan Hull",
+      "pos": "RB",
+      "old_team": "NO",
+      "new_team": "ARI",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "DET",
+        "is_home": 1,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 19.55
+      }
+    },
+    {
+      "player_id": "00-0038440",
+      "name": "Zavier Scott",
+      "pos": "RB",
+      "old_team": "MIN",
+      "new_team": "CHI",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "GB",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 27.575000000000003
+      }
+    },
+    {
+      "player_id": "00-0038647",
+      "name": "Ronnie Bell",
+      "pos": "WR",
+      "old_team": "NO",
+      "new_team": "LV",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "NE",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 28.375
+      }
+    },
+    {
+      "player_id": "00-0038979",
+      "name": "Cedric Tillman",
+      "pos": "WR",
+      "old_team": "CLE",
+      "new_team": "NO",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "MIN",
+        "is_home": 1,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 24.75
+      }
+    },
+    {
+      "player_id": "00-0039305",
+      "name": "Jack Westover",
+      "pos": "TE",
+      "old_team": "NE",
+      "new_team": "WAS",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "NYG",
+        "is_home": 1,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 11.450000000000001
+      }
+    },
+    {
+      "player_id": "00-0039373",
+      "name": "Audric Estim\u00e9",
+      "pos": "RB",
+      "old_team": "NO",
+      "new_team": "MIN",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "NO",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 31.75
+      }
+    },
+    {
+      "player_id": "00-0039394",
+      "name": "Casey Washington",
+      "pos": "WR",
+      "old_team": "ATL",
+      "new_team": "CAR",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": null,
+        "is_home": null,
+        "is_short_week": null,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": null
+      }
+    },
+    {
+      "player_id": "00-0039458",
+      "name": "Brenden Bates",
+      "pos": "TE",
+      "old_team": "CLE",
+      "new_team": "JAX",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "PHI",
+        "is_home": 1,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 5.8999999999999995
+      }
+    },
+    {
+      "player_id": "00-0039631",
+      "name": "Cam Grandy",
+      "pos": "TE",
+      "old_team": "CIN",
+      "new_team": "MIN",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "NO",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 14.274999999999999
+      }
+    },
+    {
+      "player_id": "00-0039923",
+      "name": "J.J. McCarthy",
+      "pos": "QB",
+      "old_team": "MIN",
+      "new_team": "NYG",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "WAS",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 22.515
+      }
+    },
+    {
+      "player_id": "00-0040202",
+      "name": "Devin Neal",
+      "pos": "RB",
+      "old_team": "NO",
+      "new_team": "MIN",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "NO",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 31.75
+      }
+    },
+    {
+      "player_id": "00-0040218",
+      "name": "Jimmy Horn Jr.",
+      "pos": "WR",
+      "old_team": "CAR",
+      "new_team": "CLE",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "NYJ",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 23.225
+      }
+    },
+    {
+      "player_id": "00-0040234",
+      "name": "Quinn Ewers",
+      "pos": "QB",
+      "old_team": "MIA",
+      "new_team": "JAX",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "PHI",
+        "is_home": 1,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 17.96
+      }
+    },
+    {
+      "player_id": "00-0040259",
+      "name": "Gage Larvadain",
+      "pos": "WR",
+      "old_team": "CLE",
+      "new_team": "BAL",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "ATL",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 31.150000000000002
+      }
+    },
+    {
+      "player_id": "00-0040311",
+      "name": "Theo Wease Jr.",
+      "pos": "WR",
+      "old_team": "MIA",
+      "new_team": "LAC",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "DEN",
+        "is_home": 1,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 23.65
+      }
+    },
+    {
+      "player_id": "00-0040398",
+      "name": "Brady Cook",
+      "pos": "QB",
+      "old_team": "NYJ",
+      "new_team": "MIA",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "CIN",
+        "is_home": 1,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 16.105
+      }
+    },
+    {
+      "player_id": "00-0040586",
+      "name": "Jaydon Blue",
+      "pos": "RB",
+      "old_team": "DAL",
+      "new_team": "PHI",
+      "reason": "team changed this offseason \u2014 insufficient data on new team",
+      "corrected_features": {
+        "opponent": "JAX",
+        "is_home": 0,
+        "is_short_week": 0,
+        "starter_absent_proxy": null,
+        "opponent_position_matchup": 14.275
+      }
+    }
+  ],
+  "new_competitor_watch_list": [
+    {
+      "player_id": "00-0029263",
+      "name": "Russell Wilson",
+      "pos": "QB",
+      "team": "NYG",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0039923",
+          "name": "J.J. McCarthy",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0030035",
+      "name": "Adam Thielen",
+      "pos": "WR",
+      "team": "PIT",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0036252",
+          "name": "Michael Pittman",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041489",
+          "name": "Germie Bernard",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0030061",
+      "name": "Zach Ertz",
+      "pos": "TE",
+      "team": "PHI",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0041483",
+          "name": "Eli Stowers",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0030564",
+      "name": "DeAndre Hopkins",
+      "pos": "WR",
+      "team": "BAL",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0040870",
+          "name": "Ja'Kobi Lane",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0031236",
+      "name": "Brandin Cooks",
+      "pos": "WR",
+      "team": "SF",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0031408",
+          "name": "Mike Evans",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0034775",
+          "name": "Christian Kirk",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0035719",
+          "name": "Deebo Samuel Sr.",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041035",
+          "name": "De'Zhaun Stribling",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0031345",
+      "name": "Jimmy Garoppolo",
+      "pos": "QB",
+      "team": "LA",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0041568",
+          "name": "Ty Simpson",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0031484",
+      "name": "Chris Manhertz",
+      "pos": "TE",
+      "team": "NYG",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0037838",
+          "name": "Isaiah Likely",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0031763",
+      "name": "DeAndre Carter",
+      "pos": "WR",
+      "team": "CLE",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0041037",
+          "name": "Denzel Boston",
+          "via_production": false,
+          "via_draft_capital": true
+        },
+        {
+          "player_id": "00-0041547",
+          "name": "KC Concepcion",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0032211",
+      "name": "Tyler Lockett",
+      "pos": "WR",
+      "team": "LV",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0037291",
+          "name": "Jalen Nailor",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0032385",
+      "name": "Sterling Shepard",
+      "pos": "WR",
+      "team": "NYJ",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0041511",
+          "name": "Omar Cooper Jr.",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0032688",
+      "name": "Robbie Chosen",
+      "pos": "WR",
+      "team": "WAS",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0031588",
+          "name": "Stefon Diggs",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0036415",
+          "name": "Van Jefferson",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0036626",
+          "name": "Dyami Brown",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041040",
+          "name": "Antonio Williams",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0032950",
+      "name": "Carson Wentz",
+      "pos": "QB",
+      "team": "MIN",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0035228",
+          "name": "Kyler Murray",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0033040",
+      "name": "Tyreek Hill",
+      "pos": "WR",
+      "team": "MIA",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0037666",
+          "name": "Jalen Tolbert",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041523",
+          "name": "Caleb Douglas",
+          "via_production": false,
+          "via_draft_capital": true
+        },
+        {
+          "player_id": "00-0041525",
+          "name": "Chris Bell",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0033282",
+      "name": "Curtis Samuel",
+      "pos": "WR",
+      "team": "BUF",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0034827",
+          "name": "DJ Moore",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0035500",
+          "name": "Greg Dortch",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0033357",
+      "name": "Taysom Hill",
+      "pos": "TE",
+      "team": "NO",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0035644",
+          "name": "Noah Fant",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041041",
+          "name": "Oscar Delp",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0033572",
+      "name": "Jamal Agnew",
+      "pos": "WR",
+      "team": "ATL",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0035208",
+          "name": "Olamide Zaccheaus",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0037741",
+          "name": "Jahan Dotson",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041044",
+          "name": "Zachariah Branch",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0033589",
+      "name": "David Moore",
+      "pos": "WR",
+      "team": "CAR",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0037614",
+          "name": "John Metchie III",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041047",
+          "name": "Chris Brazzell II",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0033591",
+      "name": "Noah Brown",
+      "pos": "WR",
+      "team": "WAS",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0031588",
+          "name": "Stefon Diggs",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0036415",
+          "name": "Van Jefferson",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0036626",
+          "name": "Dyami Brown",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041040",
+          "name": "Antonio Williams",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0033662",
+      "name": "Cooper Rush",
+      "pos": "QB",
+      "team": "ATL",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0036212",
+          "name": "Tua Tagovailoa",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0033699",
+      "name": "Austin Ekeler",
+      "pos": "RB",
+      "team": "WAS",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0037256",
+          "name": "Rachaad White",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0033854",
+      "name": "Dare Ogunbowale",
+      "pos": "RB",
+      "team": "HOU",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0035685",
+          "name": "David Montgomery",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0033891",
+      "name": "Zay Jones",
+      "pos": "WR",
+      "team": "ARI",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0033307",
+          "name": "Kendrick Bourne",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0033923",
+      "name": "Kareem Hunt",
+      "pos": "RB",
+      "team": "KC",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0038134",
+          "name": "Kenneth Walker III",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0033943",
+      "name": "Josh Reynolds",
+      "pos": "WR",
+      "team": "NYJ",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0032385",
+          "name": "Sterling Shepard",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041511",
+          "name": "Omar Cooper Jr.",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0034054",
+      "name": "River Cracraft",
+      "pos": "WR",
+      "team": "WAS",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0031588",
+          "name": "Stefon Diggs",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0036415",
+          "name": "Van Jefferson",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0036626",
+          "name": "Dyami Brown",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041040",
+          "name": "Antonio Williams",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0034159",
+      "name": "Will Dissly",
+      "pos": "TE",
+      "team": "LAC",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0033885",
+          "name": "David Njoku",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0034351",
+      "name": "Dallas Goedert",
+      "pos": "TE",
+      "team": "PHI",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0030061",
+          "name": "Zach Ertz",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041483",
+          "name": "Eli Stowers",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0034367",
+      "name": "Nyheim Hines",
+      "pos": "RB",
+      "team": "NO",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0036973",
+          "name": "Travis Etienne",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0034386",
+      "name": "Justin Watson",
+      "pos": "WR",
+      "team": "HOU",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0038608",
+          "name": "Kayshon Boutte",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0034418",
+      "name": "Cedrick Wilson Jr.",
+      "pos": "WR",
+      "team": "MIA",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0037666",
+          "name": "Jalen Tolbert",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041523",
+          "name": "Caleb Douglas",
+          "via_production": false,
+          "via_draft_capital": true
+        },
+        {
+          "player_id": "00-0041525",
+          "name": "Chris Bell",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0034521",
+      "name": "Allen Lazard",
+      "pos": "WR",
+      "team": "NYJ",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0032385",
+          "name": "Sterling Shepard",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041511",
+          "name": "Omar Cooper Jr.",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0034681",
+      "name": "Chase Edmonds",
+      "pos": "RB",
+      "team": "WAS",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0037256",
+          "name": "Rachaad White",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0034771",
+      "name": "Mason Rudolph",
+      "pos": "QB",
+      "team": "PIT",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0041565",
+          "name": "Drew Allar",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0034791",
+      "name": "Nick Chubb",
+      "pos": "RB",
+      "team": "HOU",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0035685",
+          "name": "David Montgomery",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0034867",
+      "name": "Malik Turner",
+      "pos": "WR",
+      "team": "SF",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0031236",
+          "name": "Brandin Cooks",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0031408",
+          "name": "Mike Evans",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0034775",
+          "name": "Christian Kirk",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0035719",
+          "name": "Deebo Samuel Sr.",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041035",
+          "name": "De'Zhaun Stribling",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0034928",
+      "name": "Steven Sims",
+      "pos": "WR",
+      "team": "ARI",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0033307",
+          "name": "Kendrick Bourne",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0034983",
+      "name": "Hunter Renfrow",
+      "pos": "WR",
+      "team": "CAR",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0037614",
+          "name": "John Metchie III",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041047",
+          "name": "Chris Brazzell II",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0035021",
+      "name": "Ashton Dulin",
+      "pos": "WR",
+      "team": "IND",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0030279",
+          "name": "Keenan Allen",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0035535",
+          "name": "Darius Slayton",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0035140",
+      "name": "Mecole Hardman",
+      "pos": "WR",
+      "team": "BUF",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0034827",
+          "name": "DJ Moore",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0035500",
+          "name": "Greg Dortch",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0035243",
+      "name": "Miles Sanders",
+      "pos": "RB",
+      "team": "DAL",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0038705",
+          "name": "Emari Demercado",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0035311",
+      "name": "Myles Gaskin",
+      "pos": "RB",
+      "team": "SEA",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0038797",
+          "name": "Emanuel Wilson",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041512",
+          "name": "Jadarian Price",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0035406",
+      "name": "Lil'Jordan Humphrey",
+      "pos": "WR",
+      "team": "DEN",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0036613",
+          "name": "Jaylen Waddle",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0035567",
+      "name": "Craig Reynolds",
+      "pos": "RB",
+      "team": "WAS",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0037256",
+          "name": "Rachaad White",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0035662",
+      "name": "Marquise Brown",
+      "pos": "WR",
+      "team": "PHI",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0038393",
+          "name": "Dontayvion Wicks",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0040867",
+          "name": "Makai Lemon",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0035726",
+      "name": "Jakob Johnson",
+      "pos": "RB",
+      "team": "HOU",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0035685",
+          "name": "David Montgomery",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0035876",
+      "name": "Andre Baccellia",
+      "pos": "WR",
+      "team": "ARI",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0033307",
+          "name": "Kendrick Bourne",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0036176",
+      "name": "Mason Kinsey",
+      "pos": "WR",
+      "team": "TEN",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0038117",
+          "name": "Wan'Dale Robinson",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041438",
+          "name": "Carnell Tate",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0036182",
+      "name": "Nick Westbrook-Ikhine",
+      "pos": "WR",
+      "team": "IND",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0030279",
+          "name": "Keenan Allen",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0035535",
+          "name": "Darius Slayton",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0036196",
+      "name": "Gabe Davis",
+      "pos": "WR",
+      "team": "BUF",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0034827",
+          "name": "DJ Moore",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0035500",
+          "name": "Greg Dortch",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0036232",
+      "name": "Harrison Bryant",
+      "pos": "TE",
+      "team": "HOU",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0041472",
+          "name": "Marlin Klein",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0036360",
+      "name": "Clyde Edwards-Helaire",
+      "pos": "RB",
+      "team": "KC",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0038134",
+          "name": "Kenneth Walker III",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0036414",
+      "name": "Cam Akers",
+      "pos": "RB",
+      "team": "SEA",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0038797",
+          "name": "Emanuel Wilson",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041512",
+          "name": "Jadarian Price",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0036427",
+      "name": "Tyler Johnson",
+      "pos": "WR",
+      "team": "NYJ",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0032385",
+          "name": "Sterling Shepard",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041511",
+          "name": "Omar Cooper Jr.",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0036429",
+      "name": "Charlie Woerner",
+      "pos": "TE",
+      "team": "ATL",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0032392",
+          "name": "Austin Hooper",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0036527",
+      "name": "DJ Turner",
+      "pos": "WR",
+      "team": "LV",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0037291",
+          "name": "Jalen Nailor",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0036554",
+      "name": "Nico Collins",
+      "pos": "WR",
+      "team": "HOU",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0038608",
+          "name": "Kayshon Boutte",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0036556",
+      "name": "Brevin Jordan",
+      "pos": "TE",
+      "team": "HOU",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0041472",
+          "name": "Marlin Klein",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0036567",
+      "name": "Elijah Mitchell",
+      "pos": "RB",
+      "team": "KC",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0038134",
+          "name": "Kenneth Walker III",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0036620",
+      "name": "Dee Eskridge",
+      "pos": "WR",
+      "team": "MIA",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0037666",
+          "name": "Jalen Tolbert",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041523",
+          "name": "Caleb Douglas",
+          "via_production": false,
+          "via_draft_capital": true
+        },
+        {
+          "player_id": "00-0041525",
+          "name": "Chris Bell",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0036628",
+      "name": "John Bates",
+      "pos": "TE",
+      "team": "WAS",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0037809",
+          "name": "Chig Okonkwo",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0036630",
+      "name": "Tylan Wallace",
+      "pos": "WR",
+      "team": "CLE",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0041037",
+          "name": "Denzel Boston",
+          "via_production": false,
+          "via_draft_capital": true
+        },
+        {
+          "player_id": "00-0041547",
+          "name": "KC Concepcion",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0036959",
+      "name": "Michael Bandy",
+      "pos": "WR",
+      "team": "DEN",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0036613",
+          "name": "Jaylen Waddle",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0037098",
+      "name": "Samori Toure",
+      "pos": "WR",
+      "team": "NO",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0038979",
+          "name": "Cedric Tillman",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041029",
+          "name": "Jordyn Tyson",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0037120",
+      "name": "Tyler Goodson",
+      "pos": "RB",
+      "team": "DAL",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0038705",
+          "name": "Emari Demercado",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0037157",
+      "name": "Bam Knight",
+      "pos": "RB",
+      "team": "ARI",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0037263",
+          "name": "Tyler Allgeier",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041027",
+          "name": "Jeremiyah Love",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0037231",
+      "name": "Kevin Austin Jr.",
+      "pos": "WR",
+      "team": "NO",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0038979",
+          "name": "Cedric Tillman",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041029",
+          "name": "Jordyn Tyson",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0037317",
+      "name": "Nick Muse",
+      "pos": "TE",
+      "team": "ATL",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0032392",
+          "name": "Austin Hooper",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0037380",
+      "name": "Kaden Davis",
+      "pos": "WR",
+      "team": "CHI",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0032464",
+          "name": "Kalif Raymond",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041051",
+          "name": "Zavion Thomas",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0037654",
+      "name": "Tucker Fisk",
+      "pos": "TE",
+      "team": "LAC",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0033885",
+          "name": "David Njoku",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0037666",
+      "name": "Jalen Tolbert",
+      "pos": "WR",
+      "team": "MIA",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0041523",
+          "name": "Caleb Douglas",
+          "via_production": false,
+          "via_draft_capital": true
+        },
+        {
+          "player_id": "00-0041525",
+          "name": "Chris Bell",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0037755",
+      "name": "Jelani Woods",
+      "pos": "TE",
+      "team": "NYJ",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0041032",
+          "name": "Kenyon Sadiq",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0038046",
+      "name": "Charlie Kolar",
+      "pos": "TE",
+      "team": "LAC",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0033885",
+          "name": "David Njoku",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0038409",
+      "name": "Lew Nichols III",
+      "pos": "RB",
+      "team": "PIT",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0036139",
+          "name": "Rico Dowdle",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0038489",
+      "name": "Ben VanSumeren",
+      "pos": "RB",
+      "team": "KC",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0038134",
+          "name": "Kenneth Walker III",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0038496",
+      "name": "Xavier Gipson",
+      "pos": "WR",
+      "team": "PHI",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0035662",
+          "name": "Marquise Brown",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0038393",
+          "name": "Dontayvion Wicks",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0040867",
+          "name": "Makai Lemon",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0038498",
+      "name": "E.J. Jenkins",
+      "pos": "TE",
+      "team": "PHI",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0030061",
+          "name": "Zach Ertz",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041483",
+          "name": "Eli Stowers",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0038576",
+      "name": "Charlie Jones",
+      "pos": "WR",
+      "team": "NYG",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0036309",
+          "name": "Darnell Mooney",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0037837",
+          "name": "Calvin Austin III",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041042",
+          "name": "Malachi Fields",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0038579",
+      "name": "Aidan O'Connell",
+      "pos": "QB",
+      "team": "LV",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0029604",
+          "name": "Kirk Cousins",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041562",
+          "name": "Fernando Mendoza",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0038582",
+      "name": "Clayton Tune",
+      "pos": "QB",
+      "team": "GB",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0028118",
+          "name": "Tyrod Taylor",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0038589",
+      "name": "Josh Whyle",
+      "pos": "TE",
+      "team": "GB",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0033858",
+          "name": "Jonnu Smith",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0038678",
+      "name": "Jordan Mims",
+      "pos": "RB",
+      "team": "TEN",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0036924",
+          "name": "Michael Carter",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0038740",
+      "name": "Jalen Moreno-Cropper",
+      "pos": "WR",
+      "team": "NO",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0038979",
+          "name": "Cedric Tillman",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041029",
+          "name": "Jordyn Tyson",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0038891",
+      "name": "Shedrick Jackson",
+      "pos": "WR",
+      "team": "LV",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0037291",
+          "name": "Jalen Nailor",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0038938",
+      "name": "Jalin Hyatt",
+      "pos": "WR",
+      "team": "NYG",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0036309",
+          "name": "Darnell Mooney",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0037837",
+          "name": "Calvin Austin III",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041042",
+          "name": "Malachi Fields",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0038951",
+      "name": "Sean Tucker",
+      "pos": "RB",
+      "team": "TB",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0036919",
+          "name": "Kenny Gainwell",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0038953",
+      "name": "Dylan Drummond",
+      "pos": "WR",
+      "team": "ATL",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0035208",
+          "name": "Olamide Zaccheaus",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0037741",
+          "name": "Jahan Dotson",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041044",
+          "name": "Zachariah Branch",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0038976",
+      "name": "Marvin Mims Jr.",
+      "pos": "WR",
+      "team": "DEN",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0036613",
+          "name": "Jaylen Waddle",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0039355",
+      "name": "Luke McCaffrey",
+      "pos": "WR",
+      "team": "WAS",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0031588",
+          "name": "Stefon Diggs",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0036415",
+          "name": "Van Jefferson",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0036626",
+          "name": "Dyami Brown",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041040",
+          "name": "Antonio Williams",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0039356",
+      "name": "Ja'Tavion Sanders",
+      "pos": "TE",
+      "team": "CAR",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0031610",
+          "name": "Darren Waller",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0039359",
+      "name": "Cade Stover",
+      "pos": "TE",
+      "team": "HOU",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0041472",
+          "name": "Marlin Klein",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0039379",
+      "name": "Jamari Thrash",
+      "pos": "WR",
+      "team": "CLE",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0041037",
+          "name": "Denzel Boston",
+          "via_production": false,
+          "via_draft_capital": true
+        },
+        {
+          "player_id": "00-0041547",
+          "name": "KC Concepcion",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0039405",
+      "name": "Jawhar Jordan",
+      "pos": "RB",
+      "team": "HOU",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0035685",
+          "name": "David Montgomery",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0039521",
+      "name": "Xavier Weaver",
+      "pos": "WR",
+      "team": "ARI",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0033307",
+          "name": "Kendrick Bourne",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0039650",
+      "name": "Bryce Oliver",
+      "pos": "WR",
+      "team": "TEN",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0038117",
+          "name": "Wan'Dale Robinson",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041438",
+          "name": "Carnell Tate",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0039890",
+      "name": "Adonai Mitchell",
+      "pos": "WR",
+      "team": "NYJ",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0032385",
+          "name": "Sterling Shepard",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041511",
+          "name": "Omar Cooper Jr.",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0039912",
+      "name": "Ben Sinnott",
+      "pos": "TE",
+      "team": "WAS",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0037809",
+          "name": "Chig Okonkwo",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0039917",
+      "name": "Michael Penix Jr.",
+      "pos": "QB",
+      "team": "ATL",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0036212",
+          "name": "Tua Tagovailoa",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0040078",
+      "name": "Brashard Smith",
+      "pos": "RB",
+      "team": "KC",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0038134",
+          "name": "Kenneth Walker III",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0040154",
+      "name": "Tai Felton",
+      "pos": "WR",
+      "team": "MIN",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0036259",
+          "name": "Jauan Jennings",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0040172",
+      "name": "Jordan Watkins",
+      "pos": "WR",
+      "team": "SF",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0031236",
+          "name": "Brandin Cooks",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0031408",
+          "name": "Mike Evans",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0034775",
+          "name": "Christian Kirk",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0035719",
+          "name": "Deebo Samuel Sr.",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041035",
+          "name": "De'Zhaun Stribling",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0040205",
+      "name": "Kalel Mullings",
+      "pos": "RB",
+      "team": "TEN",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0036924",
+          "name": "Michael Carter",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0040277",
+      "name": "Jahdae Walker",
+      "pos": "WR",
+      "team": "CHI",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0032464",
+          "name": "Kalif Raymond",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041051",
+          "name": "Zavion Thomas",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0040429",
+      "name": "Josh Williams",
+      "pos": "RB",
+      "team": "TB",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0036919",
+          "name": "Kenny Gainwell",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0040431",
+      "name": "Dalen Cambre",
+      "pos": "WR",
+      "team": "NYG",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0036309",
+          "name": "Darnell Mooney",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0037837",
+          "name": "Calvin Austin III",
+          "via_production": true,
+          "via_draft_capital": false
+        },
+        {
+          "player_id": "00-0041042",
+          "name": "Malachi Fields",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0040494",
+      "name": "Max Brosmer",
+      "pos": "QB",
+      "team": "MIN",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0035228",
+          "name": "Kyler Murray",
+          "via_production": true,
+          "via_draft_capital": false
+        }
+      ]
+    },
+    {
+      "player_id": "00-0040736",
+      "name": "Mason Taylor",
+      "pos": "TE",
+      "team": "NYJ",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0041032",
+          "name": "Kenyon Sadiq",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    },
+    {
+      "player_id": "00-0040782",
+      "name": "Isaiah Bond",
+      "pos": "WR",
+      "team": "CLE",
+      "reason": "new same-position addition(s) this offseason \u2014 trailing touch share predates the competition",
+      "new_competitors": [
+        {
+          "player_id": "00-0041037",
+          "name": "Denzel Boston",
+          "via_production": false,
+          "via_draft_capital": true
+        },
+        {
+          "player_id": "00-0041547",
+          "name": "KC Concepcion",
+          "via_production": false,
+          "via_draft_capital": true
+        }
+      ]
+    }
+  ]
+}
