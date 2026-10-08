@@ -30,7 +30,7 @@ import report
 import scheduled_run
 import scoring
 import tracker
-from score_week import render_markdown_report
+from score_week import load_scheduled_teams, render_markdown_report
 
 CFG = scoring.load_config()
 RULES = CFG["scoring"]
@@ -1005,6 +1005,29 @@ class TestEspnInjuryStatus(unittest.TestCase):
         self.assertEqual(ownership.ownership_by_player(con, 7), {"g1": 99.0})
 
 
+class TestScoreWeekNoGame(unittest.TestCase):
+    """model/score_week.py's own bye-week exclusion: the pieces that can be tested without a model file."""
+
+    def test_scheduled_teams_come_from_the_schedule_not_from_kickoff_times(self):
+        con = sqlite3.connect(":memory:")
+        con.row_factory = sqlite3.Row
+        con.execute("CREATE TABLE nfl_games (season INTEGER, week INTEGER, game_id TEXT, kickoff_utc TEXT, home_team TEXT, "
+                    "away_team TEXT, is_playoffs INTEGER DEFAULT 0)")
+        con.executemany("INSERT INTO nfl_games VALUES (2026, 5, ?, ?, ?, ?, ?)",
+                        [("a", "2026-10-11T13:00:00", "TEN", "BAL", 0), ("b", "", "OAK", "DEN", 0), ("p", "2027-01-16T13:00:00", "SF", "GB", 1)])
+        self.assertEqual(load_scheduled_teams(con, 2026, 5), {"TEN", "BAL", "LV", "DEN"})   # historical code normalized; playoff game ignored
+        self.assertEqual(load_scheduled_teams(con, 2026, 6), set())                         # schedule not loaded: the check is skipped
+
+    def test_markdown_gains_one_line_only_when_someone_was_left_out(self):
+        plain = render_markdown_report(PREDICTION_OUTPUT)
+        zero = dict(PREDICTION_OUTPUT, counts=dict(PREDICTION_OUTPUT["counts"], no_game=0))
+        self.assertEqual(render_markdown_report(zero), plain)            # a week without byes reads exactly as before
+        some = dict(PREDICTION_OUTPUT, counts=dict(PREDICTION_OUTPUT["counts"], no_game=40))
+        md = render_markdown_report(some)
+        self.assertIn("- No game this week (bye), not scored: 40", md)
+        self.assertEqual(md.replace("- No game this week (bye), not scored: 40\n", ""), plain)
+
+
 class TestPredictionMarkdownFlags(unittest.TestCase):
     def test_flags_are_display_only(self):
         plain = render_markdown_report(PREDICTION_OUTPUT)
@@ -1040,7 +1063,8 @@ class TestLogInjuryPoolRule(TestLogInternationalWeek):
         out = Path(cmd[cmd.index("--json-out") + 1])
         out.parent.mkdir(parents=True, exist_ok=True)
         top = [dict(r, rank=i) for i, r in enumerate(self.scored_pool, start=1)]
-        payload = json.dumps(dict(PREDICTION_OUTPUT, week=4, scored_pool=self.scored_pool, top=top))
+        payload = json.dumps(dict(PREDICTION_OUTPUT, week=4, scored_pool=self.scored_pool, top=top,
+                                  no_game_watch_list=getattr(self, "unscored", [])))
         for path in (out, out.with_name(out.stem + "_shadow.json")):
             path.write_text(payload, encoding="utf-8")
             path.with_suffix(".md").write_text("as score_week.py wrote it", encoding="utf-8")
@@ -1087,6 +1111,24 @@ class TestLogInjuryPoolRule(TestLogInternationalWeek):
             self.assertIn("**(BYE)** = his team has no game this week.", md)
             self.assertIn("TEN-RB0 **(OUT)**", md)
             self.assertIn("Injury flags:", md)
+
+    def test_players_score_week_left_unscored_for_a_bye_are_recorded_with_the_run_too(self):
+        """Since 2026-10-08 score_week.py excludes bye-week players itself: they never reach the scored pool."""
+        self.unscored = [{"player_id": "CAR-QB0", "name": "CAR-QB0", "pos": "QB", "team": "CAR", "reason": "bye"}]
+        rc, out = self.log_live(self.fresh, "--skip-ownership")
+        self.assertEqual(rc, 0)
+        self.assertIn("1 player(s) not scored by O.D.D.S. at all: their team has no game in week 4", out)
+        self.assertEqual(self.run_config()["excluded_no_game"], ["CAR-QB0"])
+        self.assertEqual(self.rows("SELECT COUNT(*) FROM tr_pool")[0][0], 22)     # same pool as without him
+
+    def test_bye_players_caught_by_either_side_end_up_in_one_recorded_list(self):
+        self.unscored = [{"player_id": "CAR-QB0", "name": "CAR-QB0", "pos": "QB", "team": "CAR", "reason": "bye"}]
+        self.add_bye_team()                    # six more that (as before the change) reached the scored pool
+        self.assertEqual(self.log_live(self.fresh, "--skip-ownership")[0], 0)
+        excluded = self.run_config()["excluded_no_game"]
+        self.assertEqual(len(excluded), 7)
+        self.assertIn("CAR-QB0", excluded)
+        self.assertFalse([r for r in self.rows("SELECT player_id FROM tr_pool") if r["player_id"].startswith("CAR-")])
 
     def test_bye_flag_does_not_need_an_injury_report(self):
         """An --as-of run fetches no injury report, but the schedule alone says who is on a bye."""

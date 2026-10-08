@@ -61,6 +61,21 @@ like every .joblib). Like the production file, the shadow prediction file
 must be generated before the week is played and committed frozen -- never
 regenerated afterward, same discipline throughout this pipeline.
 
+No game, no score: a player whose team is not on the target week's
+schedule (a bye) is excluded before anything else and listed in
+`no_game_watch_list` with no score. He can't spike that week, and the
+historical table the model was trained and evaluated on never contained
+such a row -- it only holds player-weeks that were actually played -- so a
+ranked bye-week player was a live-only artifact, and a guaranteed miss in
+evaluation/verify_week.py. Added 2026-10-08 after week 5, the season's
+first bye week, put three of them in the production top 10; that week's
+first snapshot is frozen as it was (see the `pool_changes` marker in
+predictions/verification_log.json). The team is resolved the same way the
+kickoff guard resolves it (weekly-roster team first), and the check is
+skipped entirely if the week's schedule isn't loaded. Because it runs
+first, a bye-week player who would otherwise be on another watch list
+(reserve, team change, new competitor) appears on this one instead.
+
 Kickoff guard: a mid-week re-run (e.g. Sunday, after some early games have
 already kicked off) must not score a player whose game has already started
 -- the whole point of a spike-probability ranking is deciding who to add
@@ -173,6 +188,7 @@ PROD_THRESHOLDS = {"RB": 50, "WR": 30, "TE": 30, "QB": 100}  # touches/targets/t
 DRAFT_CAPITAL_PICK_CUTOFF = 96  # ~3 rounds at 32 picks/round
 
 ALREADY_PLAYED_REASON = "game already kicked off as of this run -- not re-scored"
+NO_GAME_REASON = "team has no game this week (bye) -- not scored"
 
 
 def parse_kickoff_utc(kickoff_str):
@@ -208,6 +224,19 @@ def load_kickoffs(con, season, week):
         kickoffs[home] = (dt, away)
         kickoffs[away] = (dt, home)
     return kickoffs
+
+
+def load_scheduled_teams(con, season, week):
+    """Every team with a non-playoff game in (season, week), in current team
+    codes -- straight from the schedule's team columns, independent of whether
+    a kickoff time is present or parseable. Empty if the week's schedule isn't
+    loaded at all, in which case the no-game check below is skipped rather than
+    excluding everybody."""
+    teams = set()
+    for r in con.execute("SELECT home_team, away_team FROM nfl_games WHERE season=? AND week=? AND is_playoffs=0", (season, week)):
+        teams.add(norm_team(r["home_team"]))
+        teams.add(norm_team(r["away_team"]))
+    return teams
 
 
 def build_already_played_records(already_played_base, names, baseline_path):
@@ -297,6 +326,8 @@ def render_markdown_report(output, status_flags=None, flag_note=None):
     ]
     if counts.get("unavailable_suppressed") is not None:
         lines.append(f"- Unavailable (reserve/PUP/NFI/suspended) suppressed: {counts['unavailable_suppressed']}")
+    if counts.get("no_game"):
+        lines.append(f"- No game this week (bye), not scored: {counts['no_game']}")
     if counts.get("already_played") is not None:
         lines.append(f"- Already played as of this run (not re-scored, rank/score carried forward where available): "
                       f"{counts['already_played']}")
@@ -461,7 +492,7 @@ def print_top_table(label, ranked, args, names):
 def write_output(model_path, model_commit, model_meta, args, names, ranked, stable, proba,
                   all_eligible_count, n_candidates, n_released_by_recency,
                   team_changed_records, new_competitor_records, unavailable_records,
-                  already_played_records,
+                  already_played_records, no_game_records,
                   n_via_production_only, n_via_draft_only, n_via_both, json_out_path):
     def player_record(pid, feat, score=None):
         return {
@@ -497,6 +528,7 @@ def write_output(model_path, model_commit, model_meta, args, names, ranked, stab
             "stable_scored": len(stable),
             "released_from_offseason_suppression": n_released_by_recency,
             "unavailable_suppressed": len(unavailable_records),
+            "no_game": len(no_game_records),
             "already_played": len(already_played_records),
             "team_changed_suppressed": len(team_changed_records),
             "new_competitor_suppressed": len(new_competitor_records),
@@ -507,6 +539,7 @@ def write_output(model_path, model_commit, model_meta, args, names, ranked, stab
         "top": ranked_records,
         "scored_pool": scored_pool_records,
         "unavailable_watch_list": unavailable_records,
+        "no_game_watch_list": no_game_records,
         "already_played_watch_list": already_played_records,
         "team_changed_watch_list": team_changed_records,
         "new_competitor_watch_list": new_competitor_records,
@@ -576,6 +609,7 @@ def main():
     names = {row["player_id"]: row["full_name"] for row in con.execute("SELECT player_id, full_name FROM ref_players")}
 
     kickoffs = load_kickoffs(con, args.season, args.week)
+    scheduled_teams = load_scheduled_teams(con, args.season, args.week)
     print(f"[INFO] kickoff guard evaluated as-of {as_of.isoformat()} against {len(kickoffs) // 2} "
           f"scheduled game(s) for {args.season} week {args.week}")
 
@@ -650,9 +684,19 @@ def main():
         return (via_production or via_draft), via_production, via_draft
 
     stable, team_changed_list, new_competitor_list, unavailable_list, already_played_list = [], [], [], [], []
+    no_game_list = []
     n_via_production_only = n_via_draft_only = n_via_both = 0
     n_released_by_recency = 0
     for pid, feat in candidates:
+        # No game, no score: a player whose team isn't on this week's schedule
+        # (a bye) can't spike, and the historical table the model was trained
+        # and evaluated on never contained such a row -- it only has
+        # player-weeks that were actually played. Same team resolution as the
+        # kickoff guard below. Skipped if the week's schedule isn't loaded.
+        if scheduled_teams and (roster_team_of.get(pid) or feat["_team"]) not in scheduled_teams:
+            no_game_list.append((pid, feat))
+            continue
+
         # Kickoff guard first, unconditionally -- ahead of even the
         # availability gate below. Whatever team this player is ACTUALLY on
         # (roster_team_of, same resolution the team-changed check below
@@ -726,6 +770,7 @@ def main():
 
     print(f"[INFO] {len(stable)} stable candidates scored ({n_released_by_recency} of those released from "
           f"offseason suppression this week, having reached {MIN_PRIOR_GAMES}+ current-season games); "
+          f"{len(no_game_list)} with no game this week (bye, excluded); "
           f"{len(already_played_list)} already played as of {as_of.isoformat()} (excluded, not re-scored); "
           f"{len(unavailable_list)} unavailable (reserve/PUP/NFI/suspended, score suppressed); "
           f"{len(team_changed_list)} team-changed (score suppressed); "
@@ -783,6 +828,12 @@ def main():
     # Watch-list JSON records are model-independent (same suppression logic
     # regardless of which model scores the stable pool) -- built once, reused
     # for both the production and shadow output files.
+    no_game_records = [
+        {"player_id": pid, "name": names.get(pid, pid), "pos": feat["_pos"],
+         "team": roster_team_of.get(pid) or feat["_team"], "reason": NO_GAME_REASON}
+        for pid, feat in no_game_list
+    ]
+
     unavailable_records = []
     for pid, feat, status in unavailable_list:
         unavailable_records.append({
@@ -841,7 +892,7 @@ def main():
             write_output(model_path, model_commit, model_meta, args, names, ranked, stable, proba,
                          all_eligible_count, len(candidates), n_released_by_recency,
                          team_changed_records, new_competitor_records, unavailable_records,
-                         already_played_records,
+                         already_played_records, no_game_records,
                          n_via_production_only, n_via_draft_only, n_via_both, json_out_path)
 
     json_out_path = Path(args.json_out) if args.json_out else None

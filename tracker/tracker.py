@@ -174,11 +174,12 @@ def teams_with_a_game(con, season, week):
 def split_pool_no_game(pool_src, playing_teams, roster_team_of):
     """(kept, no_game). A player whose team has no game this week -- a bye --
     cannot score, so he is not in the pool for any model, baseline or dart
-    draw. score_week.py scores him regardless: its kickoff guard is a no-op for
-    a team without a game, and nothing else there asks whether one is
-    scheduled. Team resolution is the kickoff guard's: the weekly-roster team
-    if known (so a player traded off a bye team stays in, and one traded onto
-    it goes out), else the team on the scored-pool row."""
+    draw. Since 2026-10-08 score_week.py leaves such players out itself (its
+    no_game_watch_list), so this normally finds nobody; it stays as the
+    tracker's own guarantee, whatever produced the scored pool. Team
+    resolution is the kickoff guard's: the weekly-roster team if known (so a
+    player traded off a bye team stays in, and one traded onto it goes out),
+    else the team on the scored-pool row."""
     kept, no_game = [], []
     for r in pool_src:
         team = roster_team_of.get(r["player_id"]) or r["team"]
@@ -525,6 +526,10 @@ def cmd_log(args, con):
     if idle:
         print(f"[INFO] {len(idle)} scored player(s) left out of the pool: their team has no game in week {week} -- teams "
               f"{sorted({roster_team_of.get(r['player_id']) or r['team'] for r in idle})}")
+    # ...and whoever score_week.py already left unscored for the same reason: the run records both.
+    unscored_idle = {r["player_id"] for r in prod.get("no_game_watch_list") or []}
+    if unscored_idle:
+        print(f"[INFO] {len(unscored_idle)} player(s) not scored by O.D.D.S. at all: their team has no game in week {week}")
     pool_src, early = split_pool_at_cutoff(pool_src, load_kickoffs(con, season, week), roster_team_of, cutoff)
     if early:
         print(f"[INFO] {len(early)} scored player(s) left out of the {slot} pool: their game kicks off before the "
@@ -614,7 +619,7 @@ def cmd_log(args, con):
         "run_config_json": json.dumps({
             "run": cfg["run"], "hit_config_hash": scoring.config_hash(cfg), "slot_rule": SLOT_RULE,
             "excluded_before_cutoff": sorted(r["player_id"] for r in early), "pool_rule": POOL_RULE,
-            "excluded_no_game": sorted(r["player_id"] for r in idle),
+            "excluded_no_game": sorted({r["player_id"] for r in idle} | unscored_idle),
             "sleeper_pool_rule": SLEEPER_POOL_RULE, "ownership_unknown_in_sleeper_pool": sorted(unknown_ids),
             "injury": {"source": inj["source"], "reason": inj["reason"], "exclude_statuses": list(exclude),
                        "excluded": held_out, "disagreements": differ, "nflverse_sha256": inj["sha256"],
