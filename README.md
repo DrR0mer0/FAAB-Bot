@@ -32,7 +32,7 @@ The production model has since been promoted to **13 features** (Group 1, below)
 |---|---|
 | `data/` | Schema, nflverse fetch/load pipeline, roster reconciliation, verification |
 | `model/` | Feature engineering, label generation, training, weekly scoring |
-| `league/` | Yahoo Fantasy API authentication (read-only); feeds the tracker's "available in my league" view |
+| `league/` | Yahoo Fantasy API authentication (read-only) and the league data layer: daily snapshots of my league and a local-only activity report — see below |
 | `startsit/` | Standalone start/sit lineup simulator — see below |
 | `tracker/` | Baseline tracker: logs O.D.D.S. next to "dumb" baselines and scores them after the games — see below |
 | `evaluation/` | Held-out model evaluation and feature experiments |
@@ -106,6 +106,19 @@ The three recurring commands run from Windows Task Scheduler (`tracker/scheduled
 - **Sleeper pool** — every scoreboard is also produced for just the players under 50% owned at pick time, with each model re-picking from that smaller pool. That's the actual sleeper test. A pool player the ownership snapshot has no row for stays in this pool flagged as "ownership unknown" (not assumed to be 0%), and the report shows how many there were.
 
 The scoreboard says plainly when the sample is too small to call a winner. Two known issues are flagged in every report rather than hidden: the production model's `starter_absent_proxy` feature leaks (see `CLAUDE.md`), and its training labels used a 4-pt passing TD. Both are queued for a separate retrain. Backtesting (`backtest`) is phase 2 and not built yet.
+
+## League data (local only)
+
+`league/league_data.py` keeps a daily, append-only record of my own Yahoo league — every transaction (with the winning FAAB bid on waiver claims), each team's remaining budget, rosters, and weekly matchups and scores — and turns it into a short "league activity" report: what each manager did over the last three league weeks, what they have left to spend, who is actively bidding, and how much more than the next offer I paid on the claims I won.
+
+```
+python league/league_data.py snapshot      # daily, from Task Scheduler
+python league/league_data.py import-bids   # after typing losing offers into league_data/manual/bids.csv
+python league/league_data.py report
+python -m unittest discover -s league -v
+```
+
+Yahoo's API only reports winning bids. Losing offers are shown on the website, and since Yahoo's terms rule out tools that pull data from its pages, I type those into a CSV by hand; the importer checks each award against the API and flags any whose winner I typed differently. None of this is in the repo: the database, the raw responses, the report and the CSV all name the league or its managers and are gitignored, and the tests run on a made-up league.
 
 ## Method notes
 
