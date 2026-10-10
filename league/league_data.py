@@ -36,7 +36,10 @@ gzip files under raw/league/ (gitignored).
 LOSING BIDS -- league_data/manual/bids.csv (gitignored), one row per LOSING
 offer: award_date, player, winning_team, winning_amount, losing_team,
 losing_amount. An award nobody else bid on needs no row; lines starting with #
-are comments. The file is the whole truth every time it is imported:
+are comments; a file saved from Excel with a UTF-8 byte-order mark reads the
+same; and award_date may be left blank on a row that repeats the row above's
+player and winner (see read_bids_csv). The file is the whole truth every time
+it is imported:
   * a row not seen before is added; one already stored is left alone;
   * a row whose amounts or winner changed is appended as a CORRECTION and the
     newest version is the one used (hand typing needs a way to fix a typo --
@@ -231,6 +234,7 @@ BIDS_TEMPLATE = """\
 # Losing FAAB offers, typed by hand from Yahoo's "FAB Offers" tab (League > Transactions).
 # One row per LOSING offer. An award nobody else bid on needs no row. Lines starting with # are ignored.
 # award_date is the day the waiver was awarded (YYYY-MM-DD, or M/D/YYYY). Teams by team name, as Yahoo shows them.
+# award_date may be left blank on a row that repeats the row above's player, winning team and winning amount.
 # After editing:  python league/league_data.py import-bids
 award_date,player,winning_team,winning_amount,losing_team,losing_amount
 # 2026-10-07,Example Player,Winning Team Name,16,Losing Team Name,9
@@ -524,8 +528,15 @@ def read_bids_csv(text):
     losing_team, losing_amount -- the two teams still as typed. problems:
     "line N: why" for every line that couldn't be read; such a line is in
     neither list's rows. A missing or wrong header is a problem on its own
-    and gives no rows at all."""
-    rows, problems, header = [], [], None
+    and gives no rows at all.
+
+    Two things a spreadsheet does to the file are allowed for: a UTF-8
+    byte-order mark in front of the first line (Excel's "CSV UTF-8"), and a
+    BLANK award_date on a row that repeats the row above's player, winning
+    team and winning amount -- the second and later offers on one award --
+    which takes that row's date. A blank date on any other row is a problem:
+    a date is never guessed across awards."""
+    rows, problems, header, above = [], [], None, None
     for n, cells in enumerate(csv.reader(io.StringIO(text.lstrip("\ufeff"))), start=1):
         cells = [c.strip() for c in cells]
         if not any(cells) or cells[0].startswith("#"):
@@ -536,13 +547,28 @@ def read_bids_csv(text):
                 return [], [f"line {n}: the header must be {','.join(BID_COLUMNS)}"]
             continue
         r = dict(zip(BID_COLUMNS, cells + [""] * len(BID_COLUMNS)))
+        # the row above, as (date, award): what a blank award_date may be copied from. Reset by any row without a usable date.
+        was, above = above, None
         try:
-            day = r["award_date"]
-            when = (datetime.strptime(day, "%m/%d/%Y").date() if "/" in day else date.fromisoformat(day))
             amounts = {k: int(r[k].lstrip("$")) for k in ("winning_amount", "losing_amount")}
         except ValueError:
-            problems.append(f"line {n}: award_date must be YYYY-MM-DD (or M/D/YYYY) and both amounts whole dollars")
+            problems.append(f"line {n}: both amounts must be whole dollars")
             continue
+        award = (ownership.norm_name(r["player"]), _name_key(r["winning_team"]), amounts["winning_amount"])
+        day = r["award_date"]
+        if not day:
+            if was is None or was[1] != award:
+                problems.append(f"line {n}: award_date is blank, which is only allowed on a row that repeats the row above's player, "
+                                f"winning team and winning amount")
+                continue
+            when = was[0]
+        else:
+            try:
+                when = datetime.strptime(day, "%m/%d/%Y").date() if "/" in day else date.fromisoformat(day)
+            except ValueError:
+                problems.append(f"line {n}: award_date must be YYYY-MM-DD (or M/D/YYYY)")
+                continue
+        above = (when, award)
         why = ("player is empty" if not r["player"] else "a team is empty" if not (r["winning_team"] and r["losing_team"]) else
                "an amount is negative" if min(amounts.values()) < 0 else
                f"the losing offer (${amounts['losing_amount']}) is above the winning one (${amounts['winning_amount']})"

@@ -510,6 +510,48 @@ class TestBids(LeagueDataCase):
         self.assertEqual(len(self.current()), 6)             # nothing is called withdrawn while lines can't be read
         self.assertEqual(self.rows("SELECT n_rejected FROM lg_bid_imports ORDER BY import_id DESC LIMIT 1"), [(8,)])
 
+    def test_a_file_saved_by_excel_with_a_utf8_byte_order_mark_reads_the_same(self):
+        bom = b"\xef\xbb\xbf"
+        path = self.dir / "excel.csv"       # the fixture as Excel's "CSV UTF-8" writes it: BOM first, CRLF line ends
+        path.write_bytes(bom + FIXTURE.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+        out = league_data.import_bids(self.con, path, self.dir / "raw", now=NOW)
+        self.assertEqual((out["ok"], out["n_rows"], out["n_new"], out["rejected"], out["flagged"]), (True, 5, 5, [], []))
+        # the hard case: no comment lines, so the mark sits directly in front of the header's first column name
+        path.write_bytes(bom + (self.HEADER + self.FIXTURE_ROWS).encode("utf-8"))
+        out = league_data.import_bids(self.con, path, self.dir / "raw", now=NOW)
+        self.assertEqual((out["ok"], out["n_unchanged"], out["n_new"], out["rejected"]), (True, 5, 0, []))
+        self.assertEqual(self.rows("SELECT COUNT(*) FROM lg_bids"), [(5,)])
+        text = (bom + (self.HEADER + self.FIXTURE_ROWS).encode("utf-8")).decode("utf-8")      # a caller that didn't strip it
+        self.assertTrue(text.startswith("﻿"))
+        self.assertEqual((len(league_data.read_bids_csv(text)[0]), league_data.read_bids_csv(text)[1]), (5, []))
+
+    def test_a_blank_award_date_takes_the_date_of_the_row_above_only_for_the_same_award(self):
+        out = self.bids("2026-09-30,Big Claim,Team Name 3,27,Team Name 1,20\n"      # 3
+                        ",Big Claim,Team Name 3,27,Team Name 4,5\n"                # 4  same player and winner: 09-30 too
+                        ",big claim,team name 3,$27,Team Name 2,1\n"               # 5  ...and again, however it is typed
+                        ",Other Claim,Team Name 1,10,Team Name 4,3\n"              # 6  another award: a date is never guessed
+                        ",Other Claim,Team Name 1,10,Team Name 2,2\n"              # 7  the row above has no date to give
+                        "2026-10-07,Late Claim,Team Name 3,0,Team Name 2,0\n"      # 8
+                        ",Late Claim,Team Name 3,1,Team Name 4,0\n"                # 9  same player, another winning amount
+                        "10/7/2026,Late Claim,Team Name 3,0,Team Name 1,0\n"       # 10
+                        ",Late Claim,Team Name 1,0,Team Name 4,0\n")               # 11 same player, another winning team
+        self.assertEqual([m.split(":")[0] for m in out["rejected"]], ["line 6", "line 7", "line 9", "line 11"])
+        self.assertTrue(all("award_date is blank, which is only allowed on a row that repeats the row above's player, winning team "
+                            "and winning amount" in m for m in out["rejected"]))
+        self.assertEqual((out["ok"], out["n_new"], out["flagged"]), (True, 5, []))     # the inherited date links to Yahoo's award too
+        self.assertEqual(self.rows("SELECT award_date, player, losing_team_id, losing_amount, transaction_id, line_no FROM lg_bids "
+                                   "ORDER BY bid_id"),
+                         [("2026-09-30", "Big Claim", 1, 20, 6, 3), ("2026-09-30", "Big Claim", 4, 5, 6, 4),
+                          ("2026-09-30", "big claim", 2, 1, 6, 5), ("2026-10-07", "Late Claim", 2, 0, 12, 8),
+                          ("2026-10-07", "Late Claim", 1, 0, 12, 10)])
+        # nothing above it at all
+        rows, problems = league_data.read_bids_csv(self.HEADER + ",Big Claim,Team Name 3,27,Team Name 1,20\n")
+        self.assertEqual((rows, [p.split(":")[0] for p in problems]), ([], ["line 2"]))
+        # a comment or an empty line between two rows of one award doesn't break the chain
+        rows, problems = league_data.read_bids_csv(self.HEADER + "2026-09-30,Big Claim,Team Name 3,27,Team Name 1,20\n"
+                                                   "# two more on this one\n\n,Big Claim,Team Name 3,27,Team Name 4,5\n")
+        self.assertEqual(([r["award_date"].isoformat() for r in rows], problems), (["2026-09-30", "2026-09-30"], []))
+
     def test_a_file_that_cannot_be_what_was_meant_changes_nothing(self):
         self.bids()
         for body, why in (("", "no data rows but 5 offer(s) are stored"),):
