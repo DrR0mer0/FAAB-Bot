@@ -21,6 +21,11 @@ are not designated Out or Doubtful on the week's injury report at log time
 (injuries.py). `log --auto` is the scheduled-task form: it works out
 the current week itself and quietly skips a week that has no such slot. See
 README.md ("Baseline tracker") for the hit definition and the full workflow.
+
+`log` also adds an "Available in my league" section to the prediction markdown
+(league_availability.py: who is a free agent or on waivers in the user's own
+Yahoo league). That is display only -- it never changes the pool, a score, a
+rank or a pick -- and a failed Yahoo fetch never stops a run.
 """
 import argparse
 import json
@@ -40,6 +45,7 @@ sys.path.insert(0, str(REPO_ROOT / "data"))
 
 import baselines  # noqa: E402
 import injuries  # noqa: E402
+import league_availability  # noqa: E402
 import ledger  # noqa: E402
 import ownership  # noqa: E402
 import report  # noqa: E402
@@ -56,6 +62,7 @@ DEFAULT_EXPORT_DIR = TRACKER_DIR / "ledger_export"
 DEFAULT_REPORT_DIR = TRACKER_DIR / "reports"
 DEFAULT_OWNERSHIP_RAW_DIR = ownership.DEFAULT_RAW_DIR
 DEFAULT_INJURIES_RAW_DIR = REPO_ROOT / "raw" / "injuries"
+DEFAULT_LEAGUE_RAW_DIR = league_availability.DEFAULT_RAW_DIR
 BASELINE_VERSIONS = {"dart": "dart-v1", "heuristic": "heuristic-v1", "last_week": "last_week-v1"}
 METRICS = ("top24_hits", "spike_hits", "total_points")
 MAIN_SLATE_ET = (13, 0)  # the Sunday main slate opens with the 1:00 PM Eastern window
@@ -437,6 +444,30 @@ def injury_flag_note(inj, exclude):
     return None
 
 
+def resolve_league(args, con, weekly_roster):
+    """Who is available in the user's own Yahoo league right now (see
+    league_availability.resolve), or a 'skipped' result when the run can't use
+    a live answer: --skip-league-availability, or an --as-of (testing) run,
+    where today's waiver wire would be from that run's future. -> (view, league key)."""
+    if args.skip_league_availability or args.as_of is not None:
+        why = "--skip-league-availability" if args.skip_league_availability else "--as-of run: no live league availability"
+        return {"status": "skipped", "reason": why, "rows": [], "by_player": {}, "n_available": 0, "n_waivers": 0,
+                "n_matched": 0, "n_pages": 0, "http_status": None, "raw_bytes": None, "sha256": None}, None
+    key = args.league_key or league_availability.configured_league_key()
+    return league_availability.resolve(key, con, weekly_roster, fetch=league_availability.fetch), key
+
+
+def league_sections(view, pool_src, outputs, top_n, as_of):
+    """{model: markdown section} for each model's prediction report. A model's
+    list is its own ranking (rank = place among everyone it scored, as in the
+    report's table) cut down to this run's pool; an unavailable view gives
+    every model the same one-line notice."""
+    in_pool = {r["player_id"] for r in pool_src}
+    return {model: league_availability.render_section(
+        view, [dict(r, rank=rank) for rank, r in enumerate(output["scored_pool"], start=1) if r["player_id"] in in_pool],
+        top_n, as_of) for model, output in outputs.items() if output is not None}
+
+
 def resolve_ownership(con, cfg, season, as_of, allow_live, raw_dir):
     """-> (status, snapshot_id, {gsis: percent_owned}). Never raises."""
     max_age = cfg["run"]["ownership_max_age_hours"]
@@ -563,14 +594,42 @@ def cmd_log(args, con):
             injuries._banner(f"could not keep a copy of the injury report under {args.injuries_raw_dir} ({type(e).__name__}: {e})")
     if not pool_src:
         raise Refused("O.D.D.S. scored an empty pool -- nothing to log")
-    # Display only: flag those players in the prediction markdown. Scores, ranks and the JSON stay as score_week.py wrote them.
+    # Display only, part 1: flag those players in the prediction markdown. Scores, ranks and the JSON stay as
+    # score_week.py wrote them.
     note = flag_note(inj, exclude, bool(idle))
+    flags = {}
     if note:
         flags = {pid: st.upper() for pid, st in inj["status"].items() if st in exclude}
         flags.update({r["player_id"]: "BYE" for r in idle})   # no game at all outranks an injury designation
-        for path, output in ((pred_path, prod), (shadow_path, shadow)):
+    # Display only, part 2: which of each model's pool players are available in the user's own Yahoo league
+    # (league_availability.py). The pool is already final here and nothing below reads the answer back into it.
+    league, league_key = resolve_league(args, con, weekly_roster)
+    top_n = cfg["run"]["league_available_top_n"]
+    outputs = {"prod": prod, "shadow": shadow}
+    try:
+        sections = {} if league["status"] == "skipped" else league_sections(league, pool_src, outputs, top_n, as_of)
+    except Exception as e:  # noqa: BLE001 -- a display problem must not cost the run
+        league = dict(league, status="unavailable", rows=[], by_player={}, n_available=0, n_waivers=0, n_matched=0,
+                      reason=f"the league section could not be built ({type(e).__name__}: {e})")
+        league_availability._banner(league["reason"])
+        sections = league_sections(league, pool_src, outputs, top_n, as_of)
+    n_pool_available = sum(1 for r in pool_src if r["player_id"] in league["by_player"])
+    print(f"[LEAGUE] availability {league['status']}" + (f" ({league['reason']})" if league["reason"] else "")
+          + (f": {league['n_available']} available in the league ({league['n_waivers']} on waivers), {league['n_matched']} "
+             f"matched to a player id; {n_pool_available} of {len(pool_src)} pool players available"
+             if league["status"] == "ok" else ""))
+    league_file = None
+    if league["raw_bytes"]:
+        try:
+            league_file = ownership.write_raw(args.league_raw_dir, as_of.isoformat(), "yahoo_league", league["raw_bytes"])
+        except Exception as e:  # noqa: BLE001 -- the SHA-256 stored with the run still identifies the response
+            league_availability._banner(f"could not keep a copy of the Yahoo response under {args.league_raw_dir} "
+                                        f"({type(e).__name__}: {e})")
+    if note or sections:
+        for model, path, output in (("prod", pred_path, prod), ("shadow", shadow_path, shadow)):
             if output is not None:
-                path.with_suffix(".md").write_text(render_markdown_report(output, flags, note), encoding="utf-8")
+                path.with_suffix(".md").write_text(render_markdown_report(output, flags, note) + sections.get(model, ""),
+                                                   encoding="utf-8")
     thr = cfg["run"]["sleeper_owned_pct_max"]
     ids = [r["player_id"] for r in pool_src]
     lw = baselines.last_week_and_target_share(store, ids, season, week)
@@ -624,11 +683,22 @@ def cmd_log(args, con):
             "injury": {"source": inj["source"], "reason": inj["reason"], "exclude_statuses": list(exclude),
                        "excluded": held_out, "disagreements": differ, "nflverse_sha256": inj["sha256"],
                        "nflverse_last_modified": inj["last_modified"].isoformat() if inj["last_modified"] else None,
-                       "nflverse_file": injury_file}}, sort_keys=True)}
+                       "nflverse_file": injury_file},
+            "league_availability": league_availability.run_record(league, league_file, top_n, len(pool), n_pool_available),
+        }, sort_keys=True)}
     with con:
         ledger.insert_rows(con, "tr_runs", [run_row])
         ledger.insert_rows(con, "tr_pool", pool)
         ledger.insert_rows(con, "tr_predictions", preds)
+        if league["status"] != "skipped":   # a failed fetch is on record too, as an ok=0 snapshot
+            con.execute("SAVEPOINT league_view")
+            try:
+                league_availability.store(con, run_id, as_of.isoformat(), league_key, league, league_file)
+            except Exception as e:  # noqa: BLE001 -- the view is display only: losing its snapshot must not lose the run
+                con.execute("ROLLBACK TO league_view")
+                league_availability._banner(f"the league-availability snapshot could NOT be stored with run {run_id} "
+                                            f"({type(e).__name__}: {e}); the run itself is logged")
+            con.execute("RELEASE league_view")
     export = ledger.export_jsonl(Path(args.export_dir) / f"{season}_week{week:02d}_{slot}_log.jsonl",
                                  {"tr_runs": [run_row], "tr_pool": pool, "tr_predictions": preds})
     print(f"\n[LOGGED] {run_id}: pool {len(pool)} players ({sum(r['in_u50'] for r in pool)} in the under-{thr}% pool"
@@ -971,6 +1041,8 @@ def build_parser():
                        help="where raw roster-%% responses are written, gzip-compressed (outside the DB)")
         p.add_argument("--injuries-raw-dir", default=str(DEFAULT_INJURIES_RAW_DIR),
                        help="where `log` keeps a gzip copy of the injury report each run's pool rule used")
+        p.add_argument("--league-raw-dir", default=str(DEFAULT_LEAGUE_RAW_DIR),
+                       help="where `log` keeps a gzip copy of the Yahoo league-availability response each run displayed")
 
     p = sub.add_parser("log", help="run O.D.D.S. + baselines and write to the ledger (before kickoff)")
     common(p)
@@ -987,6 +1059,10 @@ def build_parser():
     p.add_argument("--skip-ownership", action="store_true")
     p.add_argument("--skip-injuries", action="store_true",
                    help="don't fetch the injury report: the Out/Doubtful pool rule is NOT applied (recorded with the run)")
+    p.add_argument("--skip-league-availability", action="store_true",
+                   help="don't ask Yahoo who is available in the league: the prediction markdown gets no league section")
+    p.add_argument("--league-key", default=None,
+                   help="Yahoo league key, e.g. 470.l.123456 (default: YAHOO_LEAGUE_KEY from the environment or league/.env)")
     p.add_argument("--allow-stale-roster", action="store_true")
     p.set_defaults(fn=cmd_log)
 

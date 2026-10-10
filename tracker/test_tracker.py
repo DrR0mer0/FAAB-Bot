@@ -12,8 +12,10 @@ import gzip
 import hashlib
 import io
 import json
+import shutil
 import sqlite3
 import tempfile
+import threading
 import unittest
 import zlib
 from datetime import datetime, timedelta, timezone
@@ -24,6 +26,7 @@ import numpy as np
 
 import baselines
 import injuries
+import league_availability
 import ledger
 import ownership
 import report
@@ -62,6 +65,8 @@ SAMPLE_ROWS = {
     "tr_crowd_results": dict(run_id="r1", model_name="odds_prod", pick_set="all_k10", player_id="p1", computed_at="x"),
     "tr_ownership_snapshots": dict(taken_at="x", source="espn", ok=1),
     "tr_ownership": dict(snapshot_id=1, source="espn", external_id="1"),
+    "tr_league_snapshots": dict(run_id="r1", taken_at="x", source="yahoo", ok=1),
+    "tr_league_availability": dict(snapshot_id=1, external_id="1", status="FA"),
 }
 
 
@@ -1191,14 +1196,20 @@ class TestLogInjuryPoolRule(TestLogInternationalWeek):
         self.assertEqual(self.rows("SELECT COUNT(*) FROM tr_predictions WHERE pick_set LIKE 'u50%'")[0][0], 0)
         self.assertEqual(self.run_config()["ownership_unknown_in_sleeper_pool"], [])
 
+    league_fetch = None   # a test that wants the league view sets this to a stand-in for league_availability.fetch
+
     def log_live(self, fetch, *extra):
         argv = ["log", "--season", "2026", "--week", "4", "--slot", "sun", "--db", str(self.db),
                 "--predictions-dir", str(self.dir / "preds"), "--export-dir", str(self.dir / "export"),
-                "--raw-dir", str(self.dir / "raw"), "--injuries-raw-dir", str(self.dir / "raw_injuries"), *extra]
+                "--raw-dir", str(self.dir / "raw"), "--injuries-raw-dir", str(self.dir / "raw_injuries"),
+                "--league-raw-dir", str(self.dir / "raw_league"), "--league-key", LEAGUE_KEY,
+                *(() if self.league_fetch else ("--skip-league-availability",)), *extra]
         out = io.StringIO()
         with mock.patch.object(tracker.subprocess, "run", side_effect=self.fake_run), \
                 mock.patch.object(tracker, "utcnow", return_value=self.NOW), \
                 mock.patch.object(tracker.injuries, "fetch_nflverse", side_effect=fetch), \
+                mock.patch.object(tracker.league_availability, "fetch",
+                                  side_effect=self.league_fetch or AssertionError("a test must never reach Yahoo")), \
                 mock.patch("sys.stderr"), contextlib.redirect_stdout(out):
             rc = tracker.main(argv)
         return rc, out.getvalue()
@@ -1266,10 +1277,326 @@ class TestLogInjuryPoolRule(TestLogInternationalWeek):
         self.assertIn("NOBODY is flagged", (self.dir / "preds" / "2026_week04.md").read_text(encoding="utf-8"))
 
     def test_as_of_run_never_fetches_and_leaves_the_markdown_alone(self):
-        with mock.patch.object(tracker.injuries, "fetch_nflverse", side_effect=AssertionError("no live report on an --as-of run")):
+        with mock.patch.object(tracker.injuries, "fetch_nflverse", side_effect=AssertionError("no live report on an --as-of run")), \
+                mock.patch.object(tracker.league_availability, "fetch", side_effect=AssertionError("no live league view either")):
             self.assertEqual(self.log("sun", "2026-10-04T14:00:00+00:00"), 0)
         self.assertEqual(self.run_config()["injury"]["source"], "skipped")
+        self.assertEqual(self.run_config()["league_availability"]["status"], "skipped")
+        self.assertEqual(self.rows("SELECT COUNT(*) FROM tr_league_snapshots")[0][0], 0)
         self.assertEqual((self.dir / "preds" / "2026_week04.md").read_text(encoding="utf-8"), "as score_week.py wrote it")
+
+    # ---- league availability: who can be picked up in the user's own Yahoo league (display only)
+
+    LEAGUE_RAW = b'{"league_key": "470.l.999", "pages": []}'
+    LEAGUE_ROWS = (("501", "TEN-RB1", "RB", "TEN", "FA", None),                 # matched by Yahoo id
+                   ("502", "Casey Waiver Jr.", "WR", "KC", "W", "2026-10-07"),  # by name + position on the weekly roster
+                   ("503", "TEN-RB0", "RB", "TEN", "FA", None),                 # available, but Out: not in the pool, not listed
+                   ("504", "PIT-RB0", "RB", "PIT", "FA", None),                 # available, but his game is over: same
+                   ("505", "Nobody Known", "TE", "LV", "FA", None))             # matches nothing: stored, never listed
+
+    def league_ok(self, league_key):
+        self.assertEqual(league_key, LEAGUE_KEY)
+        rows = [dict(external_id=y, name=name, position=pos, team=team, status=status, waiver_date=date)
+                for y, name, pos, team, status, date in self.LEAGUE_ROWS]
+        return {"ok": True, "http_status": 200, "raw_bytes": self.LEAGUE_RAW, "rows": rows, "n_pages": 1, "error": None, "url": "u"}
+
+    def league_down(self, league_key):
+        return {"ok": False, "http_status": 401, "raw_bytes": None, "rows": [], "n_pages": 0, "error": "HTTP 401 on page 1", "url": "u"}
+
+    def add_weekly_roster(self):
+        with open(self.dir / "raw" / "roster_weekly_2026.csv", "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=["season", "week", "gsis_id", "team", "position", "status", "rookie_year", "draft_number",
+                                              "full_name", "yahoo_id"])
+            w.writeheader()
+            for pid, team, pos, name, yahoo in (("TEN-RB1", "TEN", "RB", "Somebody Else", "501"), ("KC-WR2", "KC", "WR", "Casey Waiver", ""),
+                                                ("TEN-RB0", "TEN", "RB", "Out Guy", "503"), ("PIT-RB0", "PIT", "RB", "Thursday Guy", "504")):
+                w.writerow(dict(season=2026, week=4, gsis_id=pid, team=team, position=pos, status="ACT", full_name=name, yahoo_id=yahoo))
+
+    def ledger_rows(self):
+        return [[tuple(r) for r in self.rows(f"SELECT * FROM {t} ORDER BY 1, 2, 3, 4")] for t in ("tr_pool", "tr_predictions")]
+
+    def test_league_section_lists_each_models_available_pool_players_and_the_snapshot_is_stored_with_the_run(self):
+        self.add_weekly_roster()
+        self.league_fetch = self.league_ok
+        rc, out = self.log_live(self.fresh, "--skip-ownership")
+        self.assertEqual(rc, 0)
+        self.assertIn("[LEAGUE] availability ok: 5 available in the league (1 on waivers), 4 matched to a player id; "
+                      "2 of 22 pool players available", out)
+        for stem in ("2026_week04", "2026_week04_shadow"):
+            self.assertEqual((self.dir / "preds" / f"{stem}.json").read_text(encoding="utf-8"), self.json_as_written)   # JSON untouched
+            md = (self.dir / "preds" / f"{stem}.md").read_text(encoding="utf-8")
+            head, section = md.split(league_availability.SECTION_TITLE)
+            self.assertIn("TEN-RB0 **(OUT)**", head)                    # the flags and the ranking table are still there, first
+            self.assertIn("| 1 | PIT-RB0 | RB | PIT | 0.9000 |", head)
+            self.assertEqual([ln for ln in section.splitlines() if ln.startswith("| ")][1:],
+                             ["| 26 | TEN-RB1 | RB | TEN | 0.6500 | Free agent |",          # the model's own rank and score
+                              "| 39 | KC-WR2 | WR | KC | 0.5200 | Waivers (2026-10-07) |"])
+            self.assertIn("(2 of the pool's 22 were)", section)
+            self.assertIn("4 of the 5 players Yahoo lists as available could be matched", section)
+            self.assertNotIn(LEAGUE_KEY, md)
+        run = self.rows("SELECT * FROM tr_runs")[0]
+        rec = json.loads(run["run_config_json"])["league_availability"]
+        sha = hashlib.sha256(self.LEAGUE_RAW).hexdigest()
+        self.assertEqual({k: rec[k] for k in ("status", "reason", "top_n", "n_available", "n_waivers", "n_matched", "n_pool",
+                                              "n_pool_available", "raw_sha256")},
+                         dict(status="ok", reason=None, top_n=25, n_available=5, n_waivers=1, n_matched=4, n_pool=22,
+                              n_pool_available=2, raw_sha256=sha))
+        snap = self.rows("SELECT * FROM tr_league_snapshots")
+        self.assertEqual(len(snap), 1)
+        self.assertEqual((snap[0]["run_id"], snap[0]["league_key"], snap[0]["ok"], snap[0]["n_rows"], snap[0]["n_matched"],
+                          snap[0]["raw_sha256"], snap[0]["raw_file"]),
+                         (run["run_id"], LEAGUE_KEY, 1, 5, 4, sha, rec["raw_file"]))
+        self.assertEqual(gzip.decompress((self.dir / "raw_league" / rec["raw_file"]).read_bytes()), self.LEAGUE_RAW)
+        self.assertEqual([tuple(r) for r in self.rows("SELECT external_id, player_id, match_method, status, waiver_date "
+                                                      "FROM tr_league_availability ORDER BY external_id")],
+                         [("501", "TEN-RB1", "yahoo_id", "FA", None), ("502", "KC-WR2", "roster_name", "W", "2026-10-07"),
+                          ("503", "TEN-RB0", "yahoo_id", "FA", None), ("504", "PIT-RB0", "yahoo_id", "FA", None),
+                          ("505", None, None, "FA", None)])
+        export = (self.dir / "export" / "2026_week04_sun_log.jsonl").read_text(encoding="utf-8")
+        self.assertIn(sha, export)                 # the committed record names the response it displayed...
+        self.assertNotIn(LEAGUE_KEY, export)       # ...but not the league
+
+    def test_league_view_changes_nothing_in_the_ledger(self):
+        """The same run with and without the view: identical pool, picks and scores."""
+        self.add_weekly_roster()
+        plain_db = self.dir / "plain.db"
+        shutil.copy(self.db, plain_db)
+        self.league_fetch = self.league_ok
+        self.assertEqual(self.log_live(self.fresh, "--skip-ownership")[0], 0)
+        with_view = self.ledger_rows()
+        shutil.rmtree(self.dir / "preds")
+        self.db, self.league_fetch = plain_db, None
+        self.assertEqual(self.log_live(self.fresh, "--skip-ownership")[0], 0)
+        self.assertEqual(self.run_config()["league_availability"]["status"], "skipped")
+        self.assertNotIn(league_availability.SECTION_TITLE, (self.dir / "preds" / "2026_week04.md").read_text(encoding="utf-8"))
+        self.assertEqual(self.ledger_rows(), with_view)
+        self.assertEqual(len(with_view[0]), 22)
+
+    def test_failed_yahoo_fetch_still_logs_and_the_section_says_so(self):
+        self.league_fetch = self.league_down
+        rc, out = self.log_live(self.fresh, "--skip-ownership")
+        self.assertEqual(rc, 0)
+        self.assertIn("[LOGGED]", out)
+        self.assertEqual(self.rows("SELECT COUNT(*) FROM tr_pool")[0][0], 22)
+        rec = self.run_config()["league_availability"]
+        self.assertEqual((rec["status"], rec["reason"], rec["raw_sha256"]), ("unavailable", "the Yahoo fetch failed: HTTP 401 on page 1", None))
+        snap = self.rows("SELECT * FROM tr_league_snapshots")[0]
+        self.assertEqual((snap["ok"], snap["error"], snap["http_status"]), (0, rec["reason"], 401))   # the failure is on record
+        self.assertEqual(self.rows("SELECT COUNT(*) FROM tr_league_availability")[0][0], 0)
+        for stem in ("2026_week04", "2026_week04_shadow"):
+            md = (self.dir / "preds" / f"{stem}.md").read_text(encoding="utf-8")
+            self.assertIn("League availability was unavailable when this was generated (the Yahoo fetch failed: HTTP 401 on page 1)", md)
+            self.assertIn("TEN-RB0 **(OUT)**", md)
+
+    def test_a_problem_storing_or_rendering_the_view_never_costs_the_run(self):
+        self.add_weekly_roster()
+        self.league_fetch = self.league_ok
+        with mock.patch.object(tracker.league_availability, "store", side_effect=sqlite3.IntegrityError("boom")):
+            rc, out = self.log_live(self.fresh, "--skip-ownership")
+        self.assertEqual(rc, 0)
+        self.assertIn("[LOGGED]", out)
+        self.assertEqual(self.rows("SELECT COUNT(*) FROM tr_pool")[0][0], 22)        # the run's own rows were committed
+        self.assertEqual(self.rows("SELECT COUNT(*) FROM tr_league_snapshots")[0][0], 0)
+        # ...and the same for the section itself
+        shutil.rmtree(self.dir / "preds")
+        self.db = self.dir / "second.db"
+        self.setUp_db_only()
+        real = tracker.league_availability.render_section
+        broken = lambda view, *a: real(view, *a) if view["status"] != "ok" else 1 / 0
+        with mock.patch.object(tracker.league_availability, "render_section", side_effect=broken):
+            rc, out = self.log_live(self.fresh, "--skip-ownership")
+        self.assertEqual(rc, 0)
+        self.assertIn("[LOGGED]", out)
+        rec = self.run_config()["league_availability"]
+        self.assertEqual(rec["status"], "unavailable")
+        self.assertIn("could not be built (ZeroDivisionError", rec["reason"])
+        self.assertIn("League availability was unavailable", (self.dir / "preds" / "2026_week04.md").read_text(encoding="utf-8"))
+
+    def setUp_db_only(self):
+        """A second, empty copy of the fixture's DB (same schedule and week-3 rows) at self.db."""
+        con = ledger.connect(self.db)
+        src = sqlite3.connect(self.dir / "t.db")
+        try:
+            for table in ("nfl_games", "player_week_stats", "labels_player_week"):
+                con.execute(src.execute("SELECT sql FROM sqlite_master WHERE name=?", (table,)).fetchone()[0])
+                rows = src.execute(f"SELECT * FROM {table}").fetchall()
+                if rows:
+                    con.executemany(f"INSERT INTO {table} VALUES ({','.join('?' * len(rows[0]))})", rows)
+            con.commit()
+        finally:
+            src.close()
+            con.close()
+
+    def test_no_league_configured_is_unavailable_not_a_crash(self):
+        self.league_fetch = lambda key: self.fail("nothing to fetch without a league key")
+        with mock.patch.object(tracker.league_availability, "configured_league_key", return_value=None):
+            rc, _out = self.log_live(self.fresh, "--skip-ownership", "--league-key", "")
+        self.assertEqual(rc, 0)
+        self.assertIn("no league is configured", self.run_config()["league_availability"]["reason"])
+        self.assertIn("League availability was unavailable", (self.dir / "preds" / "2026_week04.md").read_text(encoding="utf-8"))
+
+
+# ------------------------------------------------ league availability (Yahoo)
+
+LEAGUE_KEY = "470.l.999"
+
+
+def yahoo_page(players):
+    """players: (yahoo_id, name, position, team, ownership_type[, waiver_date]) -> one page of Yahoo's answer, in its own
+    shape: numbered keys plus a count, a player as [list of one-key dicts, {ownership}], and [] for an empty page."""
+    recs = {}
+    for i, (yid, name, pos, team, kind, *date) in enumerate(players):
+        own = dict({"ownership_type": kind}, **({"waiver_date": date[0], "display_date": date[0]} if date else {}))
+        recs[str(i)] = {"player": [[{"player_key": f"470.p.{yid}"}, {"player_id": str(yid)}, {"name": {"full": name}},
+                                    {"editorial_team_abbr": team}, {"display_position": pos}, {"primary_position": pos}, []],
+                                   {"ownership": own}]}
+    if recs:
+        recs["count"] = len(players)
+    return {"fantasy_content": {"league": [{"league_key": LEAGUE_KEY}, {"players": recs or []}]}}
+
+
+class YahooSession:
+    """Serves `players` 25 to a page, the way the real endpoint does."""
+
+    def __init__(self, players, status=200):
+        self.players, self.status, self.urls = players, status, []
+
+    def get(self, url, timeout=None):
+        self.urls.append(url)
+        start = int(url.split(";start=")[1].split(";")[0])
+        page = yahoo_page(self.players[start:start + 25])
+        return mock.Mock(status_code=self.status, text=json.dumps(page), json=lambda: page)
+
+
+def yahoo_players(n):
+    return [(1000 + i, f"Player {i}", ("QB", "RB", "WR", "TE")[i % 4], "Was", "waivers" if i % 10 == 0 else "freeagents",
+             *(["2026-10-14"] if i % 10 == 0 else [])) for i in range(n)]
+
+
+class TestLeagueAvailability(unittest.TestCase):
+    def fetch(self, session=None, **kw):
+        return league_availability.fetch(LEAGUE_KEY, session=session, **kw)
+
+    def test_fetch_reads_every_page_and_tells_free_agents_from_waivers(self):
+        players = yahoo_players(230)
+        players[3] = (1003, "Just Claimed", "TE", "Was", "team")      # rostered between two pages: not available
+        players[30] = players[29]                                      # the list shifted under the paging: same player twice
+        session = YahooSession(players)
+        got = self.fetch(session)
+        self.assertTrue(got["ok"], got["error"])
+        self.assertEqual(got["n_pages"], 10)                           # 9 full pages and a last one of 5
+        self.assertIn(f"/league/{LEAGUE_KEY}/players;status=A;position=QB,RB,WR,TE;start=225;count=25/ownership", session.urls[-1])
+        self.assertEqual(len(got["rows"]), 228)
+        self.assertEqual(got["rows"][0], dict(external_id="1000", name="Player 0", position="QB", team="WAS", status="W",
+                                              waiver_date="2026-10-14"))
+        self.assertEqual(got["rows"][1], dict(external_id="1001", name="Player 1", position="RB", team="WAS", status="FA",
+                                              waiver_date=None))
+        raw = json.loads(got["raw_bytes"])                             # every page exactly as Yahoo sent it
+        self.assertEqual((raw["league_key"], [p["start"] for p in raw["pages"]]), (LEAGUE_KEY, list(range(0, 250, 25))))
+        self.assertEqual(json.loads(raw["pages"][9]["body"]), yahoo_page(players[225:]))
+
+    def test_fetch_never_raises_and_keeps_the_league_key_out_of_the_error(self):
+        boom = mock.Mock()
+        boom.get.side_effect = ConnectionError(f"Max retries exceeded with url: /fantasy/v2/league/{LEAGUE_KEY}/players")
+        odd = mock.Mock()
+        odd.get.return_value = mock.Mock(status_code=200, text="{}", json=lambda: {"fantasy_content": {"league": "renamed"}})
+        new_kind = YahooSession([(1, "A", "QB", "Was", "commissioner_hold")] * 25)
+
+        def no_credentials():
+            raise SystemExit("[ERROR] YAHOO_CLIENT_ID / YAHOO_CLIENT_SECRET not set")   # what league/yahoo_auth.py does
+
+        for label, kw, why in (("network", dict(session=boom), "ConnectionError"),
+                               ("http", dict(session=YahooSession(yahoo_players(230), status=401)), "HTTP 401 on page 1"),
+                               ("shape", dict(session=odd), "Error"),
+                               ("unknown ownership type", dict(session=new_kind), "KeyError"),
+                               ("too few", dict(session=YahooSession(yahoo_players(40))), "only 40 available players"),
+                               ("no credentials", dict(open_session=no_credentials), "SystemExit")):
+            with self.subTest(label):
+                got = self.fetch(**kw)
+                self.assertFalse(got["ok"])
+                self.assertEqual(got["rows"], [])
+                self.assertIn(why, got["error"])
+                self.assertNotIn(LEAGUE_KEY, got["error"])
+
+    def test_fetch_gives_up_on_a_hang_instead_of_holding_the_run(self):
+        release = threading.Event()
+        try:
+            with mock.patch.object(league_availability, "REQUEST_TIMEOUT_S", 0.05):
+                got = self.fetch(open_session=lambda: release.wait(30), budget_s=0.05)
+            self.assertFalse(got["ok"])
+            self.assertIn("no answer from Yahoo", got["error"])
+        finally:
+            release.set()
+
+    def test_players_are_matched_by_yahoo_id_then_unique_name_and_never_guessed(self):
+        with tempfile.TemporaryDirectory() as d:
+            roster = Path(d) / "roster_weekly_2026.csv"
+            with open(roster, "w", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(f, fieldnames=["gsis_id", "full_name", "position", "yahoo_id", "week"])
+                w.writeheader()
+                for week in (3, 4):                                   # one row per player per week, as in the real file
+                    w.writerow(dict(gsis_id="g-id", full_name="Renamed Since", position="WR", yahoo_id="31", week=week))
+                    w.writerow(dict(gsis_id="g-name", full_name="D'Andre Swift Jr.", position="RB", yahoo_id="", week=week))
+                    w.writerow(dict(gsis_id="g-twin1", full_name="Mike Williams", position="WR", yahoo_id="", week=week))
+                    w.writerow(dict(gsis_id="g-twin2", full_name="Mike Williams", position="WR", yahoo_id="", week=week))
+            yahoo_ids, names = league_availability.load_roster_index(roster)
+            self.assertEqual(league_availability.load_roster_index(Path(d) / "missing.csv"), ({}, {}))
+        self.assertEqual(yahoo_ids, {"31": "g-id"})
+        rows = [dict(external_id=y, name=n, position=p) for y, n, p in (
+            ("31", "Somebody Else", "WR"), ("32", "DAndre Swift", "RB"), ("33", "Mike Williams", "WR"),
+            ("34", "Old Timer", "QB"), ("35", "D'Andre Swift", "WR"), ("36", "No One", "TE"))]
+        ref = {("old timer", "QB"): "g-ref", ("mike williams", "WR"): "g-retired"}
+        league_availability.map_players(rows, yahoo_ids, names, ref)
+        self.assertEqual([(r["player_id"], r["match_method"]) for r in rows],
+                         [("g-id", "yahoo_id"),            # the id decides, whatever the name says
+                          ("g-name", "roster_name"),       # punctuation and suffix don't matter
+                          ("g-retired", "ref_name"),       # two current players share the name: the roster can't say which
+                          ("g-ref", "ref_name"),
+                          (None, None),                    # right name, wrong position: not a match
+                          (None, None)])
+        twin = [dict(external_id="1", player_id="g", match_method="ref_name", status="FA"),
+                dict(external_id="2", player_id="g", match_method="yahoo_id", status="W"),
+                dict(external_id="3", player_id=None, match_method=None, status="FA")]
+        self.assertEqual(league_availability.by_player(twin), {"g": twin[1]})
+
+    def test_league_key_comes_from_the_env_file_and_a_malformed_one_is_never_sent(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(league_availability.os.environ, clear=False) as env:
+            env.pop(league_availability.LEAGUE_KEY_VAR, None)
+            path = Path(d) / ".env"
+            self.assertIsNone(league_availability.configured_league_key(path))
+            path.write_text("YAHOO_CLIENT_ID=abc\nYAHOO_LEAGUE_KEY = '470.l.999'\n", encoding="utf-8")
+            self.assertEqual(league_availability.configured_league_key(path), LEAGUE_KEY)
+            env[league_availability.LEAGUE_KEY_VAR] = "470.l.5"
+            self.assertEqual(league_availability.configured_league_key(path), "470.l.5")      # the environment wins
+        never = mock.Mock(side_effect=AssertionError("must not be fetched"))
+        for key, why in ((None, "no league is configured"), ("470.1.123456", "not a Yahoo league key")):   # digit one, not an L
+            with self.subTest(key=key), mock.patch("sys.stderr"):
+                con = mem_db()
+                self.addCleanup(con.close)
+                view = league_availability.resolve(key, con, "missing.csv", fetch=never)
+                self.assertEqual((view["status"], view["rows"], view["by_player"]), ("unavailable", [], {}))
+                self.assertIn(why, view["reason"])
+
+    def test_section_shows_the_top_n_available_in_the_models_own_order(self):
+        ranked = [dict(rank=r, player_id=f"p{r}", name=f"Name {r}", pos="WR", team="KC", score=1 - r / 100) for r in range(1, 41)]
+        rows = [dict(external_id=str(r), player_id=f"p{r}", match_method="yahoo_id", status="W" if r == 6 else "FA",
+                     waiver_date="2026-10-14" if r == 6 else None) for r in range(40, 0, -2)]     # even ranks, in any order
+        view = dict(status="ok", reason=None, rows=rows, by_player=league_availability.by_player(rows), n_available=30, n_matched=20)
+        md = league_availability.render_section(view, ranked, 3, utc("2026-10-11T14:00:00"))
+        self.assertTrue(md.startswith("\n## Available in my league\n"))
+        self.assertEqual([ln for ln in md.splitlines() if ln.startswith("| ")][1:],
+                         ["| 2 | Name 2 | WR | KC | 0.9800 | Free agent |", "| 4 | Name 4 | WR | KC | 0.9600 | Free agent |",
+                          "| 6 | Name 6 | WR | KC | 0.9400 | Waivers (2026-10-14) |"])
+        self.assertIn("The 3 highest-ranked players", md)
+        self.assertIn("at 2026-10-11 14:00 UTC (20 of the pool's 40 were)", md)
+        self.assertIn("Display only", md)
+        nobody = league_availability.render_section(dict(view, by_player={}), ranked, 3, utc("2026-10-11T14:00:00"))
+        self.assertIn("Nobody in this run's pool was available.", nobody)
+        self.assertNotIn("| Rank |", nobody)
+        down = league_availability.render_section(dict(status="unavailable", reason="the Yahoo fetch failed: HTTP 401 on page 1"),
+                                                  ranked, 3, utc("2026-10-11T14:00:00"))
+        self.assertIn("League availability was unavailable when this was generated (the Yahoo fetch failed: HTTP 401 on page 1)", down)
+        self.assertNotIn("| Rank |", down)
 
 
 # ----------------------------------------------------------------- baselines

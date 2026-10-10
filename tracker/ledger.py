@@ -19,6 +19,12 @@ Layout:
                                                the SHA-256 and file name of each raw
                                                response; the raw bytes themselves live
                                                outside the DB (see ownership.py)
+  tr_league_snapshots /
+    tr_league_availability                  -- who was a free agent / on waivers in the
+                                               user's own Yahoo league at `log` time, one
+                                               snapshot per run. Display only (see
+                                               league_availability.py); raw response
+                                               hashed here, kept in a file outside the DB
   tr_snap_counts                            -- nflverse snap counts (a loaded data
                                                table like player_week_stats, NOT
                                                append-only: reload is idempotent)
@@ -183,6 +189,35 @@ CREATE TABLE IF NOT EXISTS tr_ownership (
   PRIMARY KEY (snapshot_id, source, external_id)
 );
 
+CREATE TABLE IF NOT EXISTS tr_league_snapshots (
+  snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  taken_at TEXT NOT NULL,
+  source TEXT NOT NULL,
+  league_key TEXT,
+  ok INTEGER NOT NULL,
+  error TEXT,
+  http_status INTEGER,
+  n_pages INTEGER,
+  n_rows INTEGER,
+  n_matched INTEGER,
+  raw_sha256 TEXT,
+  raw_file TEXT
+);
+
+CREATE TABLE IF NOT EXISTS tr_league_availability (
+  snapshot_id INTEGER NOT NULL,
+  external_id TEXT NOT NULL,
+  player_id TEXT,
+  match_method TEXT,
+  name TEXT,
+  position TEXT,
+  team TEXT,
+  status TEXT NOT NULL CHECK (status IN ('FA','W')),
+  waiver_date TEXT,
+  PRIMARY KEY (snapshot_id, external_id)
+);
+
 CREATE TABLE IF NOT EXISTS tr_snap_counts (
   season INTEGER NOT NULL,
   week INTEGER NOT NULL,
@@ -202,6 +237,7 @@ APPEND_ONLY_TABLES = (
     "tr_runs", "tr_pool", "tr_predictions",
     "tr_scorings", "tr_player_results", "tr_run_results", "tr_percentiles", "tr_crowd_results",
     "tr_ownership_snapshots", "tr_ownership",
+    "tr_league_snapshots", "tr_league_availability",
 )
 
 
