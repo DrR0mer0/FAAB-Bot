@@ -2,7 +2,8 @@
 """The tracker's Windows Task Scheduler jobs: the runner each task calls, and
 the commands that (un)register the tasks.
 
-  python tracker/scheduled_run.py install        # register the three tasks below (re-run any time; it replaces them)
+  python tracker/scheduled_run.py install        # register the four tasks below (re-run any time; it replaces them)
+  python tracker/scheduled_run.py install --job league   # ...or just one of them
   python tracker/scheduled_run.py status
   python tracker/scheduled_run.py uninstall
   python tracker/scheduled_run.py run snapshot   # what a task runs; also fine by hand
@@ -12,6 +13,9 @@ the commands that (un)register the tasks.
   log-thu    Thursdays 07:00     data/fetch_weekly_update.py, then tracker.py log --auto --slot thu,
                                  then tracker.py check-stats (advisory only -- see below)
   log-sun    Sundays   07:00     data/fetch_weekly_update.py, then tracker.py log --auto --slot sun
+  league     every day 06:35     league/league_data.py snapshot (the user's own Yahoo league: transactions, FAAB,
+                                 rosters, scores), then league_data.py report. Separate from the tracker: no
+                                 prediction run reads it, and its failure affects nothing else.
 
 Every run writes its full output to tracker/logs/<timestamp>_<job>.log and one
 summary line to tracker/logs/scheduled_runs.log (both gitignored).
@@ -68,8 +72,10 @@ JOBS = {
                 "description": "FAAB tracker: log the thu slot before the week's first kickoff (skips a week without one)"},
     "log-sun": {"task": "tracker-log-sun", "weekday": 6, "time": "07:00", "slot": "sun",
                 "description": "FAAB tracker: log the sun slot before the first 1 PM ET Sunday kickoff"},
+    "league": {"task": "league-snapshot", "weekday": None, "time": "06:35",
+               "description": "FAAB: daily snapshot of the Yahoo league (transactions, FAAB, rosters, scores) and its activity report"},
 }
-HEADLINE_TAGS = ("[LOGGED]", "[SKIP]", "[REFUSED]", "[OWNERSHIP]")
+HEADLINE_TAGS = ("[LOGGED]", "[SKIP]", "[REFUSED]", "[OWNERSHIP]", "[LEAGUE DATA]")
 
 
 def console_python():
@@ -102,6 +108,9 @@ def job_steps(job, now):
     season = str(default_season(now))
     if job == "snapshot":
         return [("snapshot-ownership", tracker + ["snapshot-ownership"], "decides")]
+    if job == "league":
+        league = [py, str(REPO_ROOT / "league" / "league_data.py")]
+        return [("league snapshot", league + ["snapshot"], "decides"), ("league report", league + ["report"], "prep")]
     steps = [
         ("refresh nflverse files", [py, str(REPO_ROOT / "data" / "fetch_weekly_update.py"), "--season", season], "prep"),
         (f"log --auto --slot {JOBS[job]['slot']}", tracker + ["log", "--auto", "--slot", JOBS[job]["slot"]], "decides"),
@@ -184,9 +193,10 @@ def run_job(job, now=None, log_dir=LOG_DIR, run=run_step, alert=show_alert, forc
     with open(log_dir / SUMMARY_LOG, "a", encoding="utf-8") as f:
         f.write(line + "\n")
     if rc != 0:
+        consequence = ("What Yahoo did answer is stored and the failed part is recorded as failed. No prediction run depends on this job."
+                       if job == "league" else "Nothing was written to the ledger by this run.")
         alert(f"FAAB tracker: {job} FAILED",
-              f"{summary}\n\n" + ("\n".join(notes) + "\n\n" if notes else "") +
-              f"Nothing was written to the ledger by this run.\nFull output: {detail}")
+              f"{summary}\n\n" + ("\n".join(notes) + "\n\n" if notes else "") + f"{consequence}\nFull output: {detail}")
     if stats_changed:
         alert("FAAB tracker: stats corrected for an already-scored week",
               "\n\n".join(ln[len(STATS_CHANGED_TAG):].strip() for ln in stats_changed)
@@ -260,8 +270,8 @@ def task_name(job):
 def cmd_install(args):
     user = subprocess.run(["whoami"], capture_output=True, text=True, check=True).stdout.strip()
     now, rc = datetime.now(), 0
-    for job in JOBS:
-        override = args.snapshot_time if job == "snapshot" else args.log_time
+    for job in ([args.job] if args.job else JOBS):
+        override = args.snapshot_time if job == "snapshot" else args.log_time if "slot" in JOBS[job] else None
         xml = task_xml(job, user, now, override)
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "task.xml"
@@ -308,6 +318,7 @@ def main(argv=None):
     p = sub.add_parser("install", help="register (or replace) the scheduled tasks for the current user")
     p.add_argument("--snapshot-time", default=None, help="HH:MM local (default 06:30)")
     p.add_argument("--log-time", default=None, help="HH:MM local for both log jobs (default 07:00)")
+    p.add_argument("--job", choices=sorted(JOBS), default=None, help="register only this task and leave the others as they are")
     sub.add_parser("uninstall", help="remove the scheduled tasks")
     sub.add_parser("status", help="show the tasks and the last runs")
     p = sub.add_parser("popup")  # internal: the detached failure message box

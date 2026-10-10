@@ -1,0 +1,9 @@
+# A made-up league's losing FAAB offers, in the format of league_data/manual/bids.csv (which is gitignored and
+# holds the real ones). Used by league/test_league_data.py; the teams and players exist only in that test.
+award_date,player,winning_team,winning_amount,losing_team,losing_amount
+# 2026-10-07,Example Player,Winning Team Name,16,Losing Team Name,9
+2026-09-30,Big Claim,Team Name 3,27,Team Name 1,20
+2026-09-30,Big Claim,Team Name 3,27,Team Name 4,5
+9/23/2026,Week Three Claim,team name 3,$16,Nick2,16
+2026-09-29,Other Claim,Team Name 1,10,Team Name 4,3
+2026-09-16,Too Old,Team Name 2,40,Team Name 1,39

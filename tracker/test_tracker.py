@@ -2048,6 +2048,26 @@ class TestScheduledRun(unittest.TestCase):
         self.assertEqual(len(self.alerts), 1)
         self.assertEqual(len(self.summary()), 2)
 
+    def test_league_job_snapshots_then_reports_any_day_and_fails_loudly_on_its_own(self):
+        ok = (0, "[LEAGUE DATA] teams ok: 12 rows; transactions ok: 78 rows; rosters ok: 135 rows; scoreboard ok: 60 rows\n")
+        self.assertEqual(self.run_job("league", datetime(2026, 10, 13, 6, 35, 0), [ok, (0, "[SAVED] league_activity_week06.md\n")]), 0)
+        self.assertEqual([c[-1] for c in self.calls], ["snapshot", "report"])
+        self.assertTrue(all(c[-2].endswith("league_data.py") for c in self.calls))
+        self.assertIn("[LEAGUE DATA] teams ok: 12 rows", self.summary()[-1])     # the snapshot's line, not the report's
+        self.assertEqual(self.alerts, [])
+        bad = (1, "[LEAGUE DATA] teams ok: 12 rows; transactions ok: 78 rows; rosters FAILED: 0 rows; scoreboard ok: 60 rows\n")
+        self.assertEqual(self.run_job("league", datetime(2026, 10, 14, 6, 35, 0), [bad, (0, "[SAVED] x\n")]), 1)
+        (title, text), = self.alerts
+        self.assertIn("league FAILED", title)
+        self.assertIn("rosters FAILED", text)
+        self.assertIn("No prediction run depends on this job", text)
+        self.assertNotIn("Nothing was written to the ledger", text)              # that wording is the tracker jobs'
+        # a report that can't be written is a note, not a failure of the snapshot
+        self.alerts.clear()
+        self.assertEqual(self.run_job("league", datetime(2026, 10, 15, 6, 35, 0), [ok, (2, "nothing to report yet\n")]), 0)
+        self.assertEqual(self.alerts, [])
+        self.assertIn("note: league report FAILED (exit 2)", self.summary()[-1])
+
     def test_failed_refresh_is_noted_but_the_log_step_still_decides(self):
         rc = self.run_job("log-thu", self.THURSDAY, [(1, "[WARN] 1 file(s) failed to refresh\n"), (0, "[LOGGED] 2026w05-thu\n"),
                                                      self.STATS_OK])
@@ -2070,7 +2090,8 @@ class TestScheduledRun(unittest.TestCase):
             self.assertIn(f'scheduled_run.py" run {job}', xml)
             starts[job] = xml.split("<StartBoundary>")[1].split("<")[0]
         self.assertEqual(starts, {"snapshot": "2026-10-04T06:30:00", "log-thu": "2026-10-08T07:00:00",
-                                  "log-sun": "2026-10-04T07:00:00"})
+                                  "log-sun": "2026-10-04T07:00:00", "league": "2026-10-04T06:35:00"})
+        self.assertIn("<ScheduleByDay>", scheduled_run.task_xml("league", "u", now))
         self.assertIn("<Thursday />", scheduled_run.task_xml("log-thu", "u", now))
         self.assertIn("<Sunday />", scheduled_run.task_xml("log-sun", "u", now))
         self.assertIn("<ScheduleByDay>", scheduled_run.task_xml("snapshot", "u", now))
