@@ -32,7 +32,7 @@ The production model has since been promoted to **13 features** (Group 1, below)
 |---|---|
 | `data/` | Schema, nflverse fetch/load pipeline, roster reconciliation, verification |
 | `model/` | Feature engineering, label generation, training, weekly scoring |
-| `league/` | Yahoo Fantasy API authentication (read-only) |
+| `league/` | Yahoo Fantasy API authentication (read-only); feeds the tracker's "available in my league" view |
 | `startsit/` | Standalone start/sit lineup simulator — see below |
 | `tracker/` | Baseline tracker: logs O.D.D.S. next to "dumb" baselines and scores them after the games — see below |
 | `evaluation/` | Held-out model evaluation and feature experiments |
@@ -92,6 +92,8 @@ python -m unittest discover -s tracker -v                         # tests
 ```
 
 `log` runs `model/score_week.py` as-is and **refuses** once its slot has closed. The `sun` slot closes at the first 1 PM ET Sunday kickoff; the `thu` slot at the first game before that. International/early-Sunday games (9:30am ET London kickoffs) are treated like Thursday games: they don't close the `sun` slot, and their players are left out of the `sun` pool the same way Thursday players are. A week with nothing before the 1 PM slate has no `thu` slot. From week 5 the pool also leaves out anyone whose team is on a bye and anyone designated Out or Doubtful on the NFL injury report at log time (official report via nflverse, with ESPN's status as a cross-check) -- for every model and baseline alike -- and those players are flagged **(BYE)** / **(OUT)** / **(DOUBTFUL)** in the prediction markdown without changing any score or rank. Each `log` also exports its rows to `tracker/ledger_export/*.jsonl`, which *is* committed — the database isn't.
+
+**Available in my league.** `log` also asks Yahoo (read-only) which players are free agents or on waivers in my own league and adds a section to each prediction report: that model's 25 highest-ranked pool players I could actually pick up, with free-agent vs waiver status. It is a display, not an input — the pool, scores, ranks and the ledger's picks are identical with or without it — and the snapshot is stored with the run (append-only; the raw response is hashed and kept outside the repo). If Yahoo can't be reached the run is logged anyway and the section says so. The league key sits in the gitignored `league/.env` (`YAHOO_LEAGUE_KEY`).
 
 The three recurring commands run from Windows Task Scheduler (`tracker/scheduled_run.py`): the ownership snapshot daily, `log --auto` on Thursday and Sunday mornings. Runs are logged to `tracker/logs/`; a week without the slot is skipped quietly, and a missed window (PC asleep) fails with a message box and writes nothing.
 
