@@ -6,7 +6,7 @@ A personal Fantasy Football analysis assistant, built for my own 12-team, half-P
 
 **O.D.D.S. ("Omega Deep Dart Sleeper")** is an XGBoost model trained on 15 seasons of NFL player statistics (2010–2025, excluding a real schema gap in 2019) across **13 features** to identify low-usage players positioned for a breakout ("spike") week. It's built for waiver-wire and deep-roster decisions — finding the player whose opportunity is about to expand — not for start/sit calls on players you already know are good.
 
-A weekly league recap layer (Yahoo Fantasy API, read-only) is planned but not yet built, pending API access approval.
+A weekly league recap layer (Yahoo Fantasy API, read-only) is built: daily league snapshots and a facts-first weekly recap, described under "League data (local only)" below. Its output names the league's teams and managers, so it stays local and out of this repo.
 
 ## What it is and isn't
 
