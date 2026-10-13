@@ -49,8 +49,12 @@ KNOWN_CAVEATS = [
     "creates train/serve skew. A retrain with it computed strictly as-of (or removed) is queued; the tracker will log "
     "the fixed model as a new model_version so old vs fixed can be compared.",
     "**Scoring mismatch (flagged, not yet fixed):** this tracker scores every hit under the league's real settings "
-    "(5-pt passing TDs). O.D.D.S.'s own training labels were built with a 4-pt passing TD, which mainly affects how QB "
-    "'spikes' were defined. To be corrected in the same retrain.",
+    "(5-pt passing TDs; from scoring version 2 also sacks and returns). O.D.D.S.'s own training labels were built with a "
+    "4-pt passing TD and without the sack and return scoring, which mainly affects how QB 'spikes' were defined. To be "
+    "corrected in the same retrain.",
+    "**Pick-sixes (not scored):** the league also docks 4 points for a pick-six thrown. nflverse's weekly stats file has no "
+    "column for it, so it is the one league rule this tracker does not apply; in weeks 1-5 it accounted for the only 2 of 675 "
+    "rostered player-weeks where the tracker's points differed from Yahoo's own.",
 ]
 
 
@@ -260,11 +264,23 @@ def _scoreboard_table(res, pct, scope, k):
     return lines if any_row else None
 
 
+def _scoring_words(rules):
+    """The league settings a scoring was made under, in words: the categories every definition has, plus the ones
+    added in scoring version 2 when the definition has them."""
+    words = "0.5 PPR, 5-pt passing TDs, 6-pt rushing/receiving TDs, -2 INT, -2 fumbles lost, +2 per 2-pt conversion"
+    if rules.get("sack"):
+        words += f", {rules['sack']:g} per sack taken"
+    if rules.get("return_yd"):
+        words += f", {rules['return_yd']:g} per return yard"
+    if rules.get("return_td") or rules.get("fumble_recovery_td"):
+        words += ", 6-pt return and fumble-return TDs"
+    return words
+
+
 def _hit_defs_block(cfg_json):
     h = cfg_json["hit"]
     return [
-        "**How a pick is scored** (league settings: 0.5 PPR, 5-pt passing TDs, 6-pt rushing/receiving TDs, "
-        "-2 INT, -2 fumbles lost, +2 per 2-pt conversion):",
+        f"**How a pick is scored** (league settings: {_scoring_words(cfg_json.get('scoring') or {})}):",
         f"- **Top-24 finish** -- the player finishes top-{h['top_n_per_position']} at his position that week "
         "(\"does it help me win\").",
         f"- **Spike week** -- the player scores at least {h['spike']['multiplier']}x his trailing "

@@ -38,7 +38,7 @@ from score_week import load_scheduled_teams, render_markdown_report
 CFG = scoring.load_config()
 RULES = CFG["scoring"]
 # nflverse's own fantasy_points_ppr formula: 4-pt passing TD, 1.0 PPR
-NFLVERSE_PPR = dict(RULES, pass_td=4, reception=1.0)
+NFLVERSE_PPR = dict({k: v for k, v in RULES.items() if k not in scoring.OPTIONAL_RULES}, pass_td=4, reception=1.0)
 
 
 def mem_db():
@@ -2306,6 +2306,33 @@ class TestScoreEndToEnd(unittest.TestCase):
         self.assertEqual((c["status"], c["n_differ"]), ("changed", 0))
         self.assertIn("the correction is in an earlier week, which feeds the spike baselines", c["message"])
 
+    def test_a_change_to_the_scoring_rules_is_not_mistaken_for_a_stat_correction(self):
+        """2026-10-13: the league scoring gained sacks and returns. A week scored under the old rules must be
+        checked under the old rules -- its stats did not change -- and still notice a real correction."""
+        self.score()
+        new_rules = dict(RULES, rec_yd=0.2)                                  # today's hit_config.json scores differently
+        (c,) = tracker.stats_changes(self.con, scoring.StatsStore(self.raw, new_rules), 2026)
+        self.assertEqual(c["status"], "unchanged")
+        self.rewrite_stats(lambda r: dict(r, receiving_yards=400) if (r["player_id"], r["week"]) == ("p30", "5") else r)
+        (c,) = tracker.stats_changes(self.con, scoring.StatsStore(self.raw, new_rules), 2026)
+        self.assertEqual((c["status"], c["n_differ"]), ("changed", 1))       # one player, not everyone the new rule touches
+        # scoring it again under the new rules is a new definition: appended without --force, and it becomes the one checked
+        again = tracker.score_one_week(self.con, dict(CFG, scoring=new_rules), scoring.StatsStore(self.raw, new_rules), 2026, 5,
+                                       datetime(2026, 10, 14, tzinfo=timezone.utc), export_dir=self.export)
+        self.assertIsNotNone(again)
+        self.assertEqual(self.con.execute("SELECT COUNT(DISTINCT hit_config_hash) FROM tr_scorings").fetchone()[0], 2)
+        (c,) = tracker.stats_changes(self.con, scoring.StatsStore(self.raw, RULES), 2026)     # even from an old-rules store
+        self.assertEqual((c["status"], c["scoring_id"]), ("unchanged", again["scoring_id"]))
+
+    def test_optional_scoring_categories_count_only_when_the_rule_set_has_them(self):
+        line = dict(passing_yards=250, passing_tds=2, sacks_suffered=3, punt_return_yards=40, kickoff_return_yards=60,
+                    special_teams_tds=1, fumble_recovery_tds=1)
+        base = 250 * 0.04 + 2 * 5
+        old = {k: v for k, v in RULES.items() if k not in scoring.OPTIONAL_RULES}
+        self.assertAlmostEqual(scoring.fantasy_points(line, old), base)       # a definition stored before 2026-10-13 reproduces itself
+        v2 = dict(old, sack=-0.5, return_yd=0.02, return_td=6, fumble_recovery_td=6)
+        self.assertAlmostEqual(scoring.fantasy_points(line, v2), base - 1.5 + 2.0 + 6 + 6)
+
     def test_scoring_from_before_fingerprints_is_unknown_not_unchanged(self):
         self.con.execute("INSERT INTO tr_scorings (season, week, scored_at, hit_config_hash, hit_config_json) VALUES (2026, 5, 't', 'h', ?)",
                          (scoring.hash_input(CFG),))
@@ -2564,6 +2591,18 @@ class TestSeasonSummary(unittest.TestCase):
         # each section goes by its own number of weeks: the Sunday tables still have only two
         self.assertIn("(CI needs 3+ weeks)", self.summary()[2])
         self.assertNotIn("(CI needs 3+ weeks)", self.summary()[1])
+
+
+class TestReportScoringWords(unittest.TestCase):
+    def test_a_report_describes_the_rules_its_own_scoring_was_made_under(self):
+        v1 = {k: v for k, v in RULES.items() if k not in scoring.OPTIONAL_RULES}
+        old = "0.5 PPR, 5-pt passing TDs, 6-pt rushing/receiving TDs, -2 INT, -2 fumbles lost, +2 per 2-pt conversion"
+        self.assertEqual(report._scoring_words(v1), old)                     # a week scored before version 2 reads as it always did
+        self.assertEqual(report._scoring_words({}), old)
+        self.assertEqual(report._scoring_words(RULES), old + ", -0.5 per sack taken, 0.02 per return yard, 6-pt return and fumble-return TDs")
+        block = report._hit_defs_block({"scoring": RULES, "hit": CFG["hit"]})
+        self.assertIn("-0.5 per sack taken", block[0])
+        self.assertEqual(set(scoring.OPTIONAL_RULES) - set(RULES), set())    # today's hit_config.json is version 2
 
 
 class TestReportMath(unittest.TestCase):

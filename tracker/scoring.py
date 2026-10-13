@@ -4,7 +4,11 @@ definition config for the baseline tracker.
 
 Everything here is computed under THE LEAGUE'S scoring (tracker/hit_config.json:
 0.5 PPR, 5-pt passing TDs, 6-pt rushing/receiving TDs, 0.04/passing yd, -2 INT,
--2 fumbles lost, +2 per 2-pt conversion) straight from nflverse's raw
+-2 fumbles lost, +2 per 2-pt conversion, and from scoring version 2 also -0.5
+per sack taken, 0.02 per return yard and 6-pt return / fumble-return TDs --
+the league's own Yahoo settings, checked by league/league_data.py
+check-scoring; a pick-six thrown, -4 in the league, is the one rule not
+applied) straight from nflverse's raw
 stats_player_week_<season>.csv -- NOT from labels_player_week.fantasy_points_half,
 which was built with a 4-pt passing TD (a known mismatch, flagged in reports,
 to be fixed in a separate retrain). The raw CSV is also the only place the
@@ -79,6 +83,12 @@ def stats_fingerprint(store, season, week, positions, player_ids=()):
     return f"{FINGERPRINT_VERSION}:" + hashlib.sha256(json.dumps(rows, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
+# Scoring categories a rule set may or may not have (see fantasy_points), and the one the league scores that the
+# tracker cannot: there is no weekly-stats column for it.
+OPTIONAL_RULES = ("sack", "return_yd", "return_td", "fumble_recovery_td")
+UNSUPPORTED_RULES = ("pick_six",)
+
+
 def _num(stats, key):
     v = stats.get(key)
     return float(v) if v not in (None, "") else 0.0
@@ -88,11 +98,26 @@ def fantasy_points(stats, rules):
     """stats: mapping using nflverse's raw column names. Fumbles lost are the
     sum of the sack/rushing/receiving columns (nflverse's own fantasy_points
     does the same); 2-pt conversions are summed across passing/rushing/
-    receiving and each worth rules['two_pt_conversion']."""
+    receiving and each worth rules['two_pt_conversion'].
+
+    The categories under OPTIONAL_RULES were added on 2026-10-13, when the
+    league's own Yahoo settings turned out to score them (scoring version 2 of
+    hit_config.json). A rule set without them -- every hit definition stored
+    before that -- scores them as 0, so an old definition still reproduces
+    its own numbers. Return yards are punt + kickoff; a return touchdown is
+    nflverse's special_teams_tds; an offensive fumble-return touchdown is
+    fumble_recovery_tds. The league's "pick six thrown" penalty is NOT here:
+    the weekly stats file has no column for it."""
     fumbles_lost = _num(stats, "sack_fumbles_lost") + _num(stats, "rushing_fumbles_lost") + _num(stats, "receiving_fumbles_lost")
     two_pt = (_num(stats, "passing_2pt_conversions") + _num(stats, "rushing_2pt_conversions")
               + _num(stats, "receiving_2pt_conversions"))
-    pts = (
+    optional = (
+        _num(stats, "sacks_suffered") * rules.get("sack", 0)
+        + (_num(stats, "punt_return_yards") + _num(stats, "kickoff_return_yards")) * rules.get("return_yd", 0)
+        + _num(stats, "special_teams_tds") * rules.get("return_td", 0)
+        + _num(stats, "fumble_recovery_tds") * rules.get("fumble_recovery_td", 0)
+    )
+    pts = optional + (
         _num(stats, "passing_yards") * rules["pass_yd"]
         + _num(stats, "passing_tds") * rules["pass_td"]
         + _num(stats, "passing_interceptions") * rules["pass_int"]

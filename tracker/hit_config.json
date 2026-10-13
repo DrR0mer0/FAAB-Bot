@@ -1,6 +1,7 @@
 {
-  "version": 1,
+  "version": 2,
   "_comment": "The 'scoring', 'hit' and 'crowd_hit' sections are hashed (see scoring.config_hash) and the hash is stored with every scored week, so any later edit to the hit definition is visible in the data. 'run' and 'report' are operational knobs and are not hashed.",
+  "_scoring_history": "v1 (hash b5b540cb6e, through 2026-10-13): the ten categories up to two_pt_conversion. v2 (hash 476e6708f0, 2026-10-13): + sack, return_yd, return_td, fumble_recovery_td, after reading the league's own Yahoo settings (league/league_data.py check-scoring). The league also docks 4 points for a pick-six thrown; that is not scored here.",
   "scoring": {
     "pass_yd": 0.04,
     "pass_td": 5,
@@ -11,7 +12,11 @@
     "reception": 0.5,
     "rec_td": 6,
     "fumble_lost": -2,
-    "two_pt_conversion": 2
+    "two_pt_conversion": 2,
+    "sack": -0.5,
+    "return_yd": 0.02,
+    "return_td": 6,
+    "fumble_recovery_td": 6
   },
   "hit": {
     "positions": ["QB", "RB", "WR", "TE"],

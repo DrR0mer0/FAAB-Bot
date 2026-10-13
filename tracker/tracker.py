@@ -833,8 +833,14 @@ def stats_changes(con, store, season):
       message  one line for a human
     A changed week also gets n_differ / n_compared: how many of the scored
     week's own player scores now differ (0 means the correction is in an
-    earlier week, which only feeds the spike baselines). Read-only."""
+    earlier week, which only feeds the spike baselines). Read-only.
+
+    Each scoring is checked under ITS OWN scoring rules (stored with it in
+    hit_config_json), read from `store`'s folder -- not under whatever
+    hit_config.json says today. Otherwise a change to the league scoring
+    would make every week scored before it look like a stat correction."""
     out = []
+    stores = {json.dumps(store.rules, sort_keys=True): store}
     for sc in con.execute("SELECT * FROM tr_scorings WHERE season=? AND scoring_id IN "
                           "(SELECT MAX(scoring_id) FROM tr_scorings WHERE season=? GROUP BY week) ORDER BY week", (season, season)):
         week, sid = sc["week"], sc["scoring_id"]
@@ -843,7 +849,10 @@ def stats_changes(con, store, season):
         pool_ids = {r[0] for r in con.execute(
             "SELECT DISTINCT p.player_id FROM tr_pool p JOIN tr_runs r ON r.run_id = p.run_id WHERE r.season=? AND r.week=?",
             (season, week))}
-        now_fp = scoring.stats_fingerprint(store, season, week, json.loads(sc["hit_config_json"])["hit"]["positions"], pool_ids)
+        definition = json.loads(sc["hit_config_json"])
+        rules = definition.get("scoring") or store.rules
+        own = stores.setdefault(json.dumps(rules, sort_keys=True), scoring.StatsStore(store.raw_dir, rules))
+        now_fp = scoring.stats_fingerprint(own, season, week, definition["hit"]["positions"], pool_ids)
         comparable = (sc["stats_fingerprint"] or "").startswith(scoring.FINGERPRINT_VERSION + ":")
         if not comparable or now_fp is None:
             why = ("the stats file is missing" if now_fp is None else
@@ -855,7 +864,7 @@ def stats_changes(con, store, season):
             row["message"] = f"{label}: stats unchanged"
         else:
             scored = {r[0]: r[1] for r in con.execute("SELECT player_id, points FROM tr_player_results WHERE scoring_id=?", (sid,))}
-            current = store.week_rows(season, week)
+            current = own.week_rows(season, week)
             differ = sum(1 for pid, pts in scored.items() if pid not in current or abs(current[pid]["points"] - pts) > 1e-6)
             row.update(status="changed", n_differ=differ, n_compared=len(scored))
             what = (f"{differ} of {len(scored)} week-{week} player scores differ" if differ else
