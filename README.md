@@ -97,7 +97,7 @@ python -m unittest discover -s tracker -v                         # tests
 
 The three recurring commands run from Windows Task Scheduler (`tracker/scheduled_run.py`): the ownership snapshot daily, `log --auto` on Thursday and Sunday mornings. Runs are logged to `tracker/logs/`; a week without the slot is skipped quietly, and a missed window (PC asleep) fails with a message box and writes nothing.
 
-**What counts as a hit** (`tracker/hit_config.json`; its hash is stored with every scored week, so any later edit is visible in the data). Everything is scored under my league's settings — 0.5 PPR, 5-pt passing TDs, 6-pt rushing/receiving TDs, −2 INT, −2 fumbles lost, +2 per 2-pt conversion:
+**What counts as a hit** (`tracker/hit_config.json`; its hash is stored with every scored week, so any later edit is visible in the data). Everything is scored under my league's settings — 0.5 PPR, 5-pt passing TDs, 6-pt rushing/receiving TDs, −2 INT, −2 fumbles lost, +2 per 2-pt conversion, and since scoring version 2 (2026-10-13, when I compared against Yahoo's own player points) −0.5 per sack taken, 0.02 per return yard and 6-pt return and fumble-return TDs. The one league rule not applied is −4 for a pick-six thrown, which nflverse's weekly stats don't carry:
 
 - **Top-24 finish** — the pick finishes top-24 at his position that week. "Does it help me win."
 - **Spike week** — he scores ≥1.5× his trailing 3-game average and ≥10 points. "Does O.D.D.S. beat chance at its own job."
@@ -115,10 +115,11 @@ The scoreboard says plainly when the sample is too small to call a winner. Two k
 python league/league_data.py snapshot      # daily, from Task Scheduler
 python league/league_data.py import-bids   # after typing losing offers into league_data/manual/bids.csv
 python league/league_data.py report
+python league/newsletter.py build --week 5   # weekly recap: facts first, then a league version and my own view
 python -m unittest discover -s league -v
 ```
 
-Yahoo's API only reports winning bids. Losing offers are shown on the website, and since Yahoo's terms rule out tools that pull data from its pages, I type those into a CSV by hand; the importer checks each award against the API and flags any whose winner I typed differently. None of this is in the repo: the database, the raw responses, the report and the CSV all name the league or its managers and are gitignored, and the tests run on a made-up league.
+Yahoo's API only reports winning bids. Losing offers are shown on the website, and since Yahoo's terms rule out tools that pull data from its pages, I type those into a CSV by hand; the importer checks each award against the API and flags any whose winner I typed differently. The weekly recap (`league/newsletter.py`) is built facts-first: code computes every number into a facts file, the recap is rendered only from that file, and each fact is labelled with who may see it — the whole league, one team, or only me — so the league version can't contain my private analysis. None of this is in the repo: the database, the raw responses, the reports, the recaps and the CSV all name the league or its managers and are gitignored, and the tests run on a made-up league.
 
 ## Method notes
 
