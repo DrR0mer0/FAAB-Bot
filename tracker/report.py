@@ -8,6 +8,12 @@ under 50% owned at pick time). Season summary: cumulative hit rates, mean
 dart percentile, and bootstrap 95% confidence intervals -- resampling WEEKS
 (not picks; picks within a week share one environment), using one run per
 week (the first snapshot: thu if it exists, else sun), like verify_week.py.
+That is the OFFICIAL season record. Below it the summary always carries a
+second section, labelled observation only, with the same numbers computed
+from each week's sun run (weeks without one are left out), and a "Thu vs Sun"
+line per model: the difference in top-10 spike hits between the two slots
+over the weeks that have both -- what Friday's and Saturday's news was worth.
+Both sections are printed every week, whichever looks better.
 """
 import json
 import sys
@@ -21,6 +27,8 @@ from team_crosswalk import norm_team  # noqa: E402
 
 # A bootstrap over fewer weeks than this is a zero-width or meaningless interval; show the point estimate only.
 MIN_WEEKS_FOR_CI = 3
+HEADLINE_K = 10   # the headline pick set; the Thu-vs-Sun line is about its spike hits
+SUNDAY_TITLE = "## Observation only: Sunday runs"
 
 MODEL_ORDER = ["odds_prod", "odds_shadow", "dart", "heuristic", "last_week"]
 MODEL_LABELS = {
@@ -315,39 +323,26 @@ def _week_run(con, season, week):
     return r[0] if r else None
 
 
-def build_season_report(con, season, report_cfg, stats_notes=None):
-    weeks = scored_weeks(con, season)
-    if not weeks:
-        return None
-    B, seed, min_weeks = report_cfg["bootstrap_resamples"], report_cfg["bootstrap_seed"], report_cfg["min_weeks_to_call"]
-    per_week = {}  # (week) -> (res, pct)
-    hashes = set()
-    used_runs = []
-    for w in weeks:
-        sid = latest_scoring_id(con, season, w)
-        hashes.add(con.execute("SELECT hit_config_hash FROM tr_scorings WHERE scoring_id=?", (sid,)).fetchone()[0])
-        rid = _week_run(con, season, w)
-        per_week[w] = run_results(con, sid, rid)
-        used_runs.append(con.execute("SELECT * FROM tr_runs WHERE run_id=?", (rid,)).fetchone())
-    ks = sorted({int(ps.split("_k")[1]) for (res, _p) in per_week.values() for (_m, ps) in res})
-    out = [f"# O.D.D.S. vs the baselines -- {season} season to date", "",
-           f"_{len(weeks)} scored week(s): {', '.join(str(w) for w in weeks)}. One run per week (the first snapshot)._", ""]
-    out += stats_warning(stats_notes)
-    if len(hashes) > 1:
-        out += [f"> **Warning:** these weeks were scored under {len(hashes)} different hit definitions "
-                f"({', '.join(h[:8] for h in sorted(hashes))}); cumulative numbers mix definitions.", ""]
+def _slot_run(con, season, week, slot):
+    r = con.execute("SELECT run_id FROM tr_runs WHERE season=? AND week=? AND run_slot=?", (season, week, slot)).fetchone()
+    return r[0] if r else None
 
-    notes = []
+
+def _season_tables(per_week, weeks, ks, B, seed, level="##", suffix=""):
+    """The season-to-date tables for ONE choice of run per week. per_week:
+    {week: (results, percentiles)} as run_results gives them. -> (lines,
+    notes); a note is (scope, k, metric name, number of weeks, O.D.D.S.-minus-
+    dart estimate with its interval). `level` is the heading level of a scope,
+    `suffix` is appended to its title."""
+    out, notes = [], []
     for scope in ("all", "u50"):
-        out += [f"## {SCOPE_TITLES[scope]}", ""]
-        wrote = False
+        out += [f"{level} {SCOPE_TITLES[scope]}{suffix}", ""]
         for k in ks:
             ps = pick_set_name(scope, k)
             wk = [w for w in weeks if ("odds_prod", ps) in per_week[w][0]]
             if not wk:
                 continue
-            wrote = True
-            out += [f"### Top {k} ({len(wk)} week(s))", "",
+            out += [f"{level}# Top {k} ({len(wk)} week(s))", "",
                     "| Model | Top-24 rate (95% CI) | Spike rate (95% CI) | Mean dart pctile, top-24 (95% CI) | Mean dart pctile, spike (95% CI) |",
                     "|---|---|---|---|---|"]
             series = {}
@@ -387,27 +382,117 @@ def build_season_report(con, season, report_cfg, stats_notes=None):
                     e = bootstrap_diff_ci(series["odds_prod"][idx], series["odds_prod"][2], series["dart"][idx],
                                           series["dart"][2], B, seed + 3 + idx)
                     notes.append((scope, k, name, len(wk), e))
+    return out, notes
+
+
+def _fmt_count(x):
+    return f"{x:.0f}" if abs(x - round(x)) < 1e-9 else f"{x:.1f}"
+
+
+def thu_vs_sun_lines(thu, sun):
+    """The "Thu vs Sun" lines: for each model, its top-10 spike hits among all
+    eligible players summed over the weeks that have BOTH a thu and a sun run,
+    and the difference (Sunday minus Thursday). thu / sun: {week: results} for
+    exactly those weeks."""
+    ps = pick_set_name("all", HEADLINE_K)
+    weeks = sorted(w for w in thu if w in sun and ("odds_prod", ps) in thu[w] and ("odds_prod", ps) in sun[w])
+    title = ["### Thu vs Sun: the value of Friday/Saturday information", ""]
+    if not weeks:
+        return title + ["_No scored week has both a `thu` and a `sun` run yet, so there is nothing to compare._", ""]
+    out = title + [
+        f"_Top-{HEADLINE_K} spike hits among all eligible players, season to date, over the {len(weeks)} week(s) that have both a "
+        f"`thu` and a `sun` run ({', '.join(str(w) for w in weeks)}). The difference is Sunday minus Thursday: what waiting for "
+        f"Friday's and Saturday's news was worth. The two runs also draw from different pools -- the `sun` pool has no Thursday or "
+        f"early-game players -- and the dart line shows how much of a difference the pool alone makes._", ""]
+    for m in MODEL_ORDER:
+        rows = [(thu[w].get((m, ps)), sun[w].get((m, ps))) for w in weeks]
+        if not all(a and b for a, b in rows):
+            continue
+        t, s_ = sum(a["spike_hits"] or 0 for a, _ in rows), sum(b["spike_hits"] or 0 for _, b in rows)
+        nt, ns = sum(a["n_picks"] for a, _ in rows), sum(b["n_picks"] for _, b in rows)
+        diff = s_ - t
+        shown = "0" if abs(diff) < 1e-9 else f"{diff:+.0f}" if abs(diff - round(diff)) < 1e-9 else f"{diff:+.1f}"
+        out.append(f"- {MODEL_LABELS[m].replace('N ', '')}: thu {_fmt_count(t)}/{_fmt_count(nt)}, sun {_fmt_count(s_)}/{_fmt_count(ns)} "
+                   f"-- **{shown}**")
+    return out + [""]
+
+
+def build_season_report(con, season, report_cfg, stats_notes=None):
+    weeks = scored_weeks(con, season)
+    if not weeks:
+        return None
+    B, seed, min_weeks = report_cfg["bootstrap_resamples"], report_cfg["bootstrap_seed"], report_cfg["min_weeks_to_call"]
+    per_week = {}  # week -> (res, pct) of the week's first snapshot: the official record
+    sun_week, thu_res, sun_res = {}, {}, {}   # the same for each week's sun run; results of weeks that have both slots
+    hashes = set()
+    used_runs, sun_runs = [], []
+    for w in weeks:
+        sid = latest_scoring_id(con, season, w)
+        hashes.add(con.execute("SELECT hit_config_hash FROM tr_scorings WHERE scoring_id=?", (sid,)).fetchone()[0])
+        rid = _week_run(con, season, w)
+        per_week[w] = run_results(con, sid, rid)
+        used_runs.append(con.execute("SELECT * FROM tr_runs WHERE run_id=?", (rid,)).fetchone())
+        thu_id, sun_id = _slot_run(con, season, w, "thu"), _slot_run(con, season, w, "sun")
+        if sun_id is not None:
+            sun_week[w] = run_results(con, sid, sun_id)
+            sun_runs.append(con.execute("SELECT * FROM tr_runs WHERE run_id=?", (sun_id,)).fetchone())
+            if thu_id is not None:
+                thu_res[w], sun_res[w] = run_results(con, sid, thu_id)[0], sun_week[w][0]
+    ks = sorted({int(ps.split("_k")[1]) for (res, _p) in list(per_week.values()) + list(sun_week.values()) for (_m, ps) in res})
+    out = [f"# O.D.D.S. vs the baselines -- {season} season to date", "",
+           f"_{len(weeks)} scored week(s): {', '.join(str(w) for w in weeks)}. One run per week (the first snapshot)._", "",
+           "_The tables that follow are the official season record: "
+           + ", ".join(f"week {r['week']} `{r['run_slot']}`" for r in used_runs)
+           + ". The same numbers from each week's Sunday run are further down, for observation only._", ""]
+    out += stats_warning(stats_notes)
+    if len(hashes) > 1:
+        out += [f"> **Warning:** these weeks were scored under {len(hashes)} different hit definitions "
+                f"({', '.join(h[:8] for h in sorted(hashes))}); cumulative numbers mix definitions.", ""]
+
+    tables, notes = _season_tables(per_week, weeks, ks, B, seed)
+    out += tables
     out += ["## Plain-English read", ""]
     if not notes:
         out += ["Nothing to compare yet."]
     else:
         n_weeks = len(weeks)
         if n_weeks < min_weeks:
-            out += [f"**Too early to call a winner.** Only {n_weeks} scored week(s) so far, and the confidence intervals "
-                    f"above are wide because they're built from {n_weeks} data point(s) (one per week). "
+            intervals = ("no confidence intervals are shown yet -- they need at least "
+                         f"{MIN_WEEKS_FOR_CI} weeks, one data point per week" if n_weeks < MIN_WEEKS_FOR_CI else
+                         f"the confidence intervals above are wide because they're built from {n_weeks} data point(s) (one per week)")
+            out += [f"**Too early to call a winner.** Only {n_weeks} scored week(s) so far, and {intervals}. "
                     f"Read every number as a first look, not a verdict; we'd want at least {min_weeks} weeks before "
                     "saying whether O.D.D.S. is better than chance."]
         for scope, k, name, n, (est, lo, hi) in notes:
             if est is None:
                 continue
+            head = f"- {SCOPE_TITLES[scope]}, top {k}, {name}: O.D.D.S. minus dart = {100 * est:+.1f} points"
+            if n < MIN_WEEKS_FOR_CI:   # an interval over one or two weeks is a resample of one or two numbers: print neither it nor a verdict
+                out.append(f"{head} over {n} week(s) (no interval or verdict until {MIN_WEEKS_FOR_CI}+ weeks).")
+                continue
             verdict = ("ahead of chance" if lo > 0 else "behind chance" if hi < 0 else "not distinguishable from chance")
-            out.append(f"- {SCOPE_TITLES[scope]}, top {k}, {name}: O.D.D.S. minus dart = {100 * est:+.1f} points "
-                       f"(95% CI {100 * lo:+.1f} to {100 * hi:+.1f}) over {n} week(s) -- {verdict}"
+            out.append(f"{head} (95% CI {100 * lo:+.1f} to {100 * hi:+.1f}) over {n} week(s) -- {verdict}"
                        + (" (but see the small-sample note)." if n_weeks < min_weeks else "."))
+
+    # the same numbers from each week's Sunday run: always printed, never the record
+    left_out = [w for w in weeks if w not in sun_week]
+    out += ["", SUNDAY_TITLE, "",
+            "_Not the official record. The season record above takes each week's first snapshot (the `thu` run when the week has "
+            "one). This section recomputes the same season-to-date numbers from each week's `sun` run instead"
+            + (f" -- {len(sun_week)} week(s): {', '.join(str(w) for w in sorted(sun_week))}" if sun_week else "")
+            + (f"; no `sun` run, left out: {', '.join(str(w) for w in left_out)}" if left_out and sun_week else "")
+            + ". It is printed every week, whichever of the two looks better._", ""]
+    if sun_week:
+        out += _season_tables(sun_week, sorted(sun_week), ks, B, seed, level="###", suffix=" -- Sunday runs")[0]
+    else:
+        out += ["_No scored week has a `sun` run yet._", ""]
+    out += thu_vs_sun_lines(thu_res, sun_res)
+
     crowd = build_crowd_section(con, season)
-    out += [""] + crowd + ["", "## Caveats", ""] + [f"- {c}" for c in KNOWN_CAVEATS + pool_rule_notes(used_runs) + no_game_notes(con, used_runs)
-                                                           + ownership_notes(con, used_runs)
-                                                           + sleeper_pool_lines(con, used_runs, only_if_unknown=True)] + [""]
+    noted = used_runs + [r for r in sun_runs if r["run_id"] not in {u["run_id"] for u in used_runs}]
+    out += crowd + ["", "## Caveats", ""] + [f"- {c}" for c in KNOWN_CAVEATS + pool_rule_notes(noted) + no_game_notes(con, noted)
+                                                    + ownership_notes(con, noted)
+                                                    + sleeper_pool_lines(con, noted, only_if_unknown=True)] + [""]
     return "\n".join(out)
 
 

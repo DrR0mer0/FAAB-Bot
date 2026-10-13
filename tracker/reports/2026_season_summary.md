@@ -2,6 +2,8 @@
 
 _2 scored week(s): 4, 5. One run per week (the first snapshot)._
 
+_The tables that follow are the official season record: week 4 `sun`, week 5 `thu`. The same numbers from each week's Sunday run are further down, for observation only._
+
 ## All eligible players
 
 ### Top 10 (2 week(s))
@@ -48,15 +50,73 @@ _2 scored week(s): 4, 5. One run per week (the first snapshot)._
 
 ## Plain-English read
 
-**Too early to call a winner.** Only 2 scored week(s) so far, and the confidence intervals above are wide because they're built from 2 data point(s) (one per week). Read every number as a first look, not a verdict; we'd want at least 8 weeks before saying whether O.D.D.S. is better than chance.
-- All eligible players, top 10, top-24 finish: O.D.D.S. minus dart = +23.3 points (95% CI +19.3 to +27.4) over 2 week(s) -- ahead of chance (but see the small-sample note).
-- All eligible players, top 10, spike week: O.D.D.S. minus dart = +22.4 points (95% CI +18.8 to +26.0) over 2 week(s) -- ahead of chance (but see the small-sample note).
-- All eligible players, top 25, top-24 finish: O.D.D.S. minus dart = +14.1 points (95% CI +9.7 to +18.5) over 2 week(s) -- ahead of chance (but see the small-sample note).
-- All eligible players, top 25, spike week: O.D.D.S. minus dart = +15.1 points (95% CI +8.6 to +21.5) over 2 week(s) -- ahead of chance (but see the small-sample note).
-- Sleeper pool -- under 50% owned at pick time, top 10, top-24 finish: O.D.D.S. minus dart = +18.6 points (95% CI +5.8 to +31.5) over 2 week(s) -- ahead of chance (but see the small-sample note).
-- Sleeper pool -- under 50% owned at pick time, top 10, spike week: O.D.D.S. minus dart = +25.8 points (95% CI +11.3 to +40.3) over 2 week(s) -- ahead of chance (but see the small-sample note).
-- Sleeper pool -- under 50% owned at pick time, top 25, top-24 finish: O.D.D.S. minus dart = +10.9 points (95% CI +7.8 to +14.1) over 2 week(s) -- ahead of chance (but see the small-sample note).
-- Sleeper pool -- under 50% owned at pick time, top 25, spike week: O.D.D.S. minus dart = +13.4 points (95% CI +11.9 to +14.8) over 2 week(s) -- ahead of chance (but see the small-sample note).
+**Too early to call a winner.** Only 2 scored week(s) so far, and no confidence intervals are shown yet -- they need at least 3 weeks, one data point per week. Read every number as a first look, not a verdict; we'd want at least 8 weeks before saying whether O.D.D.S. is better than chance.
+- All eligible players, top 10, top-24 finish: O.D.D.S. minus dart = +23.3 points over 2 week(s) (no interval or verdict until 3+ weeks).
+- All eligible players, top 10, spike week: O.D.D.S. minus dart = +22.4 points over 2 week(s) (no interval or verdict until 3+ weeks).
+- All eligible players, top 25, top-24 finish: O.D.D.S. minus dart = +14.1 points over 2 week(s) (no interval or verdict until 3+ weeks).
+- All eligible players, top 25, spike week: O.D.D.S. minus dart = +15.1 points over 2 week(s) (no interval or verdict until 3+ weeks).
+- Sleeper pool -- under 50% owned at pick time, top 10, top-24 finish: O.D.D.S. minus dart = +18.6 points over 2 week(s) (no interval or verdict until 3+ weeks).
+- Sleeper pool -- under 50% owned at pick time, top 10, spike week: O.D.D.S. minus dart = +25.8 points over 2 week(s) (no interval or verdict until 3+ weeks).
+- Sleeper pool -- under 50% owned at pick time, top 25, top-24 finish: O.D.D.S. minus dart = +10.9 points over 2 week(s) (no interval or verdict until 3+ weeks).
+- Sleeper pool -- under 50% owned at pick time, top 25, spike week: O.D.D.S. minus dart = +13.4 points over 2 week(s) (no interval or verdict until 3+ weeks).
+
+## Observation only: Sunday runs
+
+_Not the official record. The season record above takes each week's first snapshot (the `thu` run when the week has one). This section recomputes the same season-to-date numbers from each week's `sun` run instead -- 2 week(s): 4, 5. It is printed every week, whichever of the two looks better._
+
+### All eligible players -- Sunday runs
+
+#### Top 10 (2 week(s))
+
+| Model | Top-24 rate (95% CI) | Spike rate (95% CI) | Mean dart pctile, top-24 (95% CI) | Mean dart pctile, spike (95% CI) |
+|---|---|---|---|---|
+| O.D.D.S. (13-feature) | 45.0% (CI needs 3+ weeks) | 35.0% (CI needs 3+ weeks) | 94% (CI needs 3+ weeks) | 97% (CI needs 3+ weeks) |
+| O.D.D.S. shadow (10-feature) | 50.0% (CI needs 3+ weeks) | 40.0% (CI needs 3+ weeks) | 95% (CI needs 3+ weeks) | 97% (CI needs 3+ weeks) |
+| Dart (avg of random draws) | 22.6% (CI needs 3+ weeks) | 13.0% (CI needs 3+ weeks) | - | - |
+| Snap-share heuristic | 55.0% (CI needs 3+ weeks) | 25.0% (CI needs 3+ weeks) | 98% (CI needs 3+ weeks) | 84% (CI needs 3+ weeks) |
+| Last week's points | 65.0% (CI needs 3+ weeks) | 10.0% (CI needs 3+ weeks) | 98% (CI needs 3+ weeks) | 42% (CI needs 3+ weeks) |
+
+#### Top 25 (2 week(s))
+
+| Model | Top-24 rate (95% CI) | Spike rate (95% CI) | Mean dart pctile, top-24 (95% CI) | Mean dart pctile, spike (95% CI) |
+|---|---|---|---|---|
+| O.D.D.S. (13-feature) | 36.0% (CI needs 3+ weeks) | 30.0% (CI needs 3+ weeks) | 91% (CI needs 3+ weeks) | 98% (CI needs 3+ weeks) |
+| O.D.D.S. shadow (10-feature) | 38.0% (CI needs 3+ weeks) | 32.0% (CI needs 3+ weeks) | 95% (CI needs 3+ weeks) | 99% (CI needs 3+ weeks) |
+| Dart (avg of random draws) | 22.8% (CI needs 3+ weeks) | 13.2% (CI needs 3+ weeks) | - | - |
+| Snap-share heuristic | 34.0% (CI needs 3+ weeks) | 16.0% (CI needs 3+ weeks) | 91% (CI needs 3+ weeks) | 68% (CI needs 3+ weeks) |
+| Last week's points | 48.0% (CI needs 3+ weeks) | 14.0% (CI needs 3+ weeks) | 99% (CI needs 3+ weeks) | 56% (CI needs 3+ weeks) |
+
+### Sleeper pool -- under 50% owned at pick time -- Sunday runs
+
+#### Top 10 (2 week(s))
+
+| Model | Top-24 rate (95% CI) | Spike rate (95% CI) | Mean dart pctile, top-24 (95% CI) | Mean dart pctile, spike (95% CI) |
+|---|---|---|---|---|
+| O.D.D.S. (13-feature) | 30.0% (CI needs 3+ weeks) | 35.0% (CI needs 3+ weeks) | 82% (CI needs 3+ weeks) | 91% (CI needs 3+ weeks) |
+| O.D.D.S. shadow (10-feature) | 30.0% (CI needs 3+ weeks) | 25.0% (CI needs 3+ weeks) | 93% (CI needs 3+ weeks) | 90% (CI needs 3+ weeks) |
+| Dart (avg of random draws) | 12.5% (CI needs 3+ weeks) | 10.2% (CI needs 3+ weeks) | - | - |
+| Snap-share heuristic | 20.0% (CI needs 3+ weeks) | 15.0% (CI needs 3+ weeks) | 76% (CI needs 3+ weeks) | 69% (CI needs 3+ weeks) |
+| Last week's points | 25.0% (CI needs 3+ weeks) | 10.0% (CI needs 3+ weeks) | 88% (CI needs 3+ weeks) | 53% (CI needs 3+ weeks) |
+
+#### Top 25 (2 week(s))
+
+| Model | Top-24 rate (95% CI) | Spike rate (95% CI) | Mean dart pctile, top-24 (95% CI) | Mean dart pctile, spike (95% CI) |
+|---|---|---|---|---|
+| O.D.D.S. (13-feature) | 20.0% (CI needs 3+ weeks) | 20.0% (CI needs 3+ weeks) | 76% (CI needs 3+ weeks) | 93% (CI needs 3+ weeks) |
+| O.D.D.S. shadow (10-feature) | 20.0% (CI needs 3+ weeks) | 16.0% (CI needs 3+ weeks) | 88% (CI needs 3+ weeks) | 83% (CI needs 3+ weeks) |
+| Dart (avg of random draws) | 12.8% (CI needs 3+ weeks) | 9.4% (CI needs 3+ weeks) | - | - |
+| Snap-share heuristic | 12.0% (CI needs 3+ weeks) | 12.0% (CI needs 3+ weeks) | 46% (CI needs 3+ weeks) | 65% (CI needs 3+ weeks) |
+| Last week's points | 18.0% (CI needs 3+ weeks) | 10.0% (CI needs 3+ weeks) | 78% (CI needs 3+ weeks) | 55% (CI needs 3+ weeks) |
+
+### Thu vs Sun: the value of Friday/Saturday information
+
+_Top-10 spike hits among all eligible players, season to date, over the 1 week(s) that have both a `thu` and a `sun` run (5). The difference is Sunday minus Thursday: what waiting for Friday's and Saturday's news was worth. The two runs also draw from different pools -- the `sun` pool has no Thursday or early-game players -- and the dart line shows how much of a difference the pool alone makes._
+
+- O.D.D.S. (13-feature): thu 3/10, sun 3/10 -- **0**
+- O.D.D.S. shadow (10-feature): thu 2/10, sun 3/10 -- **+1**
+- Dart (avg of random draws): thu 1.1/10, sun 1.2/10 -- **+0.1**
+- Snap-share heuristic: thu 2/10, sun 3/10 -- **+1**
+- Last week's points: thu 2/10, sun 1/10 -- **-1**
 
 ## Crowd hits (secondary metric)
 
@@ -70,3 +130,4 @@ _No picks have a closed 2-week window yet. A crowd hit = a pick that started at 
 - **Pool rule:** the week 5 `thu` run was logged before players whose team has no game that week were excluded. 26 of its 403 pool players were on a bye (CAR, KC) and could not score. Top-10 picks among them: O.D.D.S. 3, shadow 0, snap-share heuristic 2, last week's points 3; about 6% of every dart draw. Its numbers are left as logged.
 - **Under-50% pool, week 4 `sun` run:** 207 players. 1 pool player(s) with unknown ownership were left OUT of it -- the rule for this run only; later runs keep such players in, flagged.
 - **Under-50% pool, week 5 `thu` run:** 277 players, 1 of them with **ownership unknown** (no roster-% row for them in the snapshot used). Unknown is not treated as under 50% or as 0%: those players are kept in the pool and counted here rather than dropped.
+- **Under-50% pool, week 5 `sun` run:** 218 players, 1 of them with **ownership unknown** (no roster-% row for them in the snapshot used). Unknown is not treated as under 50% or as 0%: those players are kept in the pool and counted here rather than dropped.

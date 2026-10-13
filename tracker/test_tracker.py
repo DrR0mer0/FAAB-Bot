@@ -2440,6 +2440,132 @@ class TestScoreEndToEnd(unittest.TestCase):
         self.assertNotIn("(50.0-50.0)", season)
 
 
+class TestSeasonSummary(unittest.TestCase):
+    """The season summary keeps two records: the official one (each week's first
+    snapshot) and, for observation only, the same numbers from each week's sun
+    run. Built from hand-made scorings: a model's top-10 spike hits per run."""
+
+    MODELS = ("odds_prod", "odds_shadow", "dart", "heuristic", "last_week")
+
+    def setUp(self):
+        self.con = mem_db()
+        self.addCleanup(self.con.close)
+        self.con.execute("CREATE TABLE nfl_games (season INTEGER, week INTEGER, home_team TEXT, away_team TEXT, is_playoffs INTEGER DEFAULT 0)")
+        self.cfg = dict(CFG["report"], bootstrap_resamples=300)
+
+    def add_week(self, week, **slots):
+        """slots: thu=/sun= one number per model in MODELS order -- its spike hits out of 10 picks (top-24 hits are one more)."""
+        sid = self.con.execute("INSERT INTO tr_scorings (season, week, scored_at, hit_config_hash, hit_config_json) "
+                               "VALUES (2026, ?, 't', 'h', '{}')", (week,)).lastrowid
+        run_cfg = json.dumps({"pool_rule": tracker.POOL_RULE, "excluded_no_game": [], "injury": {"source": "nflverse"}})
+        for slot, spikes in slots.items():
+            run_id = f"2026w{week:02d}-{slot}"
+            ledger.insert_rows(self.con, "tr_runs", [dict(run_id=run_id, run_timestamp=f"2026-10-{week:02d}T14:00:00+00:00", season=2026,
+                                                          week=week, run_slot=slot, run_config_json=run_cfg)])
+            for model, hits in zip(self.MODELS, spikes):
+                ledger.insert_rows(self.con, "tr_run_results", [dict(
+                    scoring_id=sid, run_id=run_id, model_name=model, pick_set="all_k10", n_picks=10, n_played=10, top24_hits=hits + 1,
+                    spike_hits=hits, total_points=10.0 * hits, n_draws=1000 if model == "dart" else None)])
+                if model != "dart":
+                    ledger.insert_rows(self.con, "tr_percentiles", [dict(
+                        scoring_id=sid, run_id=run_id, model_name=model, pick_set="all_k10", metric=metric, percentile=50 + 10 * hits)
+                        for metric in ("top24_hits", "spike_hits")])
+        self.con.commit()
+
+    def summary(self):
+        md = report.build_season_report(self.con, 2026, self.cfg)
+        official, sunday = md.split(report.SUNDAY_TITLE)       # the title appears exactly once
+        return md, official, sunday.split("## Crowd hits")[0]
+
+    @staticmethod
+    def row(section, label):
+        return [c.strip() for c in next(ln for ln in section.splitlines() if ln.startswith(f"| {label} |")).split("|")[1:-1]]
+
+    def test_official_record_takes_first_snapshots_and_the_sunday_section_takes_each_weeks_sun_run(self):
+        self.add_week(4, sun=(4, 1, 1.5, 2, 1))                             # no Thursday run: the sun run IS the first snapshot
+        self.add_week(5, thu=(3, 2, 1.0, 2, 2), sun=(1, 3, 1.5, 3, 1))
+        self.add_week(6, thu=(2, 2, 1.0, 1, 0))                             # no Sunday run
+        md, official, sunday = self.summary()
+        self.assertIn("official season record: week 4 `sun`, week 5 `thu`, week 6 `thu`.", official)
+        self.assertIn("### Top 10 (3 week(s))", official)
+        prod = self.row(official, "O.D.D.S. (13-feature)")
+        self.assertTrue(prod[1].startswith("40.0% (") and prod[2].startswith("30.0% ("), prod)      # (5+4+3)/30 and (4+3+2)/30
+        self.assertNotIn("CI needs", prod[2])                                                       # three weeks: a real interval
+        self.assertTrue(self.row(official, "O.D.D.S. shadow (10-feature)")[2].startswith("16.7% ("))
+        # the Sunday section: weeks 4 and 5 only, from their sun runs, and it says which week it left out
+        self.assertIn("_Not the official record.", sunday)
+        self.assertIn("2 week(s): 4, 5; no `sun` run, left out: 6.", sunday)
+        self.assertIn("### All eligible players -- Sunday runs", sunday)
+        self.assertIn("#### Top 10 (2 week(s))", sunday)
+        self.assertEqual(self.row(sunday, "O.D.D.S. (13-feature)")[1:3], ["35.0% (CI needs 3+ weeks)", "25.0% (CI needs 3+ weeks)"])
+        self.assertEqual(self.row(sunday, "O.D.D.S. shadow (10-feature)")[2], "20.0% (CI needs 3+ weeks)")
+        # here Sunday looks worse for production and better for shadow: both are printed either way, the record first
+        self.assertLess(md.index("## Plain-English read"), md.index(report.SUNDAY_TITLE))
+        self.assertLess(md.index(report.SUNDAY_TITLE), md.index("## Crowd hits"))
+        self.assertEqual(md.count(report.SUNDAY_TITLE), 1)
+
+    def test_thu_vs_sun_is_the_difference_in_top_ten_spike_hits_over_the_weeks_with_both_slots(self):
+        self.add_week(4, sun=(4, 1, 1.5, 2, 1))
+        self.add_week(5, thu=(3, 2, 1.0, 2, 2), sun=(1, 3, 1.5, 3, 1))
+        self.add_week(6, thu=(2, 2, 1.0, 1, 0))
+        _md, _official, sunday = self.summary()
+        self.assertIn("### Thu vs Sun: the value of Friday/Saturday information", sunday)
+        self.assertIn("over the 1 week(s) that have both a `thu` and a `sun` run (5).", sunday)
+        self.assertIn("The difference is Sunday minus Thursday", sunday)
+        lines = [ln for ln in sunday.split("### Thu vs Sun")[1].splitlines() if ln.startswith("- ")]
+        self.assertEqual(lines, ["- O.D.D.S. (13-feature): thu 3/10, sun 1/10 -- **-2**",
+                                 "- O.D.D.S. shadow (10-feature): thu 2/10, sun 3/10 -- **+1**",
+                                 "- Dart (avg of random draws): thu 1/10, sun 1.5/10 -- **+0.5**",     # the pool alone moved this much
+                                 "- Snap-share heuristic: thu 2/10, sun 3/10 -- **+1**",
+                                 "- Last week's points: thu 2/10, sun 1/10 -- **-1**"])
+        self.add_week(7, thu=(1, 2, 1.0, 0, 3), sun=(3, 1, 1.0, 0, 3))      # a second week with both: season to date, summed
+        lines = [ln for ln in self.summary()[2].split("### Thu vs Sun")[1].splitlines() if ln.startswith("- ")]
+        self.assertIn("(5, 7)", self.summary()[2])
+        self.assertEqual(lines, ["- O.D.D.S. (13-feature): thu 4/20, sun 4/20 -- **0**",
+                                 "- O.D.D.S. shadow (10-feature): thu 4/20, sun 4/20 -- **0**",
+                                 "- Dart (avg of random draws): thu 2/20, sun 2.5/20 -- **+0.5**",
+                                 "- Snap-share heuristic: thu 2/20, sun 3/20 -- **+1**",
+                                 "- Last week's points: thu 5/20, sun 4/20 -- **-1**"])
+
+    def test_both_sections_are_printed_even_when_one_has_nothing_to_show(self):
+        self.add_week(5, thu=(3, 2, 1.0, 2, 2))
+        self.add_week(6, thu=(2, 2, 1.0, 1, 0))
+        md, official, sunday = self.summary()                              # a season of Thursday runs only
+        self.assertIn("### Top 10 (2 week(s))", official)
+        self.assertIn("_No scored week has a `sun` run yet._", sunday)
+        self.assertIn("_No scored week has both a `thu` and a `sun` run yet, so there is nothing to compare._", sunday)
+        self.assertNotIn("| O.D.D.S.", sunday)
+        self.add_week(7, sun=(4, 1, 1.5, 2, 1))                             # and a sun-only week is in both, with the same numbers
+        md, official, sunday = self.summary()
+        self.assertIn("1 week(s): 7; no `sun` run, left out: 5, 6.", sunday)
+        self.assertEqual(self.row(sunday, "O.D.D.S. (13-feature)")[2], "40.0% (CI needs 3+ weeks)")
+        self.assertIn("nothing to compare", sunday)
+
+    def test_no_interval_or_verdict_is_printed_until_there_are_three_weeks(self):
+        verdicts = ("ahead of chance", "behind chance", "not distinguishable from chance")
+
+        def plain():
+            return self.summary()[1].split("## Plain-English read")[1]
+        self.add_week(4, sun=(4, 1, 1.5, 2, 1))
+        self.add_week(5, thu=(3, 2, 1.0, 2, 2), sun=(1, 3, 1.5, 3, 1))
+        two = plain()
+        self.assertIn("- All eligible players, top 10, spike week: O.D.D.S. minus dart = +22.5 points over 2 week(s) "
+                      "(no interval or verdict until 3+ weeks).", two)     # (4+3)/20 - (1.5+1.0)/20
+        self.assertNotIn("95% CI", two)
+        self.assertFalse([v for v in verdicts if v in two])
+        self.assertIn("no confidence intervals are shown yet -- they need at least 3 weeks", two)
+        self.assertNotIn("the confidence intervals above are wide", two)
+        self.add_week(6, thu=(2, 2, 1.0, 1, 0))
+        three = plain()
+        self.assertRegex(three, r"top 10, spike week: O\.D\.D\.S\. minus dart = \+18\.3 points \(95% CI \+\d+\.\d to \+\d+\.\d\) over 3 week\(s\) "
+                                r"-- ahead of chance \(but see the small-sample note\)\.")
+        self.assertIn("the confidence intervals above are wide because they're built from 3 data point(s)", three)
+        self.assertNotIn("no interval or verdict", three)
+        # each section goes by its own number of weeks: the Sunday tables still have only two
+        self.assertIn("(CI needs 3+ weeks)", self.summary()[2])
+        self.assertNotIn("(CI needs 3+ weeks)", self.summary()[1])
+
+
 class TestReportMath(unittest.TestCase):
     def test_bootstrap_ci_is_deterministic_and_brackets_the_estimate(self):
         a = report.bootstrap_ratio_ci([3, 2, 4, 1, 3], [10] * 5, 2000, 1)
