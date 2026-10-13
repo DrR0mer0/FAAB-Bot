@@ -114,11 +114,50 @@ def roster_payload():
         for tid in BALANCES])})
 
 
-def scoreboard_payload(weeks):
+# Every week the same two games: 1 beats 2, 4 beats 3 -- except week 2, when 3 and 4 tie. Weeks 1-4 are over.
+SCORES = {w: {1: 100.5, 2: 90.25, 3: 80.0, 4: 80.0 if w == 2 else 120.5} for w in range(1, 6)}
+FINAL_WEEKS = 4
+SLOTS = (("QB", 1, 1), ("RB", 1, 1), ("WR", 1, 1), ("W/R/T", 1, 1), ("BN", 2, 0), ("IR", 1, 0))
+SCORING = ((4, "Passing Yards", "Pass Yds", "0.04"), (5, "Passing Touchdowns", "Pass TD", "5"), (10, "Sacks", "Sack", "-.5"),
+           (57, "Pick Sixes Thrown", "Pick Six", "-4"), (78, "Targets", "Targets", "0"))
+
+
+def settings_payload():
+    return league({"settings": [{
+        "roster_positions": [{"roster_position": {"position": pos, "count": n, "is_starting_position": start}} for pos, n, start in SLOTS],
+        "stat_categories": {"stats": [{"stat": {"stat_id": i, "name": name, "display_name": short}} for i, name, short, _v in SCORING]},
+        "stat_modifiers": {"stats": [{"stat": {"stat_id": i, "value": value}} for i, _n, _s, value in SCORING]}}]})
+
+
+def lineup(team, week, scores=SCORES, bench=None, delta=None):
+    """[(yahoo id, name, position, slot, points)]: four starters whose points add up to the team's score (plus `delta`
+    for that team-week, to make them NOT add up), two bench players, and for team 1 a player on IR."""
+    total = scores[week][team]
+    qb, rb, wr = round(total * 0.4, 2), round(total * 0.25, 2), round(total * 0.2, 2)
+    base = team * 1000
+    rows = [(base + 1, f"QB {team}", "QB", "QB", round(qb + (delta or {}).get((week, team), 0), 2)), (base + 2, f"RB {team}", "RB", "RB", rb),
+            (base + 3, f"WR {team}", "WR", "WR", wr), (base + 4, f"Flex {team}", "WR", "W/R/T", round(total - qb - rb - wr, 2))]
+    rows += (bench or {}).get((week, team), [(base + 5, f"Bench RB {team}", "RB", "BN", 1.0), (base + 6, f"Bench TE {team}", "TE", "BN", 2.0)])
+    return rows + ([(base + 9, "Hurt QB 1", "QB", "IR", 30.0)] if team == 1 else [])
+
+
+def lineup_payload(team, week, **kw):
+    """One team's final lineup of a week, the way team/<key>/roster;week=N/players/stats answers."""
+    cov = {"coverage_type": "week", "week": str(week)}
+    players = [{"player": [[{"player_key": f"470.p.{yid}"}, {"player_id": str(yid)}, {"name": {"full": name}}, {"editorial_team_abbr": "Min"},
+                            {"display_position": pos}, {"primary_position": pos}, []],
+                           {"selected_position": [cov, {"position": slot}, {"is_flex": 0}]},
+                           {"player_stats": {"0": cov, "stats": []}}, {"player_points": {"0": cov, "total": f"{pts:.2f}"}}]}
+               for yid, name, pos, slot, pts in lineup(team, week, **kw)]
+    return {"fantasy_content": {"team": [team_info(team), {"roster": dict(cov, **{"0": {"players": numbered(players)}})}]}}
+
+
+def scoreboard_payload(weeks, scores=SCORES, final_weeks=FINAL_WEEKS):
     matchups = []
     for w in weeks:
-        final = w < 5
-        for a, b, pa, pb in ((1, 2, 100.5, 90.25), (3, 4, 80.0, 80.0 if w == 2 else 120.5)):
+        final = w <= final_weeks
+        for a, b in ((1, 2), (3, 4)):
+            pa, pb = scores[w][a], scores[w][b]
             side = lambda tid, pts: {"team": [team_info(tid), {"win_probability": 0.5, "team_points": {"coverage_type": "week", "total": f"{pts if final else 0:.2f}"},
                                                              "team_projected_points": {"coverage_type": "week", "total": "101.10"}}]}
             m = {"week": str(w), "week_start": WEEKS[w][0], "week_end": WEEKS[w][1], "status": "postevent" if final else "midevent",
@@ -131,12 +170,20 @@ def scoreboard_payload(weeks):
 
 
 class Yahoo:
-    """A stand-in session: answers the four league routes from the fixtures above."""
+    """A stand-in session: answers the league routes, and each team's weekly lineup, from the fixtures above."""
 
-    def __init__(self, transactions=TRANSACTIONS, fail=None, odd=None):
+    def __init__(self, transactions=TRANSACTIONS, fail=None, odd=None, scores=SCORES, final_weeks=FINAL_WEEKS, bench=None, delta=None):
         self.transactions, self.fail, self.odd, self.paths = transactions, fail or {}, odd or {}, []
+        self.scores, self.final_weeks, self.lineup_kw = scores, final_weeks, dict(scores=scores, bench=bench, delta=delta)
 
     def get(self, url, timeout=None):
+        if f"/team/{KEY}.t." in url:
+            team, week = int(url.split(f"/team/{KEY}.t.")[1].split("/")[0]), int(url.split("roster;week=")[1].split("/")[0])
+            self.paths.append(f"lineup t{team} w{week}")
+            if "lineups" in self.fail:
+                return mock.Mock(status_code=self.fail["lineups"], text="denied", json=lambda: {"error": {}})
+            body = lineup_payload(team, week, **self.lineup_kw)
+            return mock.Mock(status_code=200, text=json.dumps(body), json=lambda: body)
         path = url.split(f"/league/{KEY}/")[1].split("?")[0]
         self.paths.append(path)
         resource = "rosters" if path == "teams/roster" else path.split(";")[0]
@@ -152,8 +199,10 @@ class Yahoo:
             body = league({"transactions": numbered(self.transactions[start:start + count])})
         elif resource == "rosters":
             body = roster_payload()
+        elif resource == "settings":
+            body = settings_payload()
         else:
-            body = scoreboard_payload([int(w) for w in path.split("week=")[1].split(",")])
+            body = scoreboard_payload([int(w) for w in path.split("week=")[1].split(",")], self.scores, self.final_weeks)
         return mock.Mock(status_code=200, text=json.dumps(body), json=lambda: body)
 
 
@@ -181,7 +230,7 @@ class LeagueDataCase(unittest.TestCase):
         session = session if session is not None else Yahoo()
         with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
             out = league_data.take_snapshot(self.con, key, self.dir / "raw", self.roster, now=now,
-                                            fetcher=lambda k: league_data.fetch(k, session=session, **fetch_kw))
+                                            fetcher=lambda k, **kw: league_data.fetch(k, session=session, **kw, **fetch_kw))
         self.stderr = err.getvalue()
         return out
 
@@ -190,12 +239,15 @@ class LeagueDataCase(unittest.TestCase):
 
 
 class TestSnapshot(LeagueDataCase):
-    def test_all_four_resources_are_stored_with_their_raw_response_hashed(self):
+    def test_every_resource_is_stored_with_its_raw_response_hashed(self):
         session = Yahoo()
         summary = self.snapshot(session)
         self.assertEqual({r: (s["ok"], s["n_rows"]) for r, s in summary.items()},
-                         {"teams": (True, 4), "transactions": (True, 10), "rosters": (True, 8), "scoreboard": (True, 20)})
-        self.assertEqual(session.paths, ["teams", "transactions;start=0;count=50", "teams/roster", "scoreboard;week=1,2,3,4,5"])
+                         {"teams": (True, 4), "transactions": (True, 10), "rosters": (True, 8), "scoreboard": (True, 20),
+                          "settings": (True, 6), "lineups": (True, 100)})       # 4 weeks x (4 teams x 6 players + one on IR)
+        self.assertEqual(session.paths[:5], ["teams", "transactions;start=0;count=50", "teams/roster", "scoreboard;week=1,2,3,4,5",
+                                             "settings"])
+        self.assertEqual(session.paths[5:], [f"lineup t{t} w{w}" for w in (1, 2, 3, 4) for t in (1, 2, 3, 4)])   # week 5 isn't over
         snaps = self.con.execute("SELECT * FROM lg_snapshots ORDER BY snapshot_id").fetchall()
         self.assertEqual([(s["resource"], s["ok"], s["league_key"], s["batch_id"]) for s in snaps],
                          [(r, 1, KEY, NOW.isoformat()) for r in league_data.RESOURCES])
@@ -274,10 +326,100 @@ class TestSnapshot(LeagueDataCase):
                 self.assertIn("append-only", str(cm.exception))
 
 
+class TestLineupsAndSettings(LeagueDataCase):
+    def test_final_lineups_carry_each_players_slot_and_points_and_starters_add_up_to_the_score(self):
+        self.snapshot()
+        lineups = league_data.week_lineups(self.con, 3)
+        self.assertEqual(sorted(lineups), [1, 2, 3, 4])
+        self.assertEqual([(r["name"], r["position"], r["selected_position"], r["points"]) for r in sorted(lineups[1], key=lambda r: r["external_id"])],
+                         [("QB 1", "QB", "QB", 40.2), ("RB 1", "RB", "RB", 25.12), ("WR 1", "WR", "WR", 20.1), ("Flex 1", "WR", "W/R/T", 15.08),
+                          ("Bench RB 1", "RB", "BN", 1.0), ("Bench TE 1", "TE", "BN", 2.0), ("Hurt QB 1", "QB", "IR", 30.0)])
+        for team, rows in lineups.items():
+            starters = sum(r["points"] for r in rows if r["selected_position"] not in league_data.BENCH_SLOTS)
+            self.assertAlmostEqual(starters, SCORES[3][team], places=2)
+        self.assertEqual(league_data.week_lineups(self.con, 5), {})            # week 5 is still being played
+        self.assertEqual(league_data.lineup_weeks_stored(self.con), {1, 2, 3, 4})
+
+    def test_first_run_backfills_then_only_the_latest_completed_week_is_fetched_again(self):
+        self.snapshot()
+        later = Yahoo(delta={(4, 2): -0.7})                                   # a stat correction to week 4, after the fact
+        self.snapshot(later, now=NOW.replace(day=11))
+        self.assertEqual([p for p in later.paths if p.startswith("lineup")], [f"lineup t{t} w4" for t in (1, 2, 3, 4)])
+        self.assertEqual(self.rows("SELECT n_pages, n_rows FROM lg_snapshots WHERE resource='lineups' ORDER BY snapshot_id"), [(16, 100), (4, 25)])
+        qb = [r for r in league_data.week_lineups(self.con, 4)[2] if r["name"] == "QB 2"][0]
+        self.assertEqual(qb["points"], 35.4)                                   # the newest snapshot of that week is the one read
+        self.assertEqual(len(league_data.week_lineups(self.con, 1)), 4)        # earlier weeks still come from the first run
+        nxt = Yahoo(final_weeks=5)                                             # a week ends: it is fetched, week 4 is not
+        self.snapshot(nxt, now=NOW.replace(day=13))
+        self.assertEqual([p for p in nxt.paths if p.startswith("lineup")], [f"lineup t{t} w5" for t in (1, 2, 3, 4)])
+
+    def test_lineups_need_the_teams_and_the_scoreboard_and_fail_on_their_own(self):
+        summary = self.snapshot(Yahoo(fail={"teams": 500}))
+        self.assertFalse(summary["lineups"]["ok"])
+        self.assertIn("needs the teams and the scoreboard", summary["lineups"]["error"])
+        self.assertTrue(summary["scoreboard"]["ok"] and summary["settings"]["ok"])
+        summary = self.snapshot(Yahoo(fail={"lineups": 503}), now=NOW.replace(day=11))
+        self.assertEqual({r for r, v in summary.items() if not v["ok"]}, {"lineups"})
+        self.assertEqual(self.rows("SELECT COUNT(*) FROM lg_lineups"), [(0,)])
+        self.assertNotIn(KEY, summary["lineups"]["error"])
+
+    def test_settings_keep_the_starting_slots_and_every_scoring_rule(self):
+        self.snapshot()
+        self.assertEqual(league_data.roster_slots(self.con), [("QB", 1), ("RB", 1), ("WR", 1), ("W/R/T", 1)])     # not BN, not IR
+        self.assertEqual(self.rows("SELECT name, value FROM lg_scoring_rules ORDER BY stat_id"),
+                         [("Passing Yards", 0.04), ("Passing Touchdowns", 5.0), ("Sacks", -0.5), ("Pick Sixes Thrown", -4.0), ("Targets", 0.0)])
+
+    def test_scoring_check_names_every_rule_the_tracker_has_wrong_and_the_gap_it_knows_about(self):
+        self.assertFalse(league_data.scoring_check(self.con, {})["ok"])                     # no snapshot yet
+        self.snapshot()
+        good = {"pass_yd": 0.04, "pass_td": 5, "sack": -0.5}
+        check = league_data.scoring_check(self.con, good)
+        self.assertEqual((check["ok"], check["lines"]), (True, []))
+        self.assertEqual(len(check["unsupported"]), 1)
+        self.assertIn("Pick Sixes Thrown (-4): not scored by the tracker", check["unsupported"][0])
+        check = league_data.scoring_check(self.con, {"pass_yd": 0.04, "pass_td": 4, "rush_td": 6})
+        self.assertFalse(check["ok"])
+        self.assertEqual(sorted(check["lines"]), ["pass_td: Yahoo 5, tracker 4", "rush_td: tracker 6, but Yahoo doesn't score it",
+                                                  "sack: Yahoo -0.5, tracker has no rule"])
+
+    def test_points_check_compares_yahoos_player_points_with_the_trackers(self):
+        with open(self.roster, "a", newline="", encoding="utf-8") as f:              # two lineup players the tracker can find
+            w = csv.DictWriter(f, fieldnames=["gsis_id", "full_name", "position", "yahoo_id"])
+            w.writerow(dict(gsis_id="g-qb1", full_name="QB 1", position="QB", yahoo_id="1001"))
+            w.writerow(dict(gsis_id="g-rb1", full_name="RB 1", position="RB", yahoo_id="1002"))
+        self.snapshot()
+        store = mock.Mock()
+        store.week_rows.side_effect = lambda season, week: {"g-qb1": {"points": 40.2}, "g-rb1": {"points": 24.12}}
+        got = league_data.points_check(self.con, store, 2026, weeks=[3])
+        self.assertEqual((got["n"], got["same"]), (25, 1))                          # QB 1 agrees; everyone else is off or unknown
+        self.assertIn((3, "RB 1", "RB", 25.12, 24.12), got["differ"])
+
+    def test_nothing_is_hardcoded_to_my_team(self):
+        self.snapshot()
+        self.assertEqual(league_data.default_team(self.con), 3)                     # a default: the logged-in account's team
+        self.assertTrue(league_data.import_bids(self.con, FIXTURE, self.dir / "raw", now=NOW)["ok"])
+        mine = league_data.build_report(self.con, today=date(2026, 10, 10))
+        other = league_data.build_report(self.con, today=date(2026, 10, 10), team_id=1)
+        self.assertIn("## Team Name 3 (me)", mine)
+        self.assertIn("## Team Name 1 (me)", other)
+        self.assertNotIn("Team Name 3 (me)", other)
+        self.assertEqual([ln for ln in other.split("## My winning bids")[1].split("\n## ")[0].splitlines() if ln.startswith("- ")],
+                         ["- Wed 09-30 -- Other Claim (RB, KC): won at $10, next offer $3 (Team Name 4) -- **margin $7**"])
+        tx = league_data.latest_ok(self.con, "transactions")[0]
+        weeks = league_data.league_weeks(self.con, league_data.latest_ok(self.con, "scoreboard")[0])
+        _f, _c, start, end = league_data.report_window(weeks, date(2026, 10, 10))
+        activity = league_data.team_activity(self.con, tx, start, end)
+        offers = league_data.losing_bids(self.con, tx, start, end)[0]
+        self.assertEqual([(m["won_at"], m["next_offer"], m["next_team_id"], m["margin"]) for m in league_data.bid_margins(activity, offers, 3)],
+                         [(16, 16, 2, 0), (27, 20, 1, 7), (0, None, None, None)])
+        self.assertEqual(league_data.bid_margins(activity, offers, 4), [])          # a team that won nothing
+
+
 class TestFailures(LeagueDataCase):
     def test_one_resource_failing_is_recorded_and_does_not_cost_the_others(self):
         summary = self.snapshot(Yahoo(fail={"rosters": 500}))
-        self.assertEqual({r: s["ok"] for r, s in summary.items()}, dict(teams=True, transactions=True, rosters=False, scoreboard=True))
+        self.assertEqual({r: s["ok"] for r, s in summary.items()},
+                         dict(teams=True, transactions=True, rosters=False, scoreboard=True, settings=True, lineups=True))
         snap = self.con.execute("SELECT * FROM lg_snapshots WHERE resource='rosters'").fetchone()
         self.assertEqual((snap["ok"], snap["http_status"], snap["n_rows"], snap["error"]), (0, 500, 0, "RuntimeError: HTTP 500 on teams/roster"))
         self.assertIsNotNone(snap["raw_sha256"])            # what Yahoo did answer is kept
@@ -301,14 +443,14 @@ class TestFailures(LeagueDataCase):
             self.assertFalse(summary[r]["ok"])
             self.assertNotIn(KEY, summary[r]["error"])
         self.assertNotIn(KEY, self.stderr)
-        self.assertEqual(self.rows("SELECT COUNT(*), SUM(ok) FROM lg_snapshots"), [(4, 0)])
+        self.assertEqual(self.rows("SELECT COUNT(*), SUM(ok) FROM lg_snapshots"), [(6, 0)])
 
     def test_no_credentials_or_no_league_key_is_a_recorded_failure(self):
         def no_credentials():
             raise SystemExit("[ERROR] YAHOO_CLIENT_ID / YAHOO_CLIENT_SECRET not set")
         with mock.patch("sys.stderr"):
             out = league_data.take_snapshot(self.con, KEY, self.dir / "raw", self.roster, now=NOW,
-                                            fetcher=lambda k: league_data.fetch(k, open_session=no_credentials))
+                                            fetcher=lambda k, **kw: league_data.fetch(k, open_session=no_credentials, **kw))
         self.assertTrue(all("SystemExit" in s["error"] for s in out.values()))
         never = mock.Mock(side_effect=AssertionError("must not be fetched"))
         for key, why in ((None, "no league is configured"), ("470.1.123456", "not a Yahoo league key")):    # digit one, not an L
@@ -329,7 +471,7 @@ class TestFailures(LeagueDataCase):
         db = self.dir / "t.db"
         for session, code, word in ((Yahoo(), 0, "rosters ok: 8 rows"), (Yahoo(fail={"rosters": 500}), 1, "rosters FAILED")):
             out = io.StringIO()
-            with mock.patch.object(league_data, "fetch", side_effect=lambda k, s=session: league_data._fetch(k, s, None, 1e18)), \
+            with mock.patch.object(league_data, "fetch", side_effect=lambda k, s=session, **kw: league_data._fetch(k, s, None, 1e18, **kw)), \
                     mock.patch("sys.stderr"), contextlib.redirect_stdout(out):
                 rc = league_data.main(["snapshot", "--db", str(db), "--raw-dir", str(self.dir / "raw"), "--league-key", KEY,
                                        "--roster", str(self.roster)])

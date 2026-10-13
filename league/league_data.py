@@ -3,6 +3,7 @@
 a short "league activity" report built from them.
 
   python league/league_data.py snapshot       # fetch + store (the daily job)
+  python league/league_data.py check-scoring  # Yahoo's scoring rules and player points vs the tracker's
   python league/league_data.py import-bids    # losing FAAB offers typed into league_data/manual/bids.csv
   python league/league_data.py report         # write league_data/league_activity_week<NN>.md
 
@@ -13,6 +14,15 @@ holds the OAuth side; the league key is YAHOO_LEAGUE_KEY in league/.env):
                 actions. A waiver add carries the WINNING faab_bid.
   rosters       every team's current roster with lineup slots
   scoreboard    every week so far: matchups, points, winner, status
+  settings      the league's roster slots and scoring rules
+  lineups       each team's FINAL lineup of a completed week with every
+                player's fantasy points -- one call per team per week (the
+                league-wide roster call returns no points). Each run fetches
+                the latest completed week again (stat corrections) and any
+                completed week not stored yet, so the first run backfills.
+                Starters summed to the scoreboard score exactly in 57 of 60
+                team-weeks on 2026-10-13 (three were off by under a point);
+                the scoreboard score is the official one.
 
 WHAT YAHOO'S API DOES NOT GIVE (checked 2026-10-10 against ~35 routes):
 losing FAAB bids. Only successful transactions are listed; a failed claim is
@@ -30,7 +40,8 @@ UPDATE/DELETE-blocking triggers). One lg_snapshots row per resource per run
 (status, counts, SHA-256 and file name of the raw response) and the parsed
 rows keyed to it; a resource that fails is stored as an ok=0 snapshot and the
 others still land. Every run stores the full current picture, so "the latest
-ok snapshot" of a resource is always complete on its own. Raw responses are
+ok snapshot" of a resource is always complete on its own -- except lineups,
+which hold whichever weeks that run fetched: read a week with week_lineups(). Raw responses are
 gzip files under raw/league/ (gitignored).
 
 LOSING BIDS -- league_data/manual/bids.csv (gitignored), one row per LOSING
@@ -91,7 +102,14 @@ DEFAULT_DB = REPO_ROOT / "faab_history_core_v0_1.db"
 DEFAULT_RAW_DIR = league_availability.DEFAULT_RAW_DIR
 DEFAULT_REPORT_DIR = REPO_ROOT / "league_data"
 API = "https://fantasysports.yahooapis.com/fantasy/v2/"
-RESOURCES = ("teams", "transactions", "rosters", "scoreboard")
+RESOURCES = ("teams", "transactions", "rosters", "scoreboard", "settings", "lineups")
+BENCH_SLOTS = ("BN", "IR")
+# Yahoo's name for a scoring category -> the tracker's rule (tracker/hit_config.json, "scoring")
+YAHOO_RULES = {"Passing Yards": "pass_yd", "Passing Touchdowns": "pass_td", "Interceptions": "pass_int", "Sacks": "sack",
+               "Rushing Yards": "rush_yd", "Rushing Touchdowns": "rush_td", "Receptions": "reception", "Receiving Yards": "rec_yd",
+               "Receiving Touchdowns": "rec_td", "Return Yards": "return_yd", "Return Touchdowns": "return_td",
+               "2-Point Conversions": "two_pt_conversion", "Fumbles Lost": "fumble_lost",
+               "Offensive Fumble Return TD": "fumble_recovery_td", "Pick Sixes Thrown": "pick_six"}
 TX_PAGE = 50              # transactions per request; one unpaged call returned all 78 on 2026-10-10, but don't count on it
 MAX_TX_PAGES = 100
 REQUEST_TIMEOUT_S = 30
@@ -192,6 +210,38 @@ CREATE TABLE IF NOT EXISTS lg_matchups (
   PRIMARY KEY (snapshot_id, week, team_id)
 );
 
+CREATE TABLE IF NOT EXISTS lg_roster_slots (
+  snapshot_id INTEGER NOT NULL,
+  position TEXT NOT NULL,
+  slot_count INTEGER NOT NULL,
+  is_starting INTEGER NOT NULL,
+  PRIMARY KEY (snapshot_id, position)
+);
+
+CREATE TABLE IF NOT EXISTS lg_scoring_rules (
+  snapshot_id INTEGER NOT NULL,
+  stat_id INTEGER NOT NULL,
+  name TEXT,
+  display_name TEXT,
+  value REAL,
+  PRIMARY KEY (snapshot_id, stat_id)
+);
+
+CREATE TABLE IF NOT EXISTS lg_lineups (
+  snapshot_id INTEGER NOT NULL,
+  week INTEGER NOT NULL,
+  team_id INTEGER NOT NULL,
+  external_id TEXT NOT NULL,
+  player_id TEXT,
+  match_method TEXT,
+  name TEXT,
+  position TEXT,
+  team TEXT,
+  selected_position TEXT,
+  points REAL,
+  PRIMARY KEY (snapshot_id, week, team_id, external_id)
+);
+
 CREATE TABLE IF NOT EXISTS lg_bid_imports (
   import_id INTEGER PRIMARY KEY AUTOINCREMENT,
   imported_at TEXT NOT NULL,
@@ -227,7 +277,7 @@ CREATE TABLE IF NOT EXISTS lg_bids (
 );
 """
 TABLES = ("lg_snapshots", "lg_teams", "lg_transactions", "lg_transaction_players", "lg_rosters", "lg_matchups",
-          "lg_bid_imports", "lg_bids")
+          "lg_roster_slots", "lg_scoring_rules", "lg_lineups", "lg_bid_imports", "lg_bids")
 DEFAULT_BIDS_CSV = DEFAULT_REPORT_DIR / "manual" / "bids.csv"
 BID_COLUMNS = ("award_date", "player", "winning_team", "winning_amount", "losing_team", "losing_amount")
 BIDS_TEMPLATE = """\
@@ -291,23 +341,40 @@ def team_id_of(team_key):
     return int(team_key.rsplit(".t.", 1)[1]) if team_key else None
 
 
-def _fetch(league_key, session, open_session, deadline):
+def _fetch(league_key, session, open_session, deadline, skip_lineup_weeks=()):
     out = {r: {"ok": False, "error": None, "http_status": None, "n_pages": 0, "raw_bytes": None, "payloads": []} for r in RESOURCES}
     pages = defaultdict(list)
     meta = {}
 
-    def get(resource, path):
+    def get(resource, path, base=None):
+        """`path` under the league by default; `base` names another resource of the same league (a team)."""
         if time.monotonic() > deadline:
             raise TimeoutError("ran out of time")
-        resp = session.get(f"{API}league/{league_key}/{path}?format=json", timeout=REQUEST_TIMEOUT_S)
+        resp = session.get(f"{API}{base or 'league/' + league_key}/{path}?format=json", timeout=REQUEST_TIMEOUT_S)
+        shown = path if base is None else f"{base}/{path}".replace(league_key, "<league>")
         out[resource]["http_status"] = resp.status_code
-        pages[resource].append({"path": path, "http_status": resp.status_code, "body": resp.text})
+        pages[resource].append({"path": shown, "http_status": resp.status_code, "body": resp.text})
         if resp.status_code != 200:
-            raise RuntimeError(f"HTTP {resp.status_code} on {path}")
+            raise RuntimeError(f"HTTP {resp.status_code} on {shown}")
         payload = resp.json()
-        meta.update({k: v for k, v in payload["fantasy_content"]["league"][0].items() if k in ("current_week", "start_week", "end_week")})
+        if base is None:
+            meta.update({k: v for k, v in payload["fantasy_content"]["league"][0].items()
+                         if k in ("current_week", "start_week", "end_week")})
         out[resource]["payloads"].append(payload)
         return payload
+
+    def lineups():
+        """The final lineup of the latest completed week, and of any completed week not stored yet: one call per team."""
+        if not (out["teams"]["ok"] and out["scoreboard"]["ok"]):
+            raise RuntimeError("needs the teams and the scoreboard, and one of them could not be read")
+        team_ids = [r["team_id"] for r in parse_teams(out["teams"]["payloads"])]
+        status = defaultdict(set)
+        for r in parse_scoreboard(out["scoreboard"]["payloads"]):
+            status[r["week"]].add(r["status"])
+        done = sorted(w for w, seen in status.items() if seen == {"postevent"})
+        for week in [w for w in done if w == done[-1] or w not in skip_lineup_weeks]:
+            for team_id in team_ids:
+                get("lineups", f"roster;week={week}/players/stats;type=week;week={week}", base=f"team/{league_key}.t.{team_id}")
 
     def transactions():
         for page in range(MAX_TX_PAGES):
@@ -329,7 +396,8 @@ def _fetch(league_key, session, open_session, deadline):
             out[r]["error"] = f"{type(e).__name__}: {e}".replace(league_key, "<league>")
         return out
     for resource, work in (("teams", lambda: get("teams", "teams")), ("transactions", transactions),
-                           ("rosters", lambda: get("rosters", "teams/roster")), ("scoreboard", scoreboard)):
+                           ("rosters", lambda: get("rosters", "teams/roster")), ("scoreboard", scoreboard),
+                           ("settings", lambda: get("settings", "settings")), ("lineups", lineups)):
         try:
             work()
             out[resource]["ok"] = True
@@ -342,14 +410,16 @@ def _fetch(league_key, session, open_session, deadline):
     return out
 
 
-def fetch(league_key, session=None, open_session=league_availability.open_session, budget_s=FETCH_BUDGET_S):
+def fetch(league_key, session=None, open_session=league_availability.open_session, budget_s=FETCH_BUDGET_S, skip_lineup_weeks=()):
     """-> {resource: dict(ok, error, http_status, n_pages, raw_bytes, payloads)}
-    for every resource in RESOURCES. Never raises, and never takes much longer
-    than budget_s: the work runs in a thread that is left behind if Yahoo (or
-    the token refresh, which has no timeout of its own) hangs."""
+    for every resource in RESOURCES. skip_lineup_weeks: completed weeks whose
+    lineups are already stored (the latest completed week is fetched anyway).
+    Never raises, and never takes much longer than budget_s: the work runs in
+    a thread that is left behind if Yahoo (or the token refresh, which has no
+    timeout of its own) hangs."""
     box = {}
-    worker = threading.Thread(target=lambda: box.update(out=_fetch(league_key, session, open_session, time.monotonic() + budget_s)),
-                              daemon=True)
+    worker = threading.Thread(target=lambda: box.update(out=_fetch(league_key, session, open_session, time.monotonic() + budget_s,
+                                                                    skip_lineup_weeks)), daemon=True)
     worker.start()
     worker.join(budget_s + REQUEST_TIMEOUT_S)
     return box.get("out") or {r: {"ok": False, "error": f"no answer from Yahoo within {budget_s + REQUEST_TIMEOUT_S}s",
@@ -447,10 +517,76 @@ def parse_scoreboard(payloads):
     return rows
 
 
+def parse_settings(payloads):
+    """-> (roster slots, scoring rules): how many of each lineup slot a team
+    has, and every stat category that is worth points."""
+    st = _league_body(payloads[0], "settings")[0]
+    slots = [{"position": p["roster_position"]["position"], "slot_count": int(p["roster_position"]["count"]),
+              "is_starting": int(p["roster_position"].get("is_starting_position") or 0)} for p in st["roster_positions"]]
+    names = {int(c["stat"]["stat_id"]): c["stat"] for c in st["stat_categories"]["stats"]}
+    rules = [{"stat_id": int(m["stat"]["stat_id"]), "name": names.get(int(m["stat"]["stat_id"]), {}).get("name"),
+              "display_name": names.get(int(m["stat"]["stat_id"]), {}).get("display_name"), "value": float(m["stat"]["value"])}
+             for m in st["stat_modifiers"]["stats"]]
+    return slots, rules
+
+
+def parse_lineups(payloads):
+    """One row per rostered player per team per week: lineup slot and the
+    fantasy points Yahoo gave him that week. One payload per team-week."""
+    rows = []
+    for payload in payloads:
+        team = payload["fantasy_content"]["team"]
+        team_id = int(flat(team[0])["team_id"])
+        roster = next(p["roster"] for p in team[1:] if isinstance(p, dict) and "roster" in p)
+        for p in numbered(roster["0"]["players"]):
+            extra = {}
+            for x in p["player"][1:]:
+                if isinstance(x, dict):
+                    extra.update(x)
+            rows.append(dict(_player(p["player"]), week=int(roster["week"]), team_id=team_id,
+                             selected_position=flat(extra["selected_position"]).get("position"),
+                             points=float(extra["player_points"]["total"])))
+    return rows
+
+
 # ------------------------------------------------------------------ snapshot
 
+def lineup_weeks_stored(con):
+    """Weeks that have a final lineup on record."""
+    return {r[0] for r in con.execute("SELECT DISTINCT l.week FROM lg_lineups l JOIN lg_snapshots s ON s.snapshot_id = l.snapshot_id "
+                                      "WHERE s.ok=1")}
+
+
+def week_lineups(con, week):
+    """{team_id: [row]} -- every team's final lineup of `week` with player
+    points, from the newest snapshot that holds that week; {} if none does."""
+    sid = con.execute("SELECT MAX(l.snapshot_id) FROM lg_lineups l JOIN lg_snapshots s ON s.snapshot_id = l.snapshot_id "
+                      "WHERE s.ok=1 AND l.week=?", (week,)).fetchone()[0]
+    out = defaultdict(list)
+    for r in con.execute("SELECT * FROM lg_lineups WHERE snapshot_id=? AND week=? ORDER BY team_id, external_id", (sid, week)):
+        out[r["team_id"]].append(dict(r))
+    return dict(out)
+
+
+def roster_slots(con):
+    """[(position, count)] of the STARTING slots, from the newest settings snapshot; [] before one exists."""
+    snap = latest_ok(con, "settings")
+    return [] if snap is None else [(r[0], r[1]) for r in con.execute(
+        "SELECT position, slot_count FROM lg_roster_slots WHERE snapshot_id=? AND is_starting=1 ORDER BY rowid", (snap[0],))]
+
+
+def default_team(con):
+    """The team this installation is "for": the one Yahoo says the logged-in
+    account owns. A default only -- everything computed per team takes a team
+    id, and any command that needs one accepts another."""
+    snap = latest_ok(con, "teams")
+    row = con.execute("SELECT team_id FROM lg_teams WHERE snapshot_id=? AND is_mine=1 ORDER BY team_id LIMIT 1",
+                      (snap[0],)).fetchone() if snap else None
+    return row[0] if row else None
+
+
 def take_snapshot(con, league_key, raw_dir, roster_csv, now=None, fetcher=None):
-    """Fetch all four resources and append them: one lg_snapshots row each plus
+    """Fetch every resource and append it: one lg_snapshots row each plus
     the parsed rows. raw_dir has no default on purpose (a test can't write
     into the real raw/league/). -> {resource: dict(ok, error, n_rows, snapshot_id)}.
     Never raises."""
@@ -462,7 +598,7 @@ def take_snapshot(con, league_key, raw_dir, roster_csv, now=None, fetcher=None):
         got = {r: {"ok": False, "error": why, "http_status": None, "n_pages": 0, "raw_bytes": None, "payloads": []} for r in RESOURCES}
         league_key = None
     else:
-        got = (fetcher or fetch)(league_key)   # looked up at call time
+        got = (fetcher or fetch)(league_key, skip_lineup_weeks=lineup_weeks_stored(con))   # looked up at call time
     try:
         yahoo_ids, roster_names = league_availability.load_roster_index(roster_csv)
         ref_names = ownership.build_name_index(con)
@@ -488,9 +624,14 @@ def take_snapshot(con, league_key, raw_dir, roster_csv, now=None, fetcher=None):
                 ledger.insert_rows(con, table, [dict(r, snapshot_id=sid) for r in rows])
         return sid
 
+    def settings(payloads):
+        slots, rules = parse_settings(payloads)
+        return {"lg_roster_slots": slots, "lg_scoring_rules": rules}
+
     parsers = {"teams": lambda p: {"lg_teams": parse_teams(p)}, "transactions": transactions,
                "rosters": lambda p: {"lg_rosters": mapped(parse_rosters(p))},
-               "scoreboard": lambda p: {"lg_matchups": parse_scoreboard(p)}}
+               "scoreboard": lambda p: {"lg_matchups": parse_scoreboard(p)}, "settings": settings,
+               "lineups": lambda p: {"lg_lineups": mapped(parse_lineups(p))}}
     for resource in RESOURCES:
         res, tables = got[resource], {}
         ok, error = bool(res["ok"]), res["error"]
@@ -848,6 +989,30 @@ def bidder_activity(con, activity, in_window):
             f"file counts as uncontested, whether or not it has been entered yet", bids)
 
 
+def bid_margins(activity, offers, team_id):
+    """A team's winning waiver claims in the window with what the next-highest
+    offer was: [dict(transaction_id, when, added, won_at, next_offer,
+    next_team_id, margin, n_offers, check)]. next_* and margin are None when
+    no losing offer has been entered for the award (uncontested, or not typed
+    in yet). `activity` is team_activity()'s result, `offers` every linked
+    hand-entered losing offer (losing_bids()[0])."""
+    by_award = defaultdict(list)
+    for o in offers:
+        if o["award"]:
+            by_award[o["award"]["transaction_id"]].append(o)
+    out = []
+    for e in activity.get(team_id, []):
+        if not e["waiver"]:
+            continue
+        others = sorted(by_award.get(e["transaction_id"], []), key=lambda o: -o["losing_amount"])
+        top = others[0] if others else None
+        out.append({"transaction_id": e["transaction_id"], "when": e["when"], "added": e["added"], "won_at": e["faab_bid"],
+                    "next_offer": top["losing_amount"] if top else None, "next_team_id": top["losing_team_id"] if top else None,
+                    "margin": e["faab_bid"] - top["losing_amount"] if top else None, "n_offers": len(others),
+                    "check": top["check"] if top else None})
+    return out
+
+
 def current_week(con, today=None):
     """The league week the report is for, or None before any scoreboard snapshot."""
     snap = latest_ok(con, "scoreboard")
@@ -855,9 +1020,10 @@ def current_week(con, today=None):
     return report_window(weeks, today or datetime.now(LEAGUE_TZ).date())[1] if weeks else None
 
 
-def build_report(con, today=None, n_weeks=REPORT_WEEKS):
+def build_report(con, today=None, n_weeks=REPORT_WEEKS, team_id=None):
     """The league activity report as markdown, or None when a needed snapshot
-    is missing. Holds team names and manager nicknames: local only."""
+    is missing. Holds team names and manager nicknames: local only. team_id:
+    whose winning bids get the margin section (default: default_team)."""
     snaps = {r: latest_ok(con, r) for r in ("teams", "transactions", "scoreboard")}
     if any(v is None for v in snaps.values()):
         return None
@@ -868,6 +1034,7 @@ def build_report(con, today=None, n_weeks=REPORT_WEEKS):
     first, current, start, end = report_window(weeks, today, n_weeks)
     teams = [dict(r) for r in con.execute("SELECT * FROM lg_teams WHERE snapshot_id=? ORDER BY team_id", (snaps["teams"][0],))]
     name = {t["team_id"]: t["team_name"] for t in teams}
+    mine = team_id if team_id is not None else default_team(con)
     activity = team_activity(con, snaps["transactions"][0], start, end)
     offers, in_window = losing_bids(con, snaps["transactions"][0], start, end)
     basis, bids = bidder_activity(con, activity, in_window)
@@ -903,33 +1070,26 @@ def build_report(con, today=None, n_weeks=REPORT_WEEKS):
         evs = activity.get(t["team_id"], [])
         claims = [e for e in evs if e["waiver"]]
         lines.append(
-            f"| {t['team_name']}{' (me)' if t['is_mine'] else ''} | {t['manager_nickname'] or ''} | "
+            f"| {t['team_name']}{' (me)' if t['team_id'] == mine else ''} | {t['manager_nickname'] or ''} | "
             f"{'?' if t['faab_balance'] is None else '$' + str(t['faab_balance'])} | ${season_spent.get(t['team_id'], 0)} | {len(claims)} | "
             f"{len(lost[t['team_id']]) if in_window else 'n/a'} | "
             f"${sum(e['faab_bid'] for e in claims)} | {sum(1 for e in evs if e['added'] and not e['waiver'] and e['type'] != 'trade')} | "
             f"{sum(len(e['dropped']) for e in evs if e['type'] != 'trade')} | {sum(1 for e in evs if e['type'] == 'trade')} | "
             f"{'**yes**' if bids.get(t['team_id'], 0) >= ACTIVE_BIDDER_MIN else 'no'} |")
 
-    # my winning bids: how much more than the next offer I paid
-    mine = next((t["team_id"] for t in teams if t["is_mine"]), None)
-    by_award = defaultdict(list)
-    for o in offers:
-        if o["award"]:
-            by_award[o["award"]["transaction_id"]].append(o)
+    # the chosen team's winning bids: how much more than the next offer it paid
     lines += ["", "## My winning bids: margin over the second-highest offer", ""]
-    won = [e for e in activity.get(mine, []) if e["waiver"]]
+    won = bid_margins(activity, offers, mine)
     if not won:
         lines.append("No winning waiver claims in the window.")
-    for e in won:
-        others = sorted(by_award.get(e["transaction_id"], []), key=lambda o: -o["losing_amount"])
-        if others:
-            second = others[0]
-            lines.append(f"- {day(e['when'])} -- {', '.join(e['added'])}: won at ${e['faab_bid']}, next offer ${second['losing_amount']} "
-                         f"({name.get(second['losing_team_id'], '?')}) -- **margin ${e['faab_bid'] - second['losing_amount']}**"
-                         + (f", {len(others)} losing offers" if len(others) > 1 else "")
-                         + ("" if second["check"] == "ok" else " -- CHECK: the typed winner doesn't match Yahoo's, see below"))
+    for m in won:
+        if m["next_offer"] is not None:
+            lines.append(f"- {day(m['when'])} -- {', '.join(m['added'])}: won at ${m['won_at']}, next offer ${m['next_offer']} "
+                         f"({name.get(m['next_team_id'], '?')}) -- **margin ${m['margin']}**"
+                         + (f", {m['n_offers']} losing offers" if m["n_offers"] > 1 else "")
+                         + ("" if m["check"] == "ok" else " -- CHECK: the typed winner doesn't match Yahoo's, see below"))
         else:
-            lines.append(f"- {day(e['when'])} -- {', '.join(e['added'])}: won at ${e['faab_bid']}, no losing offer entered "
+            lines.append(f"- {day(m['when'])} -- {', '.join(m['added'])}: won at ${m['won_at']}, no losing offer entered "
                          f"(uncontested, or not typed in yet)")
 
     flagged = [o for o in offers if o["check"] != "ok"]
@@ -945,7 +1105,7 @@ def build_report(con, today=None, n_weeks=REPORT_WEEKS):
 
     for t in teams:
         evs = [(e["when"], 0, e) for e in activity.get(t["team_id"], [])] + [(o["when"], 1, o) for o in lost[t["team_id"]]]
-        lines += ["", f"## {t['team_name']}{' (me)' if t['is_mine'] else ''}", ""]
+        lines += ["", f"## {t['team_name']}{' (me)' if t['team_id'] == mine else ''}", ""]
         if not evs:
             lines.append("No transactions in the window.")
             continue
@@ -960,6 +1120,57 @@ def build_report(con, today=None, n_weeks=REPORT_WEEKS):
                                + ([("gave " if e["type"] == "trade" else "-") + ", ".join(e["dropped"])] if e["dropped"] else []))
             lines.append(f"- {day(when)} -- {how}: {moved}")
     return "\n".join(lines) + "\n"
+
+
+# ------------------------------------------------- scoring: Yahoo vs the tracker
+
+def scoring_check(con, tracker_rules, unsupported=("pick_six",)):
+    """Compare the league's own scoring rules (newest settings snapshot) with
+    the tracker's. -> dict(ok, lines, unsupported): `lines` one per category
+    that differs or that the tracker has no rule for; `unsupported` the
+    categories the league scores that the tracker knowingly cannot."""
+    snap = latest_ok(con, "settings")
+    if snap is None:
+        return {"ok": False, "lines": ["no settings snapshot yet -- run `snapshot` first"], "unsupported": []}
+    lines, known = [], []
+    yahoo = {}
+    for name, value in con.execute("SELECT name, value FROM lg_scoring_rules WHERE snapshot_id=?", (snap[0],)):
+        key = YAHOO_RULES.get(name)
+        if key is None:
+            if value:
+                lines.append(f"Yahoo scores '{name}' at {value:g}; the tracker has no such category")
+            continue
+        yahoo[key] = value
+        if key in unsupported:
+            known.append(f"{name} ({value:g}): not scored by the tracker -- nflverse's weekly stats have no column for it")
+        elif tracker_rules.get(key) is None:
+            if value:
+                lines.append(f"{key}: Yahoo {value:g}, tracker has no rule")
+        elif abs(float(tracker_rules[key]) - value) > 1e-9:
+            lines.append(f"{key}: Yahoo {value:g}, tracker {tracker_rules[key]:g}")
+    lines += [f"{key}: tracker {value:g}, but Yahoo doesn't score it" for key, value in tracker_rules.items()
+              if key not in yahoo and value]
+    return {"ok": not lines, "lines": lines, "unsupported": known}
+
+
+def points_check(con, store, season, weeks=None):
+    """Yahoo's fantasy points for every rostered player-week on record against
+    the same player's points from nflverse stats under the tracker's rules
+    (`store`: a tracker scoring.StatsStore). -> dict(n, same, differ): differ
+    is [(week, name, position, yahoo points, tracker points)]."""
+    n = same = 0
+    differ = []
+    for week in sorted(weeks or lineup_weeks_stored(con)):
+        rows = store.week_rows(season, week)
+        for team_rows in week_lineups(con, week).values():
+            for r in team_rows:
+                ours = rows[r["player_id"]]["points"] if r["player_id"] in rows else 0.0
+                n += 1
+                if abs(r["points"] - ours) < 0.005:
+                    same += 1
+                else:
+                    differ.append((week, r["name"], r["position"], r["points"], round(ours, 2)))
+    return {"n": n, "same": same, "differ": differ}
 
 
 # ----------------------------------------------------------------------- CLI
@@ -991,6 +1202,27 @@ def cmd_report(args):
     path.write_text(md, encoding="utf-8")
     print(f"[SAVED] {path}")   # the path only: the report itself names managers
     return 0
+
+
+def cmd_check_scoring(args):
+    sys.path.insert(0, str(REPO_ROOT / "tracker"))
+    import scoring                       # the tracker's; imported here so the data layer itself doesn't depend on it
+    cfg = scoring.load_config(args.config)
+    con = connect(args.db)
+    try:
+        rules = scoring_check(con, cfg["scoring"], scoring.UNSUPPORTED_RULES)
+        pts = points_check(con, scoring.StatsStore(args.stats_dir, cfg["scoring"]), args.season)
+    finally:
+        con.close()
+    for line in rules["lines"]:
+        print(f"[SCORING] RULE DIFFERS: {line}")
+    for line in rules["unsupported"]:
+        print(f"[SCORING] known gap: {line}")
+    for week, name, pos, yahoo, ours in pts["differ"]:
+        print(f"[SCORING] points differ: week {week} {name} ({pos}): Yahoo {yahoo:.2f}, tracker {ours:.2f}")
+    print(f"[SCORING] rules {'match Yahoo' if rules['ok'] else 'DO NOT match Yahoo'}; {pts['same']} of {pts['n']} rostered "
+          f"player-weeks equal Yahoo's points exactly, {len(pts['differ'])} differ")
+    return 0 if rules["ok"] else 1
 
 
 def cmd_import_bids(args):
@@ -1032,6 +1264,12 @@ def build_parser():
     p.add_argument("--season", type=int, default=utcnow().year if utcnow().month >= 3 else utcnow().year - 1)
     p.add_argument("--roster", default=None, help="weekly roster CSV for the Yahoo -> gsis id match (default: nflverse_raw's)")
     p.set_defaults(fn=cmd_snapshot)
+    p = sub.add_parser("check-scoring", help="compare Yahoo's scoring rules and player points with the tracker's (read-only)")
+    p.add_argument("--db", default=str(DEFAULT_DB))
+    p.add_argument("--config", default=None, help="tracker hit config to check (default tracker/hit_config.json)")
+    p.add_argument("--stats-dir", default=str(REPO_ROOT / "nflverse_raw"))
+    p.add_argument("--season", type=int, default=utcnow().year if utcnow().month >= 3 else utcnow().year - 1)
+    p.set_defaults(fn=cmd_check_scoring)
     p = sub.add_parser("import-bids", help="bring the stored losing FAAB offers in line with the hand-typed CSV")
     p.add_argument("--db", default=str(DEFAULT_DB))
     p.add_argument("--file", default=str(DEFAULT_BIDS_CSV), help="created with a header and an example line if it doesn't exist")
