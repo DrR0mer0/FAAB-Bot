@@ -34,6 +34,26 @@ job's exit status or its OK/FAILED line (it adds a note to that line), it runs
 whether the log step logged, skipped or refused, and a check that can't run at
 all is just noted.
 
+WHEN A TASK STARTS (changed 2026-10-14). Each task has two triggers: its
+time of day, and the user's sign-in (2 minutes after it). The sign-in trigger
+exists because a task "run only when the user is logged on" cannot run while
+the PC sits at the sign-in screen -- on 2026-10-14 a Windows Update restart at
+04:09 left it there until 08:49, both daily jobs were missed, and "run as soon
+as possible after a missed start" did not catch them up at sign-in (a missed
+start is only caught up when the scheduler can run it, e.g. on resume from
+hibernate into a signed-in session, as on 2026-10-05). A task also wakes the
+PC from hibernate (WakeToRun; this PC allows wake timers on AC), and no longer
+waits for "a network connection": a run without network fails loudly, where a
+network-gated skip was silent. In Modern Standby the tasks already ran on time.
+
+The tasks call `run <job> --scheduled`. A scheduled run first asks whether the
+job's most recent due time (today's, once it has passed; else the previous
+scheduled day's) already has a line in scheduled_runs.log -- OK, FAILED, SKIP
+or MISSED alike. If so it exits 0 and writes nothing, so a sign-in never
+repeats a job that ran, and never repeats a failure box. Otherwise it runs as
+before. That also means a log job's MISSED box appears once per missed slot,
+not at every sign-in. A run by hand (no --scheduled) always runs.
+
 FAILING LOUDLY BUT HARMLESSLY. `log --auto` resolves the week itself and skips
 quietly (exit 0) when the week has no such slot or the slot is already in the
 ledger. Everything else is a failure: a non-zero exit, a FAILED line in
@@ -151,6 +171,42 @@ def show_alert(title, text):
         pass
 
 
+DUE_TOLERANCE = timedelta(minutes=1)   # a trigger that fires a moment early still counts as that day's run
+
+
+def due_instant(job, now):
+    """The job's most recent scheduled time at or before `now` (plus a minute's
+    tolerance): today's once it has passed, else the previous scheduled day's."""
+    h, m = (int(x) for x in JOBS[job]["time"].split(":"))
+    weekday = JOBS[job]["weekday"]
+    due = now.replace(hour=h, minute=m, second=0, microsecond=0)
+    while due > now + DUE_TOLERANCE or (weekday is not None and due.weekday() != weekday):
+        due -= timedelta(days=1)
+    return due
+
+
+def already_handled(job, now, log_dir=None):
+    """True when scheduled_runs.log has a line for `job` at or after its most
+    recent due time -- whatever that run's outcome. A missing or unreadable
+    log counts as nothing handled (the job then runs)."""
+    since = due_instant(job, now)
+    try:
+        lines = (Path(log_dir or LOG_DIR) / SUMMARY_LOG).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    for ln in lines:
+        parts = ln.split()
+        if len(parts) < 3 or parts[2] != job:
+            continue
+        try:
+            when = datetime.strptime(f"{parts[0]} {parts[1]}", "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+        if when >= since:
+            return True
+    return False
+
+
 def run_job(job, now=None, log_dir=LOG_DIR, run=run_step, alert=show_alert, force_day=False):
     """Run one job; returns its exit code (0 = done or nothing to do)."""
     now = now or datetime.now()
@@ -222,7 +278,7 @@ def task_xml(job, user, now, time_override=None):
     else:
         schedule = (f"<ScheduleByWeek><DaysOfWeek><{WEEKDAYS[cfg['weekday']]} /></DaysOfWeek>"
                     f"<WeeksInterval>1</WeeksInterval></ScheduleByWeek>")
-    args = f'"{Path(__file__).resolve()}" run {job}'
+    args = f'"{Path(__file__).resolve()}" run {job} --scheduled'
     return f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
@@ -234,6 +290,11 @@ def task_xml(job, user, now, time_override=None):
       <Enabled>true</Enabled>
       {schedule}
     </CalendarTrigger>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>{escape(user)}</UserId>
+      <Delay>PT2M</Delay>
+    </LogonTrigger>
   </Triggers>
   <Principals>
     <Principal id="Author">
@@ -247,8 +308,8 @@ def task_xml(job, user, now, time_override=None):
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
     <StartWhenAvailable>true</StartWhenAvailable>
-    <RunOnlyIfNetworkAvailable>true</RunOnlyIfNetworkAvailable>
-    <WakeToRun>false</WakeToRun>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <WakeToRun>true</WakeToRun>
     <ExecutionTimeLimit>PT1H</ExecutionTimeLimit>
     <Enabled>true</Enabled>
   </Settings>
@@ -315,6 +376,8 @@ def main(argv=None):
     p.add_argument("job", choices=sorted(JOBS))
     p.add_argument("--no-popup", action="store_true", help="on failure, log only -- no message box")
     p.add_argument("--force-day", action="store_true", help="run a log job even though today isn't its weekday")
+    p.add_argument("--scheduled", action="store_true",
+                   help="what the tasks pass: do nothing if this job's latest due run is already in scheduled_runs.log")
     p = sub.add_parser("install", help="register (or replace) the scheduled tasks for the current user")
     p.add_argument("--snapshot-time", default=None, help="HH:MM local (default 06:30)")
     p.add_argument("--log-time", default=None, help="HH:MM local for both log jobs (default 07:00)")
@@ -327,6 +390,10 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     if args.cmd == "run":
+        if args.scheduled and already_handled(args.job, datetime.now()):
+            if sys.stdout is not None:
+                print(f"[SKIP] {args.job}: its latest due run is already in {SUMMARY_LOG} -- nothing to do")
+            return 0
         rc = run_job(args.job, alert=(lambda *_: None) if args.no_popup else show_alert, force_day=args.force_day)
         if sys.stdout is not None:  # None under pythonw.exe
             print((LOG_DIR / SUMMARY_LOG).read_text(encoding="utf-8").splitlines()[-1])

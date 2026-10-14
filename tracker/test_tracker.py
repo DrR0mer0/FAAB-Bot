@@ -2079,15 +2079,74 @@ class TestScheduledRun(unittest.TestCase):
         self.assertEqual(code, 127)
         self.assertIn("could not start", out)
 
-    def test_task_definitions_run_missed_starts_and_never_wake_the_pc(self):
+    # ---- scheduled runs: the time trigger, a missed start caught up, or a sign-in
+
+    def test_due_instant_is_the_latest_scheduled_time_with_a_minute_of_tolerance(self):
+        due = scheduled_run.due_instant
+        wed = datetime(2026, 10, 14, 8, 49, 44)                                        # today's sign-in after the update restart
+        self.assertEqual(due("snapshot", wed), datetime(2026, 10, 14, 6, 30))
+        self.assertEqual(due("snapshot", datetime(2026, 10, 14, 6, 0)), datetime(2026, 10, 13, 6, 30))   # before today's time
+        self.assertEqual(due("snapshot", datetime(2026, 10, 14, 6, 29, 30)), datetime(2026, 10, 14, 6, 30))   # a trigger a moment early
+        self.assertEqual(due("log-thu", wed), datetime(2026, 10, 8, 7, 0))            # last Thursday's
+        self.assertEqual(due("log-thu", datetime(2026, 10, 15, 6, 50)), datetime(2026, 10, 8, 7, 0))
+        self.assertEqual(due("log-thu", datetime(2026, 10, 15, 13, 0)), datetime(2026, 10, 15, 7, 0))
+        self.assertEqual(due("log-sun", wed), datetime(2026, 10, 11, 7, 0))
+
+    def write_summary(self, *lines):
+        self.logs.mkdir(parents=True, exist_ok=True)
+        (self.logs / scheduled_run.SUMMARY_LOG).write_text("".join(ln + "\n" for ln in lines), encoding="utf-8")
+
+    def test_a_sign_in_after_the_job_ran_does_nothing(self):
+        self.write_summary("2026-10-14 06:30:02  snapshot  OK     exit=0  [OWNERSHIP] ESPN ok  | x.log",
+                           "2026-10-14 06:35:01  league    FAILED exit=1  [LEAGUE DATA] rosters FAILED  | y.log")
+        at_sign_in = datetime(2026, 10, 14, 8, 51, 44)
+        self.assertTrue(scheduled_run.already_handled("snapshot", at_sign_in, self.logs))
+        self.assertTrue(scheduled_run.already_handled("league", at_sign_in, self.logs))       # a failure was already shown: not again
+        self.assertFalse(scheduled_run.already_handled("snapshot", datetime(2026, 10, 15, 6, 30, 1), self.logs))   # next day's run
+
+    def test_a_sign_in_after_the_update_restart_catches_up_the_missed_daily_jobs(self):
+        """2026-10-14: restart at 04:09, nobody signed in until 08:49, both 06:30 / 06:35 runs missed."""
+        self.write_summary("2026-10-13 06:30:02  snapshot  OK     exit=0  [OWNERSHIP] ESPN ok  | x.log",
+                           "2026-10-13 06:35:01  league    OK     exit=0  [LEAGUE DATA] ok  | y.log")
+        at_sign_in = datetime(2026, 10, 14, 8, 51, 44)
+        self.assertFalse(scheduled_run.already_handled("snapshot", at_sign_in, self.logs))
+        self.assertFalse(scheduled_run.already_handled("league", at_sign_in, self.logs))
+        self.assertTrue(scheduled_run.already_handled("snapshot", datetime(2026, 10, 14, 6, 0), self.logs))   # signed in early: wait for 06:30
+
+    def test_a_late_thursday_sign_in_runs_the_log_and_a_friday_one_reports_a_missed_slot_once(self):
+        self.write_summary("2026-10-08 07:00:00  log-thu   OK     exit=0  [LOGGED] 2026w05-thu  | a.log")
+        self.assertFalse(scheduled_run.already_handled("log-thu", datetime(2026, 10, 15, 8, 51), self.logs))   # Thursday, missed 07:00
+        self.assertTrue(scheduled_run.already_handled("log-thu", datetime(2026, 10, 14, 8, 51), self.logs))    # a Wednesday sign-in
+        # Thursday never ran; the first sign-in on Friday gets the MISSED box, later ones nothing
+        friday = datetime(2026, 10, 16, 9, 0)
+        self.assertFalse(scheduled_run.already_handled("log-thu", friday, self.logs))
+        self.assertEqual(self.run_job("log-thu", friday, []), 3)
+        self.assertIn("MISSED", self.summary()[-1])
+        self.assertTrue(scheduled_run.already_handled("log-thu", friday.replace(hour=13), self.logs))
+
+    def test_no_summary_log_means_nothing_handled(self):
+        self.assertFalse(scheduled_run.already_handled("snapshot", datetime(2026, 10, 14, 9, 0), self.logs))
+
+    def test_cli_scheduled_run_that_is_already_handled_runs_no_step(self):
+        self.write_summary(f"{datetime.now():%Y-%m-%d %H:%M:%S}  snapshot  OK     exit=0  [OWNERSHIP] ESPN ok  | x.log")
+        with mock.patch.object(scheduled_run, "LOG_DIR", self.logs), mock.patch.object(scheduled_run, "run_job") as run_job,                 mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            self.assertEqual(scheduled_run.main(["run", "snapshot", "--scheduled"]), 0)
+        run_job.assert_not_called()
+        self.assertIn("[SKIP] snapshot", out.getvalue())
+
+    def test_task_definitions_catch_up_at_sign_in_wake_from_hibernate_and_never_wait_for_network(self):
         now = datetime(2026, 10, 3, 10, 0, 0)  # a Saturday
         starts = {}
         for job in scheduled_run.JOBS:
             xml = scheduled_run.task_xml(job, "PC\\me", now)
             self.assertIn("<StartWhenAvailable>true</StartWhenAvailable>", xml)
-            self.assertIn("<WakeToRun>false</WakeToRun>", xml)
-            self.assertIn("<LogonType>InteractiveToken</LogonType>", xml)
-            self.assertIn(f'scheduled_run.py" run {job}', xml)
+            self.assertIn("<WakeToRun>true</WakeToRun>", xml)
+            self.assertIn("<RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>", xml)   # a silent skip; a run fails loudly
+            self.assertIn("<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>", xml)
+            self.assertIn("<LogonType>InteractiveToken</LogonType>", xml)                        # no stored password
+            self.assertIn("<LogonTrigger>\n      <Enabled>true</Enabled>\n      <UserId>PC\\me</UserId>\n      <Delay>PT2M</Delay>", xml)
+            self.assertEqual(xml.count("<CalendarTrigger>"), 1)
+            self.assertIn(f'scheduled_run.py" run {job} --scheduled', xml)
             starts[job] = xml.split("<StartBoundary>")[1].split("<")[0]
         self.assertEqual(starts, {"snapshot": "2026-10-04T06:30:00", "log-thu": "2026-10-08T07:00:00",
                                   "log-sun": "2026-10-04T07:00:00", "league": "2026-10-04T06:35:00"})
