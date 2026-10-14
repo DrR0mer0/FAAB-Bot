@@ -109,7 +109,7 @@ The scoreboard says plainly when the sample is too small to call a winner. Two k
 
 ## League data (local only)
 
-`league/league_data.py` keeps a daily, append-only record of my own Yahoo league — every transaction (with the winning FAAB bid on waiver claims), each team's remaining budget, rosters, and weekly matchups and scores — and turns it into a short "league activity" report: what each manager did over the last three league weeks, what they have left to spend, who is actively bidding, and how much more than the next offer I paid on the claims I won.
+`league/league_data.py` keeps a daily, append-only record of my own Yahoo league — every transaction (with the winning FAAB bid on waiver claims), each team's remaining budget, rosters, and weekly matchups and scores — and turns it into a short "league activity" report: what each manager did over the last three league weeks, what they have left to spend, who is actively bidding (and whether they still have the budget to outbid anyone), and how much more than the next offer I paid on the claims I won.
 
 ```
 python league/league_data.py snapshot      # daily, from Task Scheduler
@@ -119,7 +119,7 @@ python league/newsletter.py build --week 5   # weekly recap: facts first, then a
 python -m unittest discover -s league -v
 ```
 
-Yahoo's API only reports winning bids. Losing offers are shown on the website, and since Yahoo's terms rule out tools that pull data from its pages, I type those into a CSV by hand; the importer checks each award against the API and flags any whose winner I typed differently. The weekly recap (`league/newsletter.py`) is built facts-first: code computes every number into a facts file, the recap is rendered only from that file, and each fact is labelled with who may see it — the whole league, one team, or only me — so the league version can't contain my private analysis. None of this is in the repo: the database, the raw responses, the reports, the recaps and the CSV all name the league or its managers and are gitignored, and the tests run on a made-up league.
+Yahoo's API only reports winning bids. Losing offers are shown on the website, and since Yahoo's terms rule out tools that pull data from its pages, I type those into a CSV by hand; the importer checks each award against the API and flags any whose winner I typed differently. A `# checked_through:` date in that file, moved forward only after I've gone through the offers page, lets the report call an award nobody else bid on "uncontested" instead of "uncontested, or not typed in yet". The weekly recap (`league/newsletter.py`) is built facts-first: code computes every number into a facts file, the recap is rendered only from that file, and each fact is labelled with who may see it — the whole league, one team, or only me — so the league version can't contain my private analysis. None of this is in the repo: the database, the raw responses, the reports, the recaps and the CSV all name the league or its managers and are gitignored, and the tests run on a made-up league.
 
 ## Method notes
 

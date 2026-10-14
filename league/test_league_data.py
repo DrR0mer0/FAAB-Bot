@@ -498,11 +498,11 @@ class TestReport(LeagueDataCase):
         self.assertIn("Basis: **winning waiver claims only -- no losing offers have been entered for this window.**", md)
         self.assertIn("Transaction ids in the window that Yahoo's list skips: 2 ", md)      # ids 7 and 8, between 6 and 9
         table = report_table(md)
-        #                                  manager  left    season  won  lost   window  FA   drops trades active
-        self.assertEqual(table["Team Name 3 (me)"], ["Nick3", "$57", "$43", "3", "n/a", "$43", "0", "2", "0", "**yes**"])   # a $0 claim is a bid
-        self.assertEqual(table["Team Name 1"], ["Nick1", "$90", "$10", "1", "n/a", "$10", "0", "1", "1", "no"])
-        self.assertEqual(table["Team Name 2"], ["Nick2", "$60", "$40", "0", "n/a", "$0", "1", "1", "1", "no"])              # its $40 claim was in week 2
-        self.assertEqual(table["Team Name 4"], ["Nick4", "$100", "$0", "0", "n/a", "$0", "0", "0", "0", "no"])
+        #                                  manager  left    season  won  lost  paid  typical  window  FA   drops trades active  funded
+        self.assertEqual(table["Team Name 3 (me)"], ["Nick3", "$57", "$43", "3", "n/a", "2", "$21.5", "$43", "0", "2", "0", "**yes**", "**yes**"])  # a $0 claim is a bid, not a paid one
+        self.assertEqual(table["Team Name 1"], ["Nick1", "$90", "$10", "1", "n/a", "1", "$10", "$10", "0", "1", "1", "no", "no"])
+        self.assertEqual(table["Team Name 2"], ["Nick2", "$60", "$40", "0", "n/a", "0", "-", "$0", "1", "1", "1", "no", "no"])           # its $40 claim was in week 2
+        self.assertEqual(table["Team Name 4"], ["Nick4", "$100", "$0", "0", "n/a", "0", "-", "$0", "0", "0", "0", "no", "no"])
         margins = md.split("## My winning bids")[1].split("\n## ")[0]
         self.assertEqual(margins.count("no losing offer entered (uncontested, or not typed in yet)"), 3)
         self.assertNotIn("## Check these entries", md)
@@ -718,11 +718,11 @@ class TestBids(LeagueDataCase):
         self.assertIn("Basis: **all bids -- winning claims from Yahoo's API plus 4 hand-entered losing offer(s) on 3 award(s) in the "
                       "window (bids.csv, imported 2026-10-10; newest award entered 2026-09-30).", md)
         table = report_table(md)
-        #                                  manager  left    season  won  lost  window  FA   drops trades active
-        self.assertEqual(table["Team Name 3 (me)"], ["Nick3", "$57", "$43", "3", "0", "$43", "0", "2", "0", "**yes**"])
-        self.assertEqual(table["Team Name 1"], ["Nick1", "$90", "$10", "1", "1", "$10", "0", "1", "1", "**yes**"])   # one won + one lost
-        self.assertEqual(table["Team Name 2"], ["Nick2", "$60", "$40", "0", "1", "$0", "1", "1", "1", "no"])
-        self.assertEqual(table["Team Name 4"], ["Nick4", "$100", "$0", "0", "2", "$0", "0", "0", "0", "**yes**"])    # never won, bid twice
+        #                                  manager  left    season  won  lost  paid  typical  window  FA   drops trades active  funded
+        self.assertEqual(table["Team Name 3 (me)"], ["Nick3", "$57", "$43", "3", "0", "2", "$21.5", "$43", "0", "2", "0", "**yes**", "**yes**"])
+        self.assertEqual(table["Team Name 1"], ["Nick1", "$90", "$10", "1", "1", "2", "$15", "$10", "0", "1", "1", "**yes**", "**yes**"])  # one won + one lost
+        self.assertEqual(table["Team Name 2"], ["Nick2", "$60", "$40", "0", "1", "1", "$16", "$0", "1", "1", "1", "no", "no"])
+        self.assertEqual(table["Team Name 4"], ["Nick4", "$100", "$0", "0", "2", "2", "$4", "$0", "0", "0", "0", "**yes**", "**yes**"])  # never won, bid twice
         self.assertEqual([ln for ln in md.split("## My winning bids")[1].split("\n## ")[0].splitlines() if ln.startswith("- ")], [
             "- Wed 09-23 -- Week Three Claim (RB, KC): won at $16, next offer $16 (Team Name 2) -- **margin $0**",
             "- Wed 09-30 -- Big Claim (QB, KC): won at $27, next offer $20 (Team Name 1) -- **margin $7**, 2 losing offers",
@@ -732,6 +732,141 @@ class TestBids(LeagueDataCase):
                           "- Wed 09-30 -- losing bid, $3: Other Claim (went to Team Name 1 for $10)"])
         self.assertNotIn("Too Old", md)                      # its award was in week 2
         self.assertNotIn("## Check these entries", md)
+
+    def test_zero_dollar_bids_are_interest_they_make_a_bidder_active_but_not_paid_or_funded(self):
+        # Team 2 bids $0 twice; the $0 award (Late Claim) has a $0 next offer, so priority decided it. Week Three Claim's
+        # winning amount is also mistyped as $0 (Yahoo: $16)
+        self.bids(self.FIXTURE_ROWS.replace("Team Name 2,16\n", "Team Name 2,0\n").replace("Week Three Claim,Team Name 3,16",
+                                                                                                "Week Three Claim,Team Name 3,0")
+                  + "2026-10-07,Late Claim,Team Name 3,0,Team Name 2,0\n")
+        md = league_data.build_report(self.con, today=date(2026, 10, 10))
+        self.assertIn("$0 bids included", md)
+        table = report_table(md)
+        #                                  manager  left    season  won  lost  paid  typical  window  FA   drops trades active  funded
+        self.assertEqual(table["Team Name 2"], ["Nick2", "$60", "$40", "0", "2", "0", "-", "$0", "1", "1", "1", "**yes**", "no"])
+        self.assertEqual(table["Team Name 3 (me)"][5:7], ["2", "$21.5"])     # Yahoo's $16 and $27; the $0 claim is left out
+        margins = [ln for ln in md.split("## My winning bids")[1].split("\n## ")[0].splitlines() if ln.startswith("- ")]
+        self.assertIn("- Wed 10-07 -- Late Claim (RB, KC): won at $0, next offer $0 (Team Name 2) -- decided by waiver priority", margins)
+        self.assertNotIn("margin $0", "\n".join(ln for ln in margins if "Late Claim" in ln))
+        mine = md.split("## Team Name 3 (me)")[1].split("\n## ")[0]
+        self.assertIn("- Wed 10-07 -- waiver claim, $0: +Late Claim (RB, KC) / -Cut Twelve (WR, DET) -- decided by waiver priority", mine)
+        self.assertIn("- Wed 09-30 -- waiver claim, $27: +Big Claim (QB, KC)\n", mine)          # a paid award is not marked
+        two = md.split("## Team Name 2")[1].split("\n## ")[0]
+        self.assertIn("- Wed 10-07 -- losing bid, $0: Late Claim (went to Team Name 3 for $0) -- decided by waiver priority", two)
+        # Week Three Claim is typed as won at $0, but Yahoo has it at $16: flagged, and not called a priority decision
+        self.assertIn("- 2026-09-23 Week Three Claim: typed Team Name 3 for $0; Yahoo has Team Name 3 for $16", md)
+        self.assertEqual(md.count("decided by waiver priority"), 3)
+        # the newsletter's bid margins read the same flag
+        late = [m for m in league_data.bid_margins(*self.activity_and_offers(), 3) if m["won_at"] == 0]
+        self.assertEqual([m["by_priority"] for m in late], [True])
+
+    def test_a_zero_dollar_award_with_no_next_offer_entered_is_not_called_a_priority_decision(self):
+        self.bids()                                  # nothing typed for Late Claim, Team 3's $0 claim
+        md = league_data.build_report(self.con, today=date(2026, 10, 10))
+        self.assertNotIn("decided by waiver priority", md)
+        self.assertIn("Late Claim (RB, KC): won at $0, no losing offer entered (uncontested, or not typed in yet)", md)
+
+    def test_funded_active_bidder_needs_faab_left_at_the_threshold_which_is_configurable(self):
+        self.bids()
+        md = league_data.build_report(self.con, today=date(2026, 10, 10), funded_min=60)
+        self.assertIn("at least one paid bid in the window and at least $60 FAAB left", md)
+        table = report_table(md)
+        self.assertEqual({t: row[-2:] for t, row in table.items()},
+                         {"Team Name 3 (me)": ["**yes**", "no"],       # $57 left: active, paid, but under $60
+                          "Team Name 1": ["**yes**", "**yes**"],       # $90
+                          "Team Name 2": ["no", "no"],
+                          "Team Name 4": ["**yes**", "**yes**"]})      # $100
+        self.assertEqual(report_table(league_data.build_report(self.con, today=date(2026, 10, 10), funded_min=57))["Team Name 3 (me)"][-1],
+                         "**yes**")                                    # at the threshold counts
+        self.assertEqual(league_data.FUNDED_MIN_FAAB, 10)
+        self.assertEqual(league_data.build_parser().parse_args(["report"]).funded_min, 10)
+        self.assertEqual(league_data.build_parser().parse_args(["report", "--funded-min", "25"]).funded_min, 25)
+
+    def margin_lines(self, md):
+        return [ln for ln in md.split("## My winning bids")[1].split("\n## ")[0].splitlines() if ln.startswith("- ")]
+
+    def test_checked_through_line_is_read_strictly(self):
+        today = date(2026, 10, 10)
+        read = league_data.read_checked_through
+        self.assertEqual(read(self.HEADER, today), (None, []))                                   # no line: not set, no complaint
+        self.assertEqual(read("# checked_through:\n" + self.HEADER, today), (None, []))           # blank (the template's): not set
+        self.assertEqual(read("# checked_through: 2026-10-07\n" + self.HEADER, today), (date(2026, 10, 7), []))
+        self.assertEqual(read("\ufeff#Checked_Through : 10/7/2026\n" + self.HEADER, today), (date(2026, 10, 7), []))
+        self.assertEqual(read("# checked_through: 2026-10-10\n", today), (date(2026, 10, 10), []))   # today itself is fine
+        self.assertEqual(read("# checked_through: 2026-10-07,,,,,\n" + self.HEADER, today), (date(2026, 10, 7), []))   # saved by Excel
+        self.assertEqual(read('"# checked_through: 2026-10-07",,\n', today), (date(2026, 10, 7), []))
+        for text, why in (("# checked_through: Oct 7\n", "line 1: checked_through must be YYYY-MM-DD"),
+                          ("# checked_through: 2026-10-11\n", "line 1: checked_through 2026-10-11 is after today (2026-10-10)"),
+                          ("# checked_through: 2026-10-01\n# checked_through: 2026-10-07\n",
+                           "line 2: a second checked_through line (line 1 has one) -- neither is used")):
+            day, problems = read(text, today)
+            self.assertIsNone(day)
+            self.assertEqual(len(problems), 1)
+            self.assertTrue(problems[0].startswith(why), problems)
+        self.assertEqual(read(league_data.BIDS_TEMPLATE, today), (None, []))
+        self.assertEqual(league_data.read_bids_csv(league_data.BIDS_TEMPLATE), ([], []))     # the template still reads cleanly
+
+    def test_checked_through_turns_an_award_with_no_rows_into_uncontested_or_not_typed_in_yet(self):
+        # Late Claim (Team 3's $0 claim) was awarded 10-07 and has no rows
+        out = self.bids("# checked_through: 2026-10-06\n" + self.FIXTURE_ROWS)
+        self.assertEqual(out["checked_through"], date(2026, 10, 6))
+        self.assertEqual(self.rows("SELECT checked_through FROM lg_bid_imports ORDER BY import_id DESC LIMIT 1"), [("2026-10-06",)])
+        md = league_data.build_report(self.con, today=date(2026, 10, 10))
+        self.assertIn("- Losing offers (bids.csv) checked through: **2026-10-06**", md)
+        self.assertIn("Losing offers are checked through 2026-10-06: an award up to then with no rows was uncontested; a later one may "
+                      "not be typed in yet", md)
+        self.assertNotIn("whether or not it has been entered yet", md)
+        self.assertIn("- Wed 10-07 -- Late Claim (RB, KC): won at $0, no losing offer entered (not typed in yet)", self.margin_lines(md))
+
+        self.bids("# checked_through: 2026-10-07\n" + self.FIXTURE_ROWS)          # moved forward once the page was checked
+        md = league_data.build_report(self.con, today=date(2026, 10, 10))
+        self.assertIn("- Wed 10-07 -- Late Claim (RB, KC): won at $0, no losing offer entered (uncontested)", self.margin_lines(md))
+        self.assertEqual(len(self.current()), 5)                                   # the offers themselves didn't change
+        self.assertEqual(self.rows("SELECT n_new, n_unchanged, checked_through FROM lg_bid_imports ORDER BY import_id DESC LIMIT 1"),
+                         [(0, 5, "2026-10-07")])
+
+        self.bids(self.FIXTURE_ROWS)                                               # line taken out: back to today's wording
+        md = league_data.build_report(self.con, today=date(2026, 10, 10))
+        self.assertIn("checked through: not set", md)
+        self.assertIn("- Wed 10-07 -- Late Claim (RB, KC): won at $0, no losing offer entered (uncontested, or not typed in yet)",
+                      self.margin_lines(md))
+
+    def test_with_the_window_checked_and_no_losing_offers_in_it_the_counts_are_all_bids(self):
+        self.bids("# checked_through: 2026-10-08\n2026-09-16,Too Old,Team Name 2,40,Team Name 1,39\n")   # week 2: outside the window
+        md = league_data.build_report(self.con, today=date(2026, 10, 10))
+        self.assertIn("Basis: **all bids -- winning claims from Yahoo's API; no losing offers in the window.", md)
+        self.assertEqual(report_table(md)["Team Name 1"][4], "0")                  # known to be none, not "n/a"
+        self.bids("# checked_through: 2026-09-21\n2026-09-16,Too Old,Team Name 2,40,Team Name 1,39\n")   # checked only up to week 2
+        md = league_data.build_report(self.con, today=date(2026, 10, 10))
+        self.assertIn("Basis: **winning waiver claims only -- no losing offers have been entered for this window.**", md)
+        self.assertEqual(report_table(md)["Team Name 1"][4], "n/a")
+
+    def test_a_bad_checked_through_line_is_rejected_and_stored_as_not_set_but_blocks_nothing_else(self):
+        self.bids(self.FIXTURE_ROWS)
+        out = self.bids("# checked_through: 2026-10-07\n# checked_through: 2026-10-08\n" + self.FIXTURE_ROWS.split("\n", 1)[1])
+        self.assertTrue(out["ok"])
+        self.assertIsNone(out["checked_through"])
+        self.assertEqual(out["rejected"], ["line 4: a second checked_through line (line 3 has one) -- neither is used"])
+        self.assertEqual(out["n_withdrawn"], 1)                                     # the dropped first row is still withdrawn
+        self.assertEqual(self.rows("SELECT checked_through, n_rejected FROM lg_bid_imports ORDER BY import_id DESC LIMIT 1"), [(None, 1)])
+
+    def test_an_older_db_gains_the_checked_through_column(self):
+        old = sqlite3.connect(":memory:")
+        self.addCleanup(old.close)
+        old.execute("CREATE TABLE lg_bid_imports (import_id INTEGER PRIMARY KEY AUTOINCREMENT, imported_at TEXT NOT NULL, file_name TEXT, "
+                    "file_sha256 TEXT, ok INTEGER NOT NULL, error TEXT, n_rows INTEGER, n_new INTEGER, n_corrected INTEGER, "
+                    "n_withdrawn INTEGER, n_unchanged INTEGER, n_rejected INTEGER, n_flagged INTEGER, raw_file TEXT)")
+        old.execute("INSERT INTO lg_bid_imports (imported_at, ok) VALUES ('2026-10-10', 1)")
+        league_data.init_schema(old)
+        league_data.init_schema(old)                                               # and running it again is harmless
+        self.assertEqual(old.execute("SELECT imported_at, checked_through FROM lg_bid_imports").fetchall(), [("2026-10-10", None)])
+        self.assertIsNone(league_data.checked_through(old))
+
+    def activity_and_offers(self):
+        weeks = league_data.league_weeks(self.con, league_data.latest_ok(self.con, "scoreboard")[0])
+        _f, _c, start, end = league_data.report_window(weeks, date(2026, 10, 10))
+        tx_snap = league_data.latest_ok(self.con, "transactions")[0]
+        return league_data.team_activity(self.con, tx_snap, start, end), league_data.losing_bids(self.con, tx_snap, start, end)[0]
 
     def test_cli_creates_the_template_then_imports_and_its_exit_code_reports_trouble(self):
         db, path = self.dir / "t.db", self.dir / "manual" / "bids.csv"

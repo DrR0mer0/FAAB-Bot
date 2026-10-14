@@ -32,6 +32,11 @@ tab only, and Yahoo's terms don't allow tools that extract data from its
 pages, so nothing here reads that page: the user types the losing offers into
 a CSV by hand (see LOSING BIDS below). Where none are entered, the report's
 "active bidder" flag rests on winning claims alone and says so.
+$0 BIDS are interest, not price competition: they count toward the active-
+bidder flag, but the "paid bids" count, the "typical paid bid" (median) and
+the funded-active-bidder flag (active, at least one paid bid in the window,
+FAAB left >= FUNDED_MIN_FAAB) leave them out, and an award won at $0 over a
+$0 next offer is marked "decided by waiver priority".
 Also current-only: FAAB balances (no history), though balance + winning bids
 reconciled to the $100 budget for all 12 teams on 2026-10-10.
 
@@ -56,6 +61,14 @@ it is imported:
     newest version is the one used (hand typing needs a way to fix a typo --
     the earlier row stays on record);
   * a stored offer no longer in the file is appended as WITHDRAWN.
+CHECKED THROUGH -- a "# checked_through: YYYY-MM-DD" line in the file says
+the user has gone through Yahoo's FAB Offers page up to that award date. It is
+stored with the import (lg_bid_imports.checked_through), and the report then
+reads an award on or before it with no losing rows as "uncontested" and a
+later one as "not typed in yet". Without the line (or with it left blank) the
+report keeps saying "uncontested, or not typed in yet". A date that can't be
+read, a second such line, or a date after the import day is reported as
+rejected and stored as not set -- never guessed.
 Nothing is ever updated or deleted: lg_bids holds every version, and
 current_bids() reads the newest of each offer. Every import is checked
 against the API: an award's winner is linked to the waiver add for the same
@@ -81,6 +94,7 @@ import csv
 import hashlib
 import io
 import json
+import re
 import sqlite3
 import sys
 import threading
@@ -88,6 +102,7 @@ import time
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from statistics import median
 from zoneinfo import ZoneInfo
 
 LEAGUE_DIR = Path(__file__).resolve().parent
@@ -116,7 +131,8 @@ REQUEST_TIMEOUT_S = 30
 FETCH_BUDGET_S = 180      # for the whole fetch, token refresh included
 LEAGUE_TZ = ZoneInfo("America/Los_Angeles")   # Yahoo's week_start / week_end are calendar dates; read them as Pacific days
 REPORT_WEEKS = 3          # the current league week and the two before it
-ACTIVE_BIDDER_MIN = 2     # bids in the window that make a manager an "active bidder"
+ACTIVE_BIDDER_MIN = 2     # bids in the window that make a manager an "active bidder" ($0 bids count)
+FUNDED_MIN_FAAB = 10      # FAAB left (in $) for an active bidder with a paid bid to count as "funded"; report --funded-min overrides
 
 DDL = """
 CREATE TABLE IF NOT EXISTS lg_snapshots (
@@ -256,7 +272,8 @@ CREATE TABLE IF NOT EXISTS lg_bid_imports (
   n_unchanged INTEGER,
   n_rejected INTEGER,
   n_flagged INTEGER,
-  raw_file TEXT
+  raw_file TEXT,
+  checked_through TEXT
 );
 
 CREATE TABLE IF NOT EXISTS lg_bids (
@@ -286,6 +303,11 @@ BIDS_TEMPLATE = """\
 # award_date is the day the waiver was awarded (YYYY-MM-DD, or M/D/YYYY). Teams by team name, as Yahoo shows them.
 # award_date may be left blank on a row that repeats the row above's player, winning team and winning amount.
 # After editing:  python league/league_data.py import-bids
+#
+# The checked_through line below is the last award date you have gone through on the FAB Offers page. Awards up to
+# that date with no rows here count as uncontested; later ones as not typed in yet. Move it forward only after checking.
+# Left blank, the report can't tell the two apart.
+# checked_through:
 award_date,player,winning_team,winning_amount,losing_team,losing_amount
 # 2026-10-07,Example Player,Winning Team Name,16,Losing Team Name,9
 """
@@ -302,6 +324,9 @@ def utcnow():
 
 def init_schema(con):
     con.executescript(DDL)
+    # the file's "# checked_through:" date (NULL before 2026-10-14, or when the line is missing)
+    if "checked_through" not in ledger.table_columns(con, "lg_bid_imports"):
+        con.execute("ALTER TABLE lg_bid_imports ADD COLUMN checked_through TEXT")
     for t in TABLES:
         ledger.create_append_only_triggers(con, t)
     con.commit()
@@ -723,6 +748,35 @@ def read_bids_csv(text):
     return rows, problems
 
 
+CHECKED_THROUGH = re.compile(r"#\s*checked_through\s*:(.*)$", re.IGNORECASE)
+
+
+def read_checked_through(text, today):
+    """The file's "# checked_through: <date>" line -> (date or None, problems).
+    A missing or blank line is None with no problem. A date that can't be
+    read, more than one such line, or a date after `today` is None plus a
+    "line N: why" problem: the report then keeps its unsure wording."""
+    found, problems = [], []
+    for n, line in enumerate(text.lstrip("\ufeff").splitlines(), start=1):
+        cells = next(csv.reader([line]), [""])           # a spreadsheet save adds ",,,,," (or quotes): read the first cell only
+        m = CHECKED_THROUGH.match((cells[0] if cells else "").strip())
+        if m:
+            found.append((n, m.group(1).strip()))
+    found = [(n, v) for n, v in found if v]
+    if not found:
+        return None, []
+    if len(found) > 1:
+        return None, [f"line {found[1][0]}: a second checked_through line (line {found[0][0]} has one) -- neither is used"]
+    n, value = found[0]
+    try:
+        day = datetime.strptime(value, "%m/%d/%Y").date() if "/" in value else date.fromisoformat(value)
+    except ValueError:
+        return None, [f"line {n}: checked_through must be YYYY-MM-DD (or M/D/YYYY) -- not used"]
+    if day > today:
+        return None, [f"line {n}: checked_through {day} is after today ({today}) -- not used"]
+    return day, []
+
+
 def _name_key(name):
     return " ".join(str(name or "").casefold().split())
 
@@ -788,10 +842,10 @@ def import_bids(con, path, raw_dir, now=None):
     """Bring lg_bids in line with the CSV (see LOSING BIDS in the module
     docstring). -> dict(ok, error, unchanged_file, n_rows, n_new, n_corrected,
     n_withdrawn, n_unchanged, rejected [str], flagged [str], corrections [str],
-    withdrawn [str]). The lists hold player names and amounts but no team or
+    withdrawn [str], checked_through (a date or None)). The lists hold player names and amounts but no team or
     manager names. Never raises on a bad file."""
     out = {"ok": False, "error": None, "unchanged_file": False, "n_rows": 0, "n_new": 0, "n_corrected": 0, "n_withdrawn": 0,
-           "n_unchanged": 0, "rejected": [], "flagged": [], "corrections": [], "withdrawn": []}
+           "n_unchanged": 0, "rejected": [], "flagged": [], "corrections": [], "withdrawn": [], "checked_through": None}
     imported_at = (now or utcnow()).isoformat()
     try:
         raw = Path(path).read_bytes()
@@ -805,6 +859,7 @@ def import_bids(con, path, raw_dir, now=None):
         out.update(ok=True, unchanged_file=True)
         return out
     typed, out["rejected"] = read_bids_csv(text)
+    out["checked_through"], checked_problems = read_checked_through(text, (now or utcnow()).astimezone(LEAGUE_TZ).date())
     teams = team_index(con)
     tx = latest_ok(con, "transactions")
     awards = waiver_awards(con, tx[0] if tx else None)
@@ -867,6 +922,7 @@ def import_bids(con, path, raw_dir, now=None):
         new_rows.append({k: was[k] for k in ("award_date", "player_key", "player", "losing_team_id", "losing_amount", "winning_team_id",
                                              "winning_amount", "transaction_id", "player_id", "api_check")}
                         | {"change": "withdrawn", "line_no": None})
+    out["rejected"] += checked_problems     # after the withdrawal check: a bad date line hides no offer
     out.update(ok=True, n_rows=len(rows), n_new=sum(1 for r in new_rows if r["change"] == "new"),
                n_corrected=len(out["corrections"]), n_withdrawn=len(gone))
     raw_file = None
@@ -881,9 +937,10 @@ def _record_import(con, out, imported_at, path, sha, raw_file, new_rows):
     with con:
         import_id = con.execute(
             "INSERT INTO lg_bid_imports (imported_at, file_name, file_sha256, ok, error, n_rows, n_new, n_corrected, n_withdrawn, "
-            "n_unchanged, n_rejected, n_flagged, raw_file) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "n_unchanged, n_rejected, n_flagged, raw_file, checked_through) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (imported_at, Path(path).name, sha, 1 if out["ok"] else 0, out["error"], out["n_rows"], out["n_new"], out["n_corrected"],
-             out["n_withdrawn"], out["n_unchanged"], len(out["rejected"]), len(out["flagged"]), raw_file)).lastrowid
+             out["n_withdrawn"], out["n_unchanged"], len(out["rejected"]), len(out["flagged"]), raw_file,
+             out["checked_through"].isoformat() if out["checked_through"] and out["ok"] else None)).lastrowid
         ledger.insert_rows(con, "lg_bids", [dict(r, import_id=import_id) for r in new_rows])
     return out
 
@@ -974,25 +1031,83 @@ def losing_bids(con, tx_snapshot, start, end):
     return offers, [o for o in offers if start <= o["when"] < end]
 
 
-def bidder_activity(con, activity, in_window):
+def checked_through(con):
+    """The "# checked_through:" date of the newest successful bids import, or
+    None (no import, or that import's file had no usable line)."""
+    r = con.execute("SELECT checked_through FROM lg_bid_imports WHERE ok=1 ORDER BY import_id DESC LIMIT 1").fetchone()
+    return date.fromisoformat(r[0]) if r and r[0] else None
+
+
+def no_offer_wording(award_day, checked):
+    """What an award with no losing offer entered is: "uncontested" on or
+    before the checked-through date, "not typed in yet" after it, and the
+    unsure "uncontested, or not typed in yet" when no date is set."""
+    if checked is None:
+        return "uncontested, or not typed in yet"
+    return "uncontested" if award_day <= checked else "not typed in yet"
+
+
+def bidder_activity(con, activity, in_window, checked=None, window_start=None):
     """(basis, {team_id: bids in the window}): every winning claim Yahoo's API
     lists plus every hand-entered losing offer. With no losing offers entered
-    for the window it is winning claims only, and the basis says so."""
+    for the window it is winning claims only, and the basis says so -- unless
+    `checked` (the checked-through date) reaches into the window starting on
+    `window_start` (a date), in which case there were simply none."""
     bids = Counter({team_id: sum(1 for e in evs if e["waiver"]) for team_id, evs in activity.items()})
+    if checked is None:
+        caveat = "An award with no rows in the file counts as uncontested, whether or not it has been entered yet"
+    else:
+        caveat = (f"Losing offers are checked through {checked}: an award up to then with no rows was uncontested; "
+                  f"a later one may not be typed in yet, so its losing offers are missing from these counts")
     if not in_window:
+        if checked is not None and window_start is not None and checked >= window_start:
+            return f"all bids -- winning claims from Yahoo's API; no losing offers in the window. {caveat}", bids
         return "winning waiver claims only -- no losing offers have been entered for this window", bids
     bids.update(o["losing_team_id"] for o in in_window)
     imported = con.execute("SELECT MAX(imported_at) FROM lg_bid_imports WHERE ok=1").fetchone()[0]
     return (f"all bids -- winning claims from Yahoo's API plus {len(in_window)} hand-entered losing offer(s) on "
             f"{len({(o['award_date'], o['player_key']) for o in in_window})} award(s) in the window (bids.csv, imported "
-            f"{imported[:10]}; newest award entered {max(o['award_date'] for o in in_window)}). An award with no rows in the "
-            f"file counts as uncontested, whether or not it has been entered yet", bids)
+            f"{imported[:10]}; newest award entered {max(o['award_date'] for o in in_window)}). {caveat}", bids)
+
+
+def bid_amounts(activity, in_window):
+    """{team_id: [amount]}: every bid bidder_activity() counts -- the winning
+    claims in `activity` plus the losing offers in `in_window` -- in dollars,
+    $0 included. Callers leave out the $0 ones where only price competition
+    matters (paid bids, typical paid bid)."""
+    out = defaultdict(list)
+    for team_id, evs in activity.items():
+        out[team_id] += [e["faab_bid"] for e in evs if e["waiver"]]
+    for o in in_window:
+        out[o["losing_team_id"]].append(o["losing_amount"])
+    return out
+
+
+def award_key(offer):
+    """What a losing offer was bid on: the API's transaction id when linked,
+    else (award date, player) -- the same award either way."""
+    return offer["award"]["transaction_id"] if offer["award"] else (offer["award_date"], offer["player_key"])
+
+
+def top_offers(offers):
+    """{award_key: the highest losing offer entered for that award}."""
+    top = {}
+    for o in offers:
+        k = award_key(o)
+        top[k] = max(top.get(k, o["losing_amount"]), o["losing_amount"])
+    return top
+
+
+def by_priority(winning_amount, next_offer):
+    """An award won at $0 over a $0 next offer was decided by waiver priority,
+    not by price. Unknown (False) when no losing offer was entered."""
+    return winning_amount == 0 and next_offer == 0
 
 
 def bid_margins(activity, offers, team_id):
     """A team's winning waiver claims in the window with what the next-highest
     offer was: [dict(transaction_id, when, added, won_at, next_offer,
-    next_team_id, margin, n_offers, check)]. next_* and margin are None when
+    next_team_id, margin, n_offers, check, by_priority)]. next_* and margin are None when
     no losing offer has been entered for the award (uncontested, or not typed
     in yet). `activity` is team_activity()'s result, `offers` every linked
     hand-entered losing offer (losing_bids()[0])."""
@@ -1009,7 +1124,8 @@ def bid_margins(activity, offers, team_id):
         out.append({"transaction_id": e["transaction_id"], "when": e["when"], "added": e["added"], "won_at": e["faab_bid"],
                     "next_offer": top["losing_amount"] if top else None, "next_team_id": top["losing_team_id"] if top else None,
                     "margin": e["faab_bid"] - top["losing_amount"] if top else None, "n_offers": len(others),
-                    "check": top["check"] if top else None})
+                    "check": top["check"] if top else None,
+                    "by_priority": by_priority(e["faab_bid"], top["losing_amount"] if top else None)})
     return out
 
 
@@ -1020,10 +1136,11 @@ def current_week(con, today=None):
     return report_window(weeks, today or datetime.now(LEAGUE_TZ).date())[1] if weeks else None
 
 
-def build_report(con, today=None, n_weeks=REPORT_WEEKS, team_id=None):
+def build_report(con, today=None, n_weeks=REPORT_WEEKS, team_id=None, funded_min=FUNDED_MIN_FAAB):
     """The league activity report as markdown, or None when a needed snapshot
     is missing. Holds team names and manager nicknames: local only. team_id:
-    whose winning bids get the margin section (default: default_team)."""
+    whose winning bids get the margin section (default: default_team).
+    funded_min: FAAB left (in $) for the funded-active-bidder flag."""
     snaps = {r: latest_ok(con, r) for r in ("teams", "transactions", "scoreboard")}
     if any(v is None for v in snaps.values()):
         return None
@@ -1037,7 +1154,11 @@ def build_report(con, today=None, n_weeks=REPORT_WEEKS, team_id=None):
     mine = team_id if team_id is not None else default_team(con)
     activity = team_activity(con, snaps["transactions"][0], start, end)
     offers, in_window = losing_bids(con, snaps["transactions"][0], start, end)
-    basis, bids = bidder_activity(con, activity, in_window)
+    checked = checked_through(con)
+    basis, bids = bidder_activity(con, activity, in_window, checked, weeks[first][0])
+    losing_known = bool(in_window) or (checked is not None and checked >= weeks[first][0])
+    paid = {t: [a for a in amounts if a > 0] for t, amounts in bid_amounts(activity, in_window).items()}
+    top = top_offers(offers)
     lost = defaultdict(list)
     for o in in_window:
         lost[o["losing_team_id"]].append(o)
@@ -1053,6 +1174,15 @@ def build_report(con, today=None, n_weeks=REPORT_WEEKS, team_id=None):
     def day(when):
         return f"{when.astimezone(LEAGUE_TZ):%a %m-%d}"
 
+    def funded(t):
+        if bids.get(t["team_id"], 0) < ACTIVE_BIDDER_MIN or not paid.get(t["team_id"]):
+            return "no"
+        if t["faab_balance"] is None:
+            return "? (FAAB unknown)"
+        return "**yes**" if t["faab_balance"] >= funded_min else "no"
+
+    priority = " -- decided by waiver priority"
+
     lines = [
         f"# League activity: weeks {first}-{current}" if first != current else f"# League activity: week {current}",
         "",
@@ -1060,11 +1190,19 @@ def build_report(con, today=None, n_weeks=REPORT_WEEKS, team_id=None):
         "",
         f"- Window: league weeks {first}-{current} by Yahoo's week boundaries ({weeks[first][0]} to {weeks[current][1]}, Pacific days)",
         f"- Data: transactions as of {stamp(snaps['transactions'][1])}, FAAB balances as of {stamp(snaps['teams'][1])}",
-        f"- **Active bidder** = at least {ACTIVE_BIDDER_MIN} bids in the window. Basis: **{basis}.**",
+        f"- **Active bidder** = at least {ACTIVE_BIDDER_MIN} bids in the window, $0 bids included (a $0 bid shows interest). "
+        f"Basis: **{basis}.**",
+        "- **Paid bids** and **typical paid bid** (their median) count only bids above $0, winning and losing, on the same basis: "
+        "a $0 bid is interest, not price competition.",
+        f"- **Funded active bidder** = an active bidder with at least one paid bid in the window and at least ${funded_min:g} FAAB left.",
+        f"- Losing offers (bids.csv) checked through: "
+        + (f"**{checked}** -- awards up to then with no rows were uncontested" if checked else
+           "not set -- an award with no rows may be uncontested or not typed in yet (add a `# checked_through: YYYY-MM-DD` line)"),
         f"- Transaction ids in the window that Yahoo's list skips: {hidden} (probably failed waiver claims; Yahoo's API doesn't say whose)",
         "",
-        "| Team | Manager | FAAB left | Spent (season) | Claims won | Losing bids | Spent in window | Free-agent adds | Drops | Trades | Active bidder |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+        "| Team | Manager | FAAB left | Spent (season) | Claims won | Losing bids | Paid bids | Typical paid bid | Spent in window "
+        "| Free-agent adds | Drops | Trades | Active bidder | Funded active bidder |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
     ]
     for t in sorted(teams, key=lambda t: (-bids.get(t["team_id"], 0), t["team_id"])):
         evs = activity.get(t["team_id"], [])
@@ -1072,10 +1210,11 @@ def build_report(con, today=None, n_weeks=REPORT_WEEKS, team_id=None):
         lines.append(
             f"| {t['team_name']}{' (me)' if t['team_id'] == mine else ''} | {t['manager_nickname'] or ''} | "
             f"{'?' if t['faab_balance'] is None else '$' + str(t['faab_balance'])} | ${season_spent.get(t['team_id'], 0)} | {len(claims)} | "
-            f"{len(lost[t['team_id']]) if in_window else 'n/a'} | "
+            f"{len(lost[t['team_id']]) if losing_known else 'n/a'} | {len(paid.get(t['team_id'], []))} | "
+            f"{'$%g' % median(paid[t['team_id']]) if paid.get(t['team_id']) else '-'} | "
             f"${sum(e['faab_bid'] for e in claims)} | {sum(1 for e in evs if e['added'] and not e['waiver'] and e['type'] != 'trade')} | "
             f"{sum(len(e['dropped']) for e in evs if e['type'] != 'trade')} | {sum(1 for e in evs if e['type'] == 'trade')} | "
-            f"{'**yes**' if bids.get(t['team_id'], 0) >= ACTIVE_BIDDER_MIN else 'no'} |")
+            f"{'**yes**' if bids.get(t['team_id'], 0) >= ACTIVE_BIDDER_MIN else 'no'} | {funded(t)} |")
 
     # the chosen team's winning bids: how much more than the next offer it paid
     lines += ["", "## My winning bids: margin over the second-highest offer", ""]
@@ -1083,14 +1222,18 @@ def build_report(con, today=None, n_weeks=REPORT_WEEKS, team_id=None):
     if not won:
         lines.append("No winning waiver claims in the window.")
     for m in won:
-        if m["next_offer"] is not None:
+        if m["by_priority"]:
+            lines.append(f"- {day(m['when'])} -- {', '.join(m['added'])}: won at $0, next offer $0 ({name.get(m['next_team_id'], '?')})"
+                         f"{priority}" + (f", {m['n_offers']} losing offers" if m["n_offers"] > 1 else "")
+                         + ("" if m["check"] == "ok" else " -- CHECK: the typed winner doesn't match Yahoo's, see below"))
+        elif m["next_offer"] is not None:
             lines.append(f"- {day(m['when'])} -- {', '.join(m['added'])}: won at ${m['won_at']}, next offer ${m['next_offer']} "
                          f"({name.get(m['next_team_id'], '?')}) -- **margin ${m['margin']}**"
                          + (f", {m['n_offers']} losing offers" if m["n_offers"] > 1 else "")
                          + ("" if m["check"] == "ok" else " -- CHECK: the typed winner doesn't match Yahoo's, see below"))
         else:
             lines.append(f"- {day(m['when'])} -- {', '.join(m['added'])}: won at ${m['won_at']}, no losing offer entered "
-                         f"(uncontested, or not typed in yet)")
+                         f"({no_offer_wording(m['when'].astimezone(LEAGUE_TZ).date(), checked)})")
 
     flagged = [o for o in offers if o["check"] != "ok"]
     if flagged:
@@ -1112,13 +1255,16 @@ def build_report(con, today=None, n_weeks=REPORT_WEEKS, team_id=None):
         for when, is_bid, e in sorted(evs, key=lambda x: (x[0], x[1])):
             if is_bid:
                 lines.append(f"- {day(when)} -- losing bid, ${e['losing_amount']}: {e['player']} (went to "
-                             f"{name.get(e['winning_team_id'], '?')} for ${e['winning_amount']})")
+                             f"{name.get(e['winning_team_id'], '?')} for ${e['winning_amount']})"
+                             + (priority if by_priority(e["award"]["amount"] if e["award"] else e["winning_amount"],
+                                                        top[award_key(e)]) else ""))   # Yahoo's amount over a typo
                 continue
             how = (f"waiver claim, ${e['faab_bid']}" if e["waiver"] else "trade" if e["type"] == "trade" else
                    "free agent" if e["added"] else "drop")
             moved = " / ".join(([("got " if e["type"] == "trade" else "+") + ", ".join(e["added"])] if e["added"] else [])
                                + ([("gave " if e["type"] == "trade" else "-") + ", ".join(e["dropped"])] if e["dropped"] else []))
-            lines.append(f"- {day(when)} -- {how}: {moved}")
+            lines.append(f"- {day(when)} -- {how}: {moved}"
+                         + (priority if e["waiver"] and by_priority(e["faab_bid"], top.get(e["transaction_id"])) else ""))
     return "\n".join(lines) + "\n"
 
 
@@ -1190,7 +1336,7 @@ def cmd_snapshot(args):
 def cmd_report(args):
     con = connect(args.db)
     try:
-        md, week = build_report(con), current_week(con)
+        md, week = build_report(con, funded_min=args.funded_min), current_week(con)
     finally:
         con.close()
     if md is None:
@@ -1250,7 +1396,8 @@ def cmd_import_bids(args):
         return 1
     print(f"[BIDS] {out['n_rows']} losing offer(s) in the file: {out['n_new']} new, {out['n_corrected']} corrected, "
           f"{out['n_unchanged']} unchanged, {out['n_withdrawn']} withdrawn; {len(out['rejected'])} line(s) rejected, "
-          f"{len(out['flagged'])} flagged")
+          f"{len(out['flagged'])} flagged; checked through "
+          f"{out['checked_through'] or 'not set (no # checked_through: line)'}")
     return 1 if out["rejected"] or out["flagged"] else 0
 
 
@@ -1278,6 +1425,8 @@ def build_parser():
     p = sub.add_parser("report", help="write the league activity report (local only)")
     p.add_argument("--db", default=str(DEFAULT_DB))
     p.add_argument("--out-dir", default=str(DEFAULT_REPORT_DIR))
+    p.add_argument("--funded-min", type=float, default=FUNDED_MIN_FAAB,
+                   help=f"FAAB left (in $) for the funded-active-bidder flag (default {FUNDED_MIN_FAAB})")
     p.set_defaults(fn=cmd_report)
     return ap
 
