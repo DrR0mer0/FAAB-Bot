@@ -35,6 +35,25 @@
           "top_25": 4
         }
       }
+    },
+    {
+      "changed_at": "2026-10-15T21:26:08.236356+00:00",
+      "first_week_applied": {
+        "season": 2026,
+        "week": 7
+      },
+      "score_week_git_commit": "91da696c17d5c275194211c9937da866e5df8573",
+      "note": "From 2026 week 7, model/score_week.py no longer scores a player who is not on an NFL roster per nflverse's weekly roster (newest row at or before the week is CUT or RET, no row this season, or no row for the week although his team has rows): he is listed in off_roster_watch_list instead of being ranked. The exempt list (EXE) joined the availability gate at the same time. Before this, released and unsigned players were ranked on their stats-history team (found 2026-10-15: Andy Dalton, released by PHI in week 5, ranked #47 in week 6). Week 6's first snapshot (predictions/2026_week06.json, the thu run of 2026-10-15) was generated before the change and is frozen as logged; week 6's sun run (2026-10-18) is the first run under the check but is not what this log verifies. In week 6's first snapshot none of these players is in either model's top 25 (counts below), so its precision@10/@25 are unaffected. Weeks 1-5 are not re-examined here; the tracker's reports footnote weeks 4-6 (tracker/off_roster_audit_20261015.json).",
+      "week_6_first_snapshot_off_roster_or_exempt_players": {
+        "production": {
+          "top_10": 0,
+          "top_25": 0
+        },
+        "shadow": {
+          "top_10": 0,
+          "top_25": 0
+        }
+      }
     }
   ],
   "weeks": [
