@@ -16,6 +16,7 @@ frozen JSON into the append-only ledger, then draws the dart / heuristic /
 last_week baselines from that SAME pool. It REFUSES to log a run once the
 slot's kickoff cutoff has passed (see check_slot_window), and a slot's pool
 only ever holds players whose team has a game that week (split_pool_no_game),
+who are on an NFL roster per nflverse's weekly roster (split_pool_off_roster),
 whose game kicks off at or after that cutoff (split_pool_at_cutoff), and who
 are not designated Out or Doubtful on the week's injury report at log time
 (injuries.py). `log --auto` is the scheduled-task form: it works out
@@ -28,6 +29,7 @@ Yahoo league). That is display only -- it never changes the pool, a score, a
 rank or a pick -- and a failed Yahoo fetch never stops a run.
 """
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -51,8 +53,9 @@ import ownership  # noqa: E402
 import report  # noqa: E402
 import scoring  # noqa: E402
 import snapcounts  # noqa: E402
-from score_week import (  # noqa: E402 -- the one place kickoff timezone logic lives
-    KICKOFF_TZ, load_current_roster, load_kickoffs, parse_kickoff_utc, render_markdown_report)
+from score_week import (  # noqa: E402 -- the one place kickoff timezone and roster-status logic live
+    KICKOFF_TZ, OFF_ROSTER_MAX_SHARE, OFF_ROSTER_WARNING_TAG, load_current_roster, load_kickoffs, load_roster_presence,
+    off_roster_reason, parse_kickoff_utc, render_markdown_report)
 from team_crosswalk import norm_team  # noqa: E402
 
 DEFAULT_DB = REPO_ROOT / "faab_history_core_v0_1.db"
@@ -63,6 +66,7 @@ DEFAULT_REPORT_DIR = TRACKER_DIR / "reports"
 DEFAULT_OWNERSHIP_RAW_DIR = ownership.DEFAULT_RAW_DIR
 DEFAULT_INJURIES_RAW_DIR = REPO_ROOT / "raw" / "injuries"
 DEFAULT_LEAGUE_RAW_DIR = league_availability.DEFAULT_RAW_DIR
+DEFAULT_ROSTER_RAW_DIR = REPO_ROOT / "raw" / "rosters"
 BASELINE_VERSIONS = {"dart": "dart-v1", "heuristic": "heuristic-v1", "last_week": "last_week-v1"}
 METRICS = ("top24_hits", "spike_hits", "total_points")
 MAIN_SLATE_ET = (13, 0)  # the Sunday main slate opens with the 1:00 PM Eastern window
@@ -74,7 +78,12 @@ SLOT_RULE = "main-slate-v2"  # recorded with every run; v1 closed `sun` at the e
 #   exclude-no-game-out-doubtful-v2  + nobody whose team has no game that week. score_week.py scores bye-week
 #                                    players like everyone else (its kickoff guard is a no-op for a team with no
 #                                    game), and the v1 run had 26 of them in its pool.
-POOL_RULE = "exclude-no-game-out-doubtful-v2"
+#   exclude-no-game-off-roster-out-doubtful-v3  (from 2026 week 6 sun) + nobody who is not on an NFL roster per
+#                                    nflverse's weekly roster: released or retired, no row this season, or no row for
+#                                    the week although his team has rows (split_pool_off_roster). The week 6 thu run
+#                                    had 20 such players, Andy Dalton (released by PHI in week 5) among them.
+#                                    Practice-squad (DEV) players stay in: an open question, not a decision.
+POOL_RULE = "exclude-no-game-off-roster-out-doubtful-v3"
 # Who is in the sleeper ("u50") pool, recorded with every run. v1 (2026 week 4 only, no key in run_config_json):
 # strictly under the threshold, and a pool player with no row in the roster-% snapshot was silently dropped.
 # v2: such a player stays IN, with percent_owned NULL as the "ownership unknown" flag -- he is not assumed to be
@@ -192,6 +201,44 @@ def split_pool_no_game(pool_src, playing_teams, roster_team_of):
         team = roster_team_of.get(r["player_id"]) or r["team"]
         (kept if team in playing_teams else no_game).append(r)
     return kept, no_game
+
+
+def split_pool_off_roster(pool_src, latest, teams_in_week, week):
+    """(kept, off {player_id: reason}). A player who is not on an NFL roster
+    (score_week.off_roster_reason: released, retired, unsigned, or dropped
+    without a CUT row) cannot score, so he is not in the pool for any model,
+    baseline or dart draw. score_week.py leaves such players out itself
+    (off_roster_watch_list), so this normally finds nobody; it is the tracker's
+    own guarantee. With no weekly roster rows for the season (`latest` empty)
+    nothing can be said and nobody is dropped -- the caller records that."""
+    kept, off = [], {}
+    for r in pool_src:
+        why = off_roster_reason(r["player_id"], latest, teams_in_week, week) if latest else None
+        if why:
+            off[r["player_id"]] = why
+        else:
+            kept.append(r)
+    return kept, off
+
+
+def yahoo_roster_crosscheck(league, pool_src, off, latest):
+    """Yahoo's own player status against nflverse's roster, display and record
+    only -- it decides nothing. Yahoo's "NA" means "Inactive: Coach's Decision
+    or Not on Roster", so it can't tell a release from a practice-squad player
+    or a healthy scratch. Only players Yahoo lists as available in the user's
+    league are checked (the only ones the run fetches)."""
+    if league["status"] != "ok":
+        return {"checked": False, "reason": f"league availability {league['status']}"}
+    by = league["by_player"]
+    off_but_active = [{"player_id": pid, "name": by[pid]["name"], "nflverse": why, "yahoo_status": by[pid].get("player_status"),
+                       "yahoo_team": by[pid]["team"]}
+                      for pid, why in sorted(off.items()) if pid in by and by[pid].get("player_status") != "NA"]
+    na_but_rostered = [{"player_id": r["player_id"], "name": r["name"],
+                        "nflverse": "{1} (week {0}, {2})".format(*latest[r["player_id"]]) if r["player_id"] in latest else None,
+                        "yahoo_team": by[r["player_id"]]["team"]}
+                       for r in pool_src if r["player_id"] in by and by[r["player_id"]].get("player_status") == "NA"]
+    return {"checked": True, "scope": "players Yahoo lists as available in the league",
+            "off_roster_but_yahoo_not_na": off_but_active, "yahoo_na_but_on_a_roster": na_but_rostered}
 
 
 def split_pool_at_cutoff(pool_src, team_kickoffs, roster_team_of, cutoff):
@@ -419,11 +466,14 @@ def resolve_injuries(args, con, cfg, season, week, as_of, snap_id):
 
 BYE_FLAG_NOTE = ("**(BYE)** = his team has no game this week. Display only -- scores and ranks are unchanged. Flagged "
                  "players are not in the tracker's pool.")
+FA_FLAG_NOTE = ("**(FA)** = not on an NFL roster per nflverse's weekly roster (released, retired or unsigned). Display only -- "
+                "scores and ranks are unchanged. Flagged players are not in the tracker's pool.")
 
 
-def flag_note(inj, exclude, any_bye):
+def flag_note(inj, exclude, any_bye, any_fa=False):
     """The line(s) printed above the prediction markdown's table, or None to leave the markdown as score_week.py wrote it."""
-    parts = ([BYE_FLAG_NOTE] if any_bye else []) + [n for n in (injury_flag_note(inj, exclude),) if n]
+    parts = (([FA_FLAG_NOTE] if any_fa else []) + ([BYE_FLAG_NOTE] if any_bye else [])
+             + [n for n in (injury_flag_note(inj, exclude),) if n])
     return " ".join(parts) or None
 
 
@@ -538,6 +588,12 @@ def cmd_log(args, con):
         for p in written:
             p.unlink(missing_ok=True)
         raise RuntimeError(f"score_week.py failed (exit {proc.returncode}):\n{proc.stderr[-1500:]}")
+    if OFF_ROSTER_WARNING_TAG in proc.stdout and not args.allow_stale_roster:
+        for p in written:
+            p.unlink(missing_ok=True)
+        raise Refused("score_week.py found the weekly roster file implausibly incomplete (it would put more than "
+                      f"{OFF_ROSTER_MAX_SHARE:.0%} of the pool off a roster) and skipped its off-roster check -- run "
+                      "data/fetch_weekly_update.py first (or pass --allow-stale-roster)")
     if "[STALE ROSTER WARNING]" in proc.stdout and not args.allow_stale_roster:
         for p in written:
             p.unlink(missing_ok=True)
@@ -561,6 +617,32 @@ def cmd_log(args, con):
     unscored_idle = {r["player_id"] for r in prod.get("no_game_watch_list") or []}
     if unscored_idle:
         print(f"[INFO] {len(unscored_idle)} player(s) not scored by O.D.D.S. at all: their team has no game in week {week}")
+    # Pool rule, part 2: nobody who is not on an NFL roster, for every model alike (score_week.off_roster_reason).
+    latest, teams_in_week = load_roster_presence(str(weekly_roster), season, week) if weekly_roster.exists() else ({}, set())
+    n_before = len(pool_src)
+    pool_src, off = split_pool_off_roster(pool_src, latest, teams_in_week, week)
+    if len(off) > OFF_ROSTER_MAX_SHARE * max(n_before, 1):
+        for p in written:
+            p.unlink(missing_ok=True)
+        raise Refused(f"the weekly roster file would put {len(off)} of {n_before} pool players off an NFL roster -- it looks "
+                      f"incomplete; the ledger is append-only, so refresh it (data/fetch_weekly_update.py) and log again")
+    if off:
+        print(f"[INFO] {len(off)} scored player(s) left out of the pool: not on an NFL roster -- "
+              + ", ".join(f"{next(r['name'] for r in prod['scored_pool'] if r['player_id'] == p)} ({why})" for p, why in sorted(off.items())))
+    unscored_off = {r["player_id"]: r.get("roster") or r.get("reason") for r in prod.get("off_roster_watch_list") or []}
+    if unscored_off:
+        print(f"[INFO] {len(unscored_off)} player(s) not scored by O.D.D.S. at all: not on an NFL roster")
+    if not latest:
+        print(f"[WARN] no weekly roster rows for {season} at {weekly_roster} -- the off-roster pool rule could not be applied")
+    roster_file, roster_sha = None, None
+    if weekly_roster.exists():
+        raw_roster = weekly_roster.read_bytes()
+        roster_sha = hashlib.sha256(raw_roster).hexdigest()
+        try:
+            roster_file = ownership.write_raw(args.roster_raw_dir, as_of.isoformat(), f"nflverse_roster_weekly_{season}",
+                                              raw_roster, suffix=".csv.gz")
+        except Exception as e:  # noqa: BLE001 -- the SHA-256 stored with the run still identifies the file that was used
+            injuries._banner(f"could not keep a copy of the weekly roster under {args.roster_raw_dir} ({type(e).__name__}: {e})")
     pool_src, early = split_pool_at_cutoff(pool_src, load_kickoffs(con, season, week), roster_team_of, cutoff)
     if early:
         print(f"[INFO] {len(early)} scored player(s) left out of the {slot} pool: their game kicks off before the "
@@ -572,7 +654,7 @@ def cmd_log(args, con):
     else:
         status, snap_id, own = resolve_ownership(con, cfg, season, as_of, allow_live, args.ownership_raw_dir)
 
-    # Pool rule, part 2: nobody designated Out/Doubtful at log time, for every model alike (see injuries.py).
+    # Pool rule, part 3: nobody designated Out/Doubtful at log time, for every model alike (see injuries.py).
     exclude = tuple(cfg["run"]["pool_exclude_injury_statuses"])
     inj = resolve_injuries(args, con, cfg, season, week, as_of, snap_id)
     # a cross-check only means something when the official report is the one deciding
@@ -596,11 +678,12 @@ def cmd_log(args, con):
         raise Refused("O.D.D.S. scored an empty pool -- nothing to log")
     # Display only, part 1: flag those players in the prediction markdown. Scores, ranks and the JSON stay as
     # score_week.py wrote them.
-    note = flag_note(inj, exclude, bool(idle))
+    note = flag_note(inj, exclude, bool(idle), bool(off))
     flags = {}
     if note:
         flags = {pid: st.upper() for pid, st in inj["status"].items() if st in exclude}
         flags.update({r["player_id"]: "BYE" for r in idle})   # no game at all outranks an injury designation
+        flags.update({pid: "FA" for pid in off})              # and no team at all outranks a bye
     # Display only, part 2: which of each model's pool players are available in the user's own Yahoo league
     # (league_availability.py). The pool is already final here and nothing below reads the answer back into it.
     league, league_key = resolve_league(args, con, weekly_roster)
@@ -618,6 +701,14 @@ def cmd_log(args, con):
           + (f": {league['n_available']} available in the league ({league['n_waivers']} on waivers), {league['n_matched']} "
              f"matched to a player id; {n_pool_available} of {len(pool_src)} pool players available"
              if league["status"] == "ok" else ""))
+    crosscheck = yahoo_roster_crosscheck(league, pool_src, {**unscored_off, **off}, latest)
+    if crosscheck["checked"]:
+        for d in crosscheck["off_roster_but_yahoo_not_na"]:
+            print(f"[ROSTER] sources disagree on {d['name']}: nflverse {d['nflverse']} vs Yahoo {d['yahoo_team']} "
+                  f"status {d['yahoo_status'] or 'none'} -- nflverse decides")
+        if crosscheck["yahoo_na_but_on_a_roster"]:
+            print(f"[ROSTER] {len(crosscheck['yahoo_na_but_on_a_roster'])} pool player(s) Yahoo marks NA are on an nflverse roster "
+                  f"(practice squad, mostly) -- kept: " + ", ".join(f"{d['name']} ({d['nflverse']})" for d in crosscheck["yahoo_na_but_on_a_roster"][:12]))
     league_file = None
     if league["raw_bytes"]:
         try:
@@ -679,6 +770,9 @@ def cmd_log(args, con):
             "run": cfg["run"], "hit_config_hash": scoring.config_hash(cfg), "slot_rule": SLOT_RULE,
             "excluded_before_cutoff": sorted(r["player_id"] for r in early), "pool_rule": POOL_RULE,
             "excluded_no_game": sorted({r["player_id"] for r in idle} | unscored_idle),
+            "excluded_off_roster": dict(sorted({**unscored_off, **off}.items())),
+            "off_roster": {"applied": bool(latest), "weekly_roster_sha256": roster_sha, "weekly_roster_file": roster_file,
+                           "yahoo_crosscheck": crosscheck},
             "sleeper_pool_rule": SLEEPER_POOL_RULE, "ownership_unknown_in_sleeper_pool": sorted(unknown_ids),
             "injury": {"source": inj["source"], "reason": inj["reason"], "exclude_statuses": list(exclude),
                        "excluded": held_out, "disagreements": differ, "nflverse_sha256": inj["sha256"],
@@ -1052,6 +1146,8 @@ def build_parser():
                        help="where `log` keeps a gzip copy of the injury report each run's pool rule used")
         p.add_argument("--league-raw-dir", default=str(DEFAULT_LEAGUE_RAW_DIR),
                        help="where `log` keeps a gzip copy of the Yahoo league-availability response each run displayed")
+        p.add_argument("--roster-raw-dir", default=str(DEFAULT_ROSTER_RAW_DIR),
+                       help="where `log` keeps a gzip copy of the weekly roster file each run's off-roster pool rule used")
 
     p = sub.add_parser("log", help="run O.D.D.S. + baselines and write to the ledger (before kickoff)")
     common(p)

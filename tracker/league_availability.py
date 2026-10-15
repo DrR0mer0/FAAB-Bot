@@ -127,7 +127,10 @@ def parse_page(payload):
             "external_id": str(info["player_id"]), "name": info["name"]["full"],
             "position": info.get("primary_position") or info["display_position"].split(",")[0],
             "team": (info.get("editorial_team_abbr") or "").upper() or None,
-            "status": STATUS[own["ownership_type"]], "waiver_date": own.get("waiver_date") or None})
+            "status": STATUS[own["ownership_type"]], "waiver_date": own.get("waiver_date") or None,
+            # Yahoo's player status ("NA" = "Inactive: Coach's Decision or Not on Roster", "Q", "O", ...): kept in memory
+            # for the tracker's off-roster cross-check only, not stored in tr_league_availability
+            "player_status": info.get("status") or None})
     return rows, n
 
 

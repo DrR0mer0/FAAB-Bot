@@ -33,7 +33,8 @@ import report
 import scheduled_run
 import scoring
 import tracker
-from score_week import load_scheduled_teams, render_markdown_report
+from score_week import (OFF_ROSTER_WARNING_TAG, UNAVAILABLE_STATUSES, load_roster_presence, load_scheduled_teams,  # noqa: E402
+                        off_roster_reason, render_markdown_report)
 
 CFG = scoring.load_config()
 RULES = CFG["scoring"]
@@ -598,7 +599,7 @@ class TestPriorWeeksLoaded(unittest.TestCase):
             return mock.Mock(returncode=1, stdout="", stderr="stub")  # never gets far enough to write anything
         argv = ["log", "--season", "2026", "--week", "4", "--slot", "sun", "--as-of", self.AS_OF, "--db", str(self.db),
                 "--predictions-dir", str(self.dir / "preds"), "--export-dir", str(self.dir / "export"),
-                "--raw-dir", str(self.dir / "raw"), "--skip-ownership"]
+                "--raw-dir", str(self.dir / "raw"), "--roster-raw-dir", str(self.dir / "raw_rosters"), "--skip-ownership"]
         err = io.StringIO()
         with mock.patch.object(tracker.subprocess, "run", side_effect=fake_run), contextlib.redirect_stderr(err), \
                 contextlib.redirect_stdout(io.StringIO()):
@@ -830,6 +831,21 @@ class TestLogInternationalWeek(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    ROSTER_FIELDS = ["season", "week", "gsis_id", "team", "position", "status", "rookie_year", "draft_number", "full_name", "yahoo_id"]
+
+    def write_weekly_roster(self, overrides=(), week=4, skip=()):
+        """A weekly roster file as nflverse writes it: an ACT row in `week` for every scored player on his own team,
+        except the ids in `skip`; `overrides` are (gsis_id, team, position, status, full_name, yahoo_id) rows that
+        replace a player's row (or add one)."""
+        rows = {r["player_id"]: dict(season=2026, week=week, gsis_id=r["player_id"], team=r["team"], position=r["pos"], status="ACT")
+                for r in self.scored_pool if r["player_id"] not in skip}
+        for pid, team, pos, status, name, yahoo in overrides:
+            rows[pid] = dict(season=2026, week=week, gsis_id=pid, team=team, position=pos, status=status, full_name=name, yahoo_id=yahoo)
+        with open(self.dir / "raw" / "roster_weekly_2026.csv", "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=self.ROSTER_FIELDS)
+            w.writeheader()
+            w.writerows(rows.values())
+
     def fake_run(self, cmd, **_kw):
         if "rev-parse" in cmd:
             return mock.Mock(returncode=0, stdout="deadbeef\n", stderr="")
@@ -844,7 +860,7 @@ class TestLogInternationalWeek(unittest.TestCase):
     def log(self, slot, as_of):
         argv = ["log", "--season", "2026", "--week", "4", "--slot", slot, "--as-of", as_of, "--db", str(self.db),
                 "--predictions-dir", str(self.dir / "preds"), "--export-dir", str(self.dir / "export"),
-                "--raw-dir", str(self.dir / "raw"), "--skip-ownership"]
+                "--raw-dir", str(self.dir / "raw"), "--roster-raw-dir", str(self.dir / "raw_rosters"), "--skip-ownership"]
         with mock.patch.object(tracker.subprocess, "run", side_effect=self.fake_run), \
                 contextlib.redirect_stdout(io.StringIO()):
             return tracker.main(argv)
@@ -1033,6 +1049,52 @@ class TestScoreWeekNoGame(unittest.TestCase):
         self.assertEqual(md.replace("- No game this week (bye), not scored: 40\n", ""), plain)
 
 
+class TestScoreWeekOffRoster(unittest.TestCase):
+    """score_week.py's off-roster check (from 2026-10-15), shared with the tracker's pool rule v3."""
+
+    def roster(self, rows):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        path = Path(d.name) / "roster_weekly_2026.csv"
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=["season", "week", "gsis_id", "team", "status"])
+            w.writeheader()
+            for season, week, pid, team, status in rows:
+                w.writerow(dict(season=season, week=week, gsis_id=pid, team=team, status=status))
+        return path
+
+    def test_released_retired_unsigned_and_dropped_players_are_off_a_roster_bye_teams_are_not(self):
+        path = self.roster([
+            (2026, 5, "cut", "PHI", "ACT"), (2026, 6, "cut", "PHI", "CUT"),        # released this week
+            (2026, 5, "released_earlier", "PHI", "CUT"),                             # released last week: no week-6 row at all
+            (2026, 6, "ret", "DAL", "RET"),
+            (2026, 1, "dropped", "LV", "DEV"),                                        # LV has week-6 rows, he doesn't
+            (2026, 6, "lv_active", "LV", "ACT"),
+            (2026, 5, "on_bye", "MIA", "ACT"),                                        # MIA on a bye: no week-6 rows for anyone
+            (2026, 6, "practice", "JAX", "DEV"), (2026, 6, "inactive", "JAX", "INA"), (2026, 6, "exempt", "GB", "EXE"),
+            (2026, 7, "next_week_cut", "JAX", "CUT"), (2026, 6, "next_week_cut", "JAX", "ACT"),   # a later week is ignored
+            (2025, 17, "last_season_only", "NE", "ACT")])                            # other seasons are ignored
+        latest, teams = load_roster_presence(path, 2026, 6)
+        self.assertEqual(teams, {"PHI", "DAL", "LV", "JAX", "GB"})
+        why = {pid: off_roster_reason(pid, latest, teams, 6) for pid in (
+            "cut", "released_earlier", "ret", "dropped", "lv_active", "on_bye", "practice", "inactive", "exempt", "next_week_cut",
+            "last_season_only", "never_heard_of")}
+        self.assertEqual(why, {
+            "cut": "CUT (week 6, PHI)", "released_earlier": "CUT (week 5, PHI)", "ret": "RET (week 6, DAL)",
+            "dropped": "no week-6 row; last row week 1 DEV LV, which has week-6 rows",
+            "lv_active": None, "on_bye": None, "practice": None, "inactive": None,
+            "exempt": None,                                   # on a roster; the availability gate takes him (EXE)
+            "next_week_cut": None, "last_season_only": "no roster row this season", "never_heard_of": "no roster row this season"})
+        self.assertIn("EXE", UNAVAILABLE_STATUSES)
+
+    def test_markdown_gains_one_line_only_when_someone_was_left_out(self):
+        plain = render_markdown_report(PREDICTION_OUTPUT)
+        self.assertEqual(render_markdown_report(dict(PREDICTION_OUTPUT, counts=dict(PREDICTION_OUTPUT["counts"], off_roster=0))), plain)
+        md = render_markdown_report(dict(PREDICTION_OUTPUT, counts=dict(PREDICTION_OUTPUT["counts"], off_roster=20)))
+        self.assertIn("- Not on an NFL roster (released, retired or unsigned), not scored: 20", md)
+        self.assertEqual(md.replace("- Not on an NFL roster (released, retired or unsigned), not scored: 20\n", ""), plain)
+
+
 class TestPredictionMarkdownFlags(unittest.TestCase):
     def test_flags_are_display_only(self):
         plain = render_markdown_report(PREDICTION_OUTPUT)
@@ -1069,12 +1131,13 @@ class TestLogInjuryPoolRule(TestLogInternationalWeek):
         out.parent.mkdir(parents=True, exist_ok=True)
         top = [dict(r, rank=i) for i, r in enumerate(self.scored_pool, start=1)]
         payload = json.dumps(dict(PREDICTION_OUTPUT, week=4, scored_pool=self.scored_pool, top=top,
-                                  no_game_watch_list=getattr(self, "unscored", [])))
+                                  no_game_watch_list=getattr(self, "unscored", []),
+                                  off_roster_watch_list=getattr(self, "unscored_off", [])))
         for path in (out, out.with_name(out.stem + "_shadow.json")):
             path.write_text(payload, encoding="utf-8")
             path.with_suffix(".md").write_text("as score_week.py wrote it", encoding="utf-8")
         self.json_as_written = payload
-        return mock.Mock(returncode=0, stdout="", stderr="")
+        return mock.Mock(returncode=0, stdout=getattr(self, "score_week_stdout", ""), stderr="")
 
     def add_espn_snapshot(self, statuses, owned=None, no_row=()):
         """One ESPN snapshot row per scored player: 10% owned unless `owned` says otherwise; none at all for `no_row`."""
@@ -1147,11 +1210,8 @@ class TestLogInjuryPoolRule(TestLogInternationalWeek):
 
     def test_roster_team_decides_who_is_on_a_bye(self):
         self.add_bye_team()
-        with open(self.dir / "raw" / "roster_weekly_2026.csv", "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=["season", "week", "gsis_id", "team", "position", "status", "rookie_year", "draft_number"])
-            w.writeheader()
-            w.writerow(dict(season=2026, week=4, gsis_id="CAR-RB0", team="LV", position="RB", status="ACT"))    # traded to a team that plays
-            w.writerow(dict(season=2026, week=4, gsis_id="KC-RB0", team="CAR", position="RB", status="ACT"))    # traded onto the bye team
+        self.write_weekly_roster([("CAR-RB0", "LV", "RB", "ACT", "", ""),     # traded to a team that plays
+                                  ("KC-RB0", "CAR", "RB", "ACT", "", "")])    # traded onto the bye team
         self.assertEqual(self.log_live(self.fresh, "--skip-ownership")[0], 0)
         cfg = self.run_config()
         self.assertIn("KC-RB0", cfg["excluded_no_game"])
@@ -1202,6 +1262,7 @@ class TestLogInjuryPoolRule(TestLogInternationalWeek):
         argv = ["log", "--season", "2026", "--week", "4", "--slot", "sun", "--db", str(self.db),
                 "--predictions-dir", str(self.dir / "preds"), "--export-dir", str(self.dir / "export"),
                 "--raw-dir", str(self.dir / "raw"), "--injuries-raw-dir", str(self.dir / "raw_injuries"),
+                "--roster-raw-dir", str(self.dir / "raw_rosters"),
                 "--league-raw-dir", str(self.dir / "raw_league"), "--league-key", LEAGUE_KEY,
                 *(() if self.league_fetch else ("--skip-league-availability",)), *extra]
         out = io.StringIO()
@@ -1219,6 +1280,103 @@ class TestLogInjuryPoolRule(TestLogInternationalWeek):
 
     def run_config(self):
         return json.loads(self.rows("SELECT run_config_json FROM tr_runs")[0][0])
+
+    # ---- not on an NFL roster: pool rule v3
+
+    def off_roster_fixture(self):
+        """Four scored players who are not on a roster: released, retired, never on a 2026 roster, and dropped
+        from a team that has week-4 rows."""
+        self.write_weekly_roster([("TEN-RB1", "TEN", "RB", "CUT", "", ""), ("KC-WR2", "KC", "WR", "RET", "", "")],
+                                 skip=("LV-WR3", "BAL-TE5"))
+        with open(self.dir / "raw" / "roster_weekly_2026.csv", "a", newline="", encoding="utf-8") as f:
+            csv.DictWriter(f, fieldnames=self.ROSTER_FIELDS).writerow(
+                dict(season=2026, week=3, gsis_id="BAL-TE5", team="BAL", position="TE", status="DEV"))
+        return {"TEN-RB1": "CUT (week 4, TEN)", "KC-WR2": "RET (week 4, KC)", "LV-WR3": "no roster row this season",
+                "BAL-TE5": "no week-4 row; last row week 3 DEV BAL, which has week-4 rows"}
+
+    def test_players_not_on_a_roster_are_out_of_the_pool_for_every_model_recorded_and_flagged(self):
+        off = self.off_roster_fixture()
+        rc, out = self.log_live(self.fresh, "--skip-ownership")
+        self.assertEqual(rc, 0)
+        self.assertIn("4 scored player(s) left out of the pool: not on an NFL roster", out)
+        pool = {r["player_id"] for r in self.rows("SELECT player_id FROM tr_pool")}
+        self.assertFalse(pool & set(off))
+        self.assertEqual(len(pool), 18)                                      # 24 after the cutoff, minus 4 off, minus Out/Doubtful
+        self.assertFalse([r for r in self.rows("SELECT player_id FROM tr_predictions") if r["player_id"] in off])
+        cfg = self.run_config()
+        self.assertEqual(cfg["pool_rule"], "exclude-no-game-off-roster-out-doubtful-v3")
+        self.assertEqual(cfg["excluded_off_roster"], off)
+        roster_bytes = (self.dir / "raw" / "roster_weekly_2026.csv").read_bytes()
+        self.assertTrue(cfg["off_roster"]["applied"])
+        self.assertEqual(cfg["off_roster"]["weekly_roster_sha256"], hashlib.sha256(roster_bytes).hexdigest())
+        kept = self.dir / "raw_rosters" / cfg["off_roster"]["weekly_roster_file"]
+        self.assertEqual(gzip.decompress(kept.read_bytes()), roster_bytes)    # the exact file, kept beside the run
+        self.assertEqual(cfg["off_roster"]["yahoo_crosscheck"], {"checked": False, "reason": "league availability skipped"})
+        for stem in ("2026_week04", "2026_week04_shadow"):
+            self.assertEqual((self.dir / "preds" / f"{stem}.json").read_text(encoding="utf-8"), self.json_as_written)   # JSON untouched
+            md = (self.dir / "preds" / f"{stem}.md").read_text(encoding="utf-8")
+            self.assertIn("TEN-RB1 **(FA)**", md)
+            self.assertIn("**(FA)** = not on an NFL roster per nflverse's weekly roster", md)
+
+    def test_fa_outranks_bye_and_injury_flags(self):
+        self.write_weekly_roster([("TEN-RB0", "TEN", "RB", "CUT", "", "")])   # also Out on this fixture's injury report
+        self.assertEqual(self.log_live(self.fresh, "--skip-ownership")[0], 0)
+        md = (self.dir / "preds" / "2026_week04.md").read_text(encoding="utf-8")
+        self.assertIn("TEN-RB0 **(FA)**", md)
+        self.assertNotIn("TEN-RB0 **(OUT)**", md)
+
+    def test_players_score_week_left_unscored_as_off_roster_are_recorded_with_the_run(self):
+        self.write_weekly_roster()
+        self.unscored_off = [{"player_id": "PHI-QB9", "name": "Released QB", "pos": "QB", "team": "PHI",
+                              "roster": "CUT (week 4, PHI)", "reason": "not on an NFL roster"}]
+        rc, out = self.log_live(self.fresh, "--skip-ownership")
+        self.assertEqual(rc, 0)
+        self.assertIn("1 player(s) not scored by O.D.D.S. at all: not on an NFL roster", out)
+        self.assertEqual(self.run_config()["excluded_off_roster"], {"PHI-QB9": "CUT (week 4, PHI)"})
+        self.assertNotIn("**(FA)**", (self.dir / "preds" / "2026_week04.md").read_text(encoding="utf-8"))   # nobody to flag
+
+    def test_an_implausibly_incomplete_roster_file_refuses_the_run(self):
+        self.write_weekly_roster(skip=[r["player_id"] for r in self.scored_pool[8:]])     # most players have no row
+        rc, out = self.log_live(self.fresh, "--skip-ownership")
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.rows("SELECT COUNT(*) FROM tr_runs")[0][0], 0)
+        self.assertFalse((self.dir / "preds" / "2026_week04.json").exists())
+
+    def test_score_week_skipping_its_check_refuses_the_run(self):
+        self.write_weekly_roster()
+        self.score_week_stdout = f"{OFF_ROSTER_WARNING_TAG} would put 40 of 48 candidates off an NFL roster\n"
+        self.assertEqual(self.log_live(self.fresh, "--skip-ownership")[0], 2)
+        self.assertEqual(self.rows("SELECT COUNT(*) FROM tr_runs")[0][0], 0)
+
+    def test_without_a_roster_file_the_run_is_logged_and_says_the_rule_was_not_applied(self):
+        rc, out = self.log_live(self.fresh, "--skip-ownership")
+        self.assertEqual(rc, 0)
+        self.assertIn("the off-roster pool rule could not be applied", out)
+        cfg = self.run_config()
+        self.assertEqual((cfg["excluded_off_roster"], cfg["off_roster"]["applied"], cfg["off_roster"]["weekly_roster_sha256"]),
+                         ({}, False, None))
+
+    def test_yahoo_status_is_a_recorded_cross_check_that_decides_nothing(self):
+        self.off_roster_fixture()
+        self.write_weekly_roster([("TEN-RB1", "TEN", "RB", "CUT", "Cut Guy", "601"), ("KC-RB0", "KC", "RB", "DEV", "Squad Guy", "602")])
+
+        def league(league_key):
+            rows = [dict(external_id="601", name="Cut Guy", position="RB", team="MIA", status="FA", waiver_date=None, player_status=None),
+                    dict(external_id="602", name="Squad Guy", position="RB", team="KC", status="FA", waiver_date=None, player_status="NA")]
+            return {"ok": True, "http_status": 200, "raw_bytes": b"{}", "rows": rows, "n_pages": 1, "error": None, "url": "u"}
+        self.league_fetch = league
+        rc, out = self.log_live(self.fresh, "--skip-ownership")
+        self.assertEqual(rc, 0)
+        cc = self.run_config()["off_roster"]["yahoo_crosscheck"]
+        self.assertTrue(cc["checked"])
+        self.assertEqual(cc["off_roster_but_yahoo_not_na"], [{"player_id": "TEN-RB1", "name": "Cut Guy", "nflverse": "CUT (week 4, TEN)",
+                                                              "yahoo_status": None, "yahoo_team": "MIA"}])
+        self.assertEqual(cc["yahoo_na_but_on_a_roster"], [{"player_id": "KC-RB0", "name": "KC-RB0", "nflverse": "DEV (week 4, KC)",
+                                                           "yahoo_team": "KC"}])
+        self.assertIn("[ROSTER] sources disagree on Cut Guy: nflverse CUT (week 4, TEN) vs Yahoo MIA status none -- nflverse decides", out)
+        pool = {r["player_id"] for r in self.rows("SELECT player_id FROM tr_pool")}
+        self.assertNotIn("TEN-RB1", pool)          # nflverse decides: out, whatever Yahoo says
+        self.assertIn("KC-RB0", pool)              # a practice-squad player Yahoo marks NA stays in
 
     def test_out_and_doubtful_are_left_out_for_every_model_and_recorded(self):
         self.add_espn_snapshot({"TEN-RB0": "OUT", "KC-TE5": "QUESTIONABLE", "LV-WR3": "OUT"})
@@ -1304,13 +1462,9 @@ class TestLogInjuryPoolRule(TestLogInternationalWeek):
         return {"ok": False, "http_status": 401, "raw_bytes": None, "rows": [], "n_pages": 0, "error": "HTTP 401 on page 1", "url": "u"}
 
     def add_weekly_roster(self):
-        with open(self.dir / "raw" / "roster_weekly_2026.csv", "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=["season", "week", "gsis_id", "team", "position", "status", "rookie_year", "draft_number",
-                                              "full_name", "yahoo_id"])
-            w.writeheader()
-            for pid, team, pos, name, yahoo in (("TEN-RB1", "TEN", "RB", "Somebody Else", "501"), ("KC-WR2", "KC", "WR", "Casey Waiver", ""),
-                                                ("TEN-RB0", "TEN", "RB", "Out Guy", "503"), ("PIT-RB0", "PIT", "RB", "Thursday Guy", "504")):
-                w.writerow(dict(season=2026, week=4, gsis_id=pid, team=team, position=pos, status="ACT", full_name=name, yahoo_id=yahoo))
+        self.write_weekly_roster([(pid, team, pos, "ACT", name, yahoo) for pid, team, pos, name, yahoo in (
+            ("TEN-RB1", "TEN", "RB", "Somebody Else", "501"), ("KC-WR2", "KC", "WR", "Casey Waiver", ""),
+            ("TEN-RB0", "TEN", "RB", "Out Guy", "503"), ("PIT-RB0", "PIT", "RB", "Thursday Guy", "504"))])
 
     def ledger_rows(self):
         return [[tuple(r) for r in self.rows(f"SELECT * FROM {t} ORDER BY 1, 2, 3, 4")] for t in ("tr_pool", "tr_predictions")]
@@ -1488,9 +1642,9 @@ class TestLeagueAvailability(unittest.TestCase):
         self.assertIn(f"/league/{LEAGUE_KEY}/players;status=A;position=QB,RB,WR,TE;start=225;count=25/ownership", session.urls[-1])
         self.assertEqual(len(got["rows"]), 228)
         self.assertEqual(got["rows"][0], dict(external_id="1000", name="Player 0", position="QB", team="WAS", status="W",
-                                              waiver_date="2026-10-14"))
+                                              waiver_date="2026-10-14", player_status=None))
         self.assertEqual(got["rows"][1], dict(external_id="1001", name="Player 1", position="RB", team="WAS", status="FA",
-                                              waiver_date=None))
+                                              waiver_date=None, player_status=None))
         raw = json.loads(got["raw_bytes"])                             # every page exactly as Yahoo sent it
         self.assertEqual((raw["league_key"], [p["start"] for p in raw["pages"]]), (LEAGUE_KEY, list(range(0, 250, 25))))
         self.assertEqual(json.loads(raw["pages"][9]["body"]), yahoo_page(players[225:]))
@@ -2662,6 +2816,53 @@ class TestReportScoringWords(unittest.TestCase):
         block = report._hit_defs_block({"scoring": RULES, "hit": CFG["hit"]})
         self.assertIn("-0.5 per sack taken", block[0])
         self.assertEqual(set(scoring.OPTIONAL_RULES) - set(RULES), set())    # today's hit_config.json is version 2
+
+
+class TestOffRosterNotes(unittest.TestCase):
+    AUDIT = {"runs": {
+        "old-run": {"week": 4, "slot": "sun", "pool_size": 100, "roster_file_later_than_run": True,
+                    "off_roster": {"p1": {"name": "Cut Player", "reason": "CUT (week 3, SF)"}, "p2": {"name": "Gone", "reason": "x"}},
+                    "exempt": {"p3": {"name": "Exempt Back", "status": "EXE (week 4, GB)"}},
+                    "picks": [{"model": "heuristic", "pick_set": "all_k10", "rank": 1, "player_id": "p1", "name": "Cut Player", "exempt": False},
+                              {"model": "odds_prod", "pick_set": "u50_k25", "rank": 20, "player_id": "p2", "name": "Gone", "exempt": False},
+                              {"model": "dart", "pick_set": "all_k10", "rank": 3, "player_id": "p1", "name": "Cut Player", "exempt": False}]},
+        "same-file-run": {"week": 6, "slot": "thu", "pool_size": 50, "roster_file_later_than_run": False,
+                          "off_roster": {"p1": {"name": "Cut Player", "reason": "CUT"}}, "exempt": {}, "picks": []}}}
+
+    def notes(self, runs, audit=AUDIT):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "audit.json"
+            if audit is not None:
+                path.write_text(json.dumps(audit), encoding="utf-8")
+            return report.off_roster_notes(runs, path)
+
+    def make_run(self, run_id, week, slot, cfg=None):
+        return {"run_id": run_id, "week": week, "run_slot": slot, "run_config_json": json.dumps(cfg or {})}
+
+    def test_runs_before_the_rule_are_footnoted_from_the_committed_audit(self):
+        old, same = self.notes([self.make_run("old-run", 4, "sun"), self.make_run("same-file-run", 6, "thu")])
+        self.assertIn("the week 4 `sun` run was logged before players not on an NFL roster were excluded. 2 of its 100 pool players", old)
+        self.assertIn("and 1 more (Exempt Back) was on the exempt list", old)
+        self.assertIn("O.D.D.S. (13-feature): under-50% top 25 #20 Gone; O.D.D.S. shadow (10-feature): none; "
+                      "Snap-share heuristic: all top 10 #1 Cut Player; Last week's points: none", old)
+        self.assertIn("about 3% of the pool, so of every dart draw. Its numbers are left as logged.", old)
+        self.assertIn("later than the one this run used", old)
+        self.assertNotIn("later than the one this run used", same)
+
+    def test_a_run_under_the_rule_or_missing_from_the_audit_gets_no_note(self):
+        v3 = self.make_run("old-run", 4, "sun", {"excluded_off_roster": {}})
+        self.assertEqual(self.notes([v3, self.make_run("not-audited", 7, "sun")]), [])
+        self.assertEqual(self.notes([self.make_run("old-run", 4, "sun")], audit=None), [])     # no audit file: no claim
+
+    def test_the_committed_audit_covers_the_four_runs_logged_before_the_rule(self):
+        audit = json.loads(report.OFF_ROSTER_AUDIT.read_text(encoding="utf-8"))
+        self.assertEqual(sorted(audit["runs"]), ["2026w04-sun-20261004T140004Z", "2026w05-sun-20261011T140005Z",
+                                                 "2026w05-thu-20261008T140007Z", "2026w06-thu-20261015T140007Z"])
+        w6 = audit["runs"]["2026w06-thu-20261015T140007Z"]
+        self.assertEqual(len(w6["off_roster"]), 20)
+        self.assertIn("00-0027973", w6["off_roster"])                                  # Andy Dalton
+        self.assertFalse(w6["roster_file_later_than_run"])
+        self.assertTrue(all(audit["runs"][r]["roster_file_later_than_run"] for r in audit["runs"] if not r.startswith("2026w06")))
 
 
 class TestReportMath(unittest.TestCase):

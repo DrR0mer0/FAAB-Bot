@@ -112,6 +112,53 @@ def no_game_notes(con, runs):
     return notes
 
 
+OFF_ROSTER_AUDIT = Path(__file__).resolve().parent / "off_roster_audit_20261015.json"
+SCOPE_WORDS = {"all": "all", "u50": "under-50%"}
+
+
+def off_roster_notes(runs, audit_path=OFF_ROSTER_AUDIT):
+    """Footnotes for runs logged before pool rule v3 (no `excluded_off_roster`
+    in run_config_json): how many of their pool players were not on an NFL
+    roster, or on the exempt list, and where they sat in the tracked pick sets.
+    Read from the committed audit file (built 2026-10-15 from the weekly roster
+    file of that morning) rather than recomputed, so the footnote doesn't depend
+    on a gitignored file -- and it says when that file is later than the run."""
+    try:
+        audit = json.loads(Path(audit_path).read_text(encoding="utf-8"))["runs"]
+    except (OSError, ValueError, KeyError):
+        audit = {}
+    notes = []
+    for run in runs:
+        if "excluded_off_roster" in json.loads(run["run_config_json"] or "{}"):
+            continue
+        a = audit.get(run["run_id"])
+        if not a or not (a["off_roster"] or a["exempt"]):
+            continue
+        n_off, exempt = len(a["off_roster"]), [v["name"] for v in a["exempt"].values()]
+        by_model = {}
+        for pk in a["picks"]:
+            if pk["model"] == "dart":
+                continue
+            scope, k = pk["pick_set"].split("_k")
+            by_model.setdefault(pk["model"], []).append(
+                f"{SCOPE_WORDS.get(scope, scope)} top {k} #{pk['rank']} {pk['name']}" + (" (exempt)" if pk["exempt"] else ""))
+        picks = "; ".join(f"{MODEL_LABELS[m]}: {', '.join(by_model[m]) if m in by_model else 'none'}"
+                          for m in ("odds_prod", "odds_shadow", "heuristic", "last_week"))
+        share = 100 * (n_off + len(exempt)) / a["pool_size"] if a["pool_size"] else 0
+        note = (f"**Pool rule (not on an NFL roster):** the week {run['week']} `{run['run_slot']}` run was logged before players "
+                f"not on an NFL roster were excluded. {n_off} of its {a['pool_size']} pool players were released, retired or "
+                f"unsigned per nflverse's weekly roster"
+                + (f", and {len(exempt)} more ({', '.join(exempt)}) {'was' if len(exempt) == 1 else 'were'} on the exempt list"
+                   if exempt else "")
+                + f"; none of them could score. Tracked picks among them -- {picks}. They were about {share:.0f}% of the pool, "
+                f"so of every dart draw. Its numbers are left as logged.")
+        if a["roster_file_later_than_run"]:
+            note += (" Counted with the weekly roster file of 2026-10-15, which is later than the one this run used: a "
+                     "release recorded after the run is counted here although the run could not have known it.")
+        notes.append(note)
+    return notes
+
+
 def sleeper_pool_lines(con, runs, only_if_unknown=False):
     """One line per run saying how big its under-50% pool was and how many of
     those players had UNKNOWN ownership (no row in the roster-% snapshot the
@@ -329,7 +376,7 @@ def build_weekly_report(con, season, week, stats_notes=None):
         if not wrote:
             out += ["_No results for this section (no roster-% was available when the run was logged)._", ""]
     out += ["## Caveats", ""] + [f"- {c}" for c in KNOWN_CAVEATS + pool_rule_notes(runs) + no_game_notes(con, runs)
-                                 + ownership_notes(con, runs)] + [""]
+                                 + off_roster_notes(runs) + ownership_notes(con, runs)] + [""]
     return "\n".join(out)
 
 
@@ -507,7 +554,7 @@ def build_season_report(con, season, report_cfg, stats_notes=None):
     crowd = build_crowd_section(con, season)
     noted = used_runs + [r for r in sun_runs if r["run_id"] not in {u["run_id"] for u in used_runs}]
     out += crowd + ["", "## Caveats", ""] + [f"- {c}" for c in KNOWN_CAVEATS + pool_rule_notes(noted) + no_game_notes(con, noted)
-                                                    + ownership_notes(con, noted)
+                                                    + off_roster_notes(noted) + ownership_notes(con, noted)
                                                     + sleeper_pool_lines(con, noted, only_if_unknown=True)] + [""]
     return "\n".join(out)
 

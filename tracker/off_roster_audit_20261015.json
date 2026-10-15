@@ -1,0 +1,887 @@
+{
+ "generated": "2026-10-15",
+ "rule": "score_week.off_roster_reason (CUT/RET, no 2026 row, or no row for the week although the team has rows); exempt = newest status EXE",
+ "weekly_roster_file": {
+  "path": "raw/rosters/evidence_20261015/roster_weekly_2026.csv",
+  "sha256": "b7b55bf8140d205c3d6ca51b5305bf041fac805f8dd902d2d035ecec9c30c3a0",
+  "note": "the file the week 6 thu run's refresh step wrote at 07:00 Pacific on 2026-10-15"
+ },
+ "runs": {
+  "2026w04-sun-20261004T140004Z": {
+   "week": 4,
+   "slot": "sun",
+   "pool_size": 322,
+   "roster_file_later_than_run": true,
+   "off_roster": {
+    "00-0024243": {
+     "name": "Marcedes Lewis",
+     "reason": "no roster row this season"
+    },
+    "00-0031237": {
+     "name": "Teddy Bridgewater",
+     "reason": "RET (week 4, DET)"
+    },
+    "00-0031687": {
+     "name": "Raheem Mostert",
+     "reason": "no roster row this season"
+    },
+    "00-0032434": {
+     "name": "Brandon Allen",
+     "reason": "no roster row this season"
+    },
+    "00-0033455": {
+     "name": "Anthony Firkser",
+     "reason": "no roster row this season"
+    },
+    "00-0033857": {
+     "name": "JuJu Smith-Schuster",
+     "reason": "no roster row this season"
+    },
+    "00-0034073": {
+     "name": "Ross Dwelley",
+     "reason": "no roster row this season"
+    },
+    "00-0034854": {
+     "name": "KhaDarel Hodge",
+     "reason": "CUT (week 4, SF)"
+    },
+    "00-0035100": {
+     "name": "Jake Browning",
+     "reason": "no roster row this season"
+    },
+    "00-0035628": {
+     "name": "D'Ernest Johnson",
+     "reason": "no roster row this season"
+    },
+    "00-0035639": {
+     "name": "Parris Campbell",
+     "reason": "RET (week 4, DAL)"
+    },
+    "00-0035956": {
+     "name": "Giovanni Ricci",
+     "reason": "no roster row this season"
+    },
+    "00-0036328": {
+     "name": "Antonio Gibson",
+     "reason": "no roster row this season"
+    },
+    "00-0036423": {
+     "name": "Albert Okwuegbunam",
+     "reason": "no week-4 row; last row week 1 DEV LV, which has week-4 rows"
+    },
+    "00-0036534": {
+     "name": "Shane Zylstra",
+     "reason": "CUT (week 2, NE)"
+    },
+    "00-0036569": {
+     "name": "Gary Brightwell",
+     "reason": "no roster row this season"
+    },
+    "00-0036950": {
+     "name": "Avery Williams",
+     "reason": "no roster row this season"
+    },
+    "00-0038359": {
+     "name": "Xavier Smith",
+     "reason": "CUT (week 4, LA)"
+    },
+    "00-0038465": {
+     "name": "Malik Heath",
+     "reason": "no roster row this season"
+    },
+    "00-0038492": {
+     "name": "Jason Brownlee",
+     "reason": "CUT (week 1, KC)"
+    },
+    "00-0038590": {
+     "name": "Justin Shorter",
+     "reason": "CUT (week 4, LV)"
+    },
+    "00-0038809": {
+     "name": "Ben Sims",
+     "reason": "CUT (week 1, MIA)"
+    },
+    "00-0039754": {
+     "name": "Devin Culp",
+     "reason": "CUT (week 1, TB)"
+    },
+    "00-0039757": {
+     "name": "Terrell Jennings",
+     "reason": "no roster row this season"
+    }
+   },
+   "exempt": {
+    "00-0035700": {
+     "name": "Josh Jacobs",
+     "status": "EXE (week 4, GB)"
+    }
+   },
+   "picks": [
+    {
+     "model": "dart",
+     "pick_set": "all_k25",
+     "rank": 12,
+     "player_id": "00-0038492",
+     "name": "Jason Brownlee",
+     "exempt": false
+    },
+    {
+     "model": "dart",
+     "pick_set": "all_k25",
+     "rank": 24,
+     "player_id": "00-0033857",
+     "name": "JuJu Smith-Schuster",
+     "exempt": false
+    },
+    {
+     "model": "dart",
+     "pick_set": "u50_k25",
+     "rank": 1,
+     "player_id": "00-0031237",
+     "name": "Teddy Bridgewater",
+     "exempt": false
+    },
+    {
+     "model": "dart",
+     "pick_set": "u50_k25",
+     "rank": 8,
+     "player_id": "00-0036569",
+     "name": "Gary Brightwell",
+     "exempt": false
+    },
+    {
+     "model": "dart",
+     "pick_set": "u50_k25",
+     "rank": 9,
+     "player_id": "00-0031687",
+     "name": "Raheem Mostert",
+     "exempt": false
+    },
+    {
+     "model": "dart",
+     "pick_set": "u50_k25",
+     "rank": 11,
+     "player_id": "00-0033455",
+     "name": "Anthony Firkser",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "all_k10",
+     "rank": 1,
+     "player_id": "00-0034854",
+     "name": "KhaDarel Hodge",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "all_k25",
+     "rank": 3,
+     "player_id": "00-0034854",
+     "name": "KhaDarel Hodge",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "u50_k10",
+     "rank": 2,
+     "player_id": "00-0034854",
+     "name": "KhaDarel Hodge",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "u50_k25",
+     "rank": 2,
+     "player_id": "00-0034073",
+     "name": "Ross Dwelley",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "u50_k25",
+     "rank": 3,
+     "player_id": "00-0034854",
+     "name": "KhaDarel Hodge",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "u50_k25",
+     "rank": 19,
+     "player_id": "00-0031237",
+     "name": "Teddy Bridgewater",
+     "exempt": false
+    }
+   ]
+  },
+  "2026w05-thu-20261008T140007Z": {
+   "week": 5,
+   "slot": "thu",
+   "pool_size": 403,
+   "roster_file_later_than_run": true,
+   "off_roster": {
+    "00-0022942": {
+     "name": "Philip Rivers",
+     "reason": "no roster row this season"
+    },
+    "00-0024243": {
+     "name": "Marcedes Lewis",
+     "reason": "no roster row this season"
+    },
+    "00-0027973": {
+     "name": "Andy Dalton",
+     "reason": "CUT (week 5, PHI)"
+    },
+    "00-0031237": {
+     "name": "Teddy Bridgewater",
+     "reason": "RET (week 5, DET)"
+    },
+    "00-0031687": {
+     "name": "Raheem Mostert",
+     "reason": "no roster row this season"
+    },
+    "00-0032434": {
+     "name": "Brandon Allen",
+     "reason": "no roster row this season"
+    },
+    "00-0033455": {
+     "name": "Anthony Firkser",
+     "reason": "no roster row this season"
+    },
+    "00-0033857": {
+     "name": "JuJu Smith-Schuster",
+     "reason": "no roster row this season"
+    },
+    "00-0034073": {
+     "name": "Ross Dwelley",
+     "reason": "no roster row this season"
+    },
+    "00-0034854": {
+     "name": "KhaDarel Hodge",
+     "reason": "CUT (week 4, SF)"
+    },
+    "00-0035100": {
+     "name": "Jake Browning",
+     "reason": "no roster row this season"
+    },
+    "00-0035291": {
+     "name": "Trayveon Williams",
+     "reason": "no roster row this season"
+    },
+    "00-0035628": {
+     "name": "D'Ernest Johnson",
+     "reason": "no roster row this season"
+    },
+    "00-0035639": {
+     "name": "Parris Campbell",
+     "reason": "RET (week 5, DAL)"
+    },
+    "00-0035956": {
+     "name": "Giovanni Ricci",
+     "reason": "no roster row this season"
+    },
+    "00-0036328": {
+     "name": "Antonio Gibson",
+     "reason": "no roster row this season"
+    },
+    "00-0036423": {
+     "name": "Albert Okwuegbunam",
+     "reason": "no week-5 row; last row week 1 DEV LV, which has week-5 rows"
+    },
+    "00-0036534": {
+     "name": "Shane Zylstra",
+     "reason": "CUT (week 2, NE)"
+    },
+    "00-0036569": {
+     "name": "Gary Brightwell",
+     "reason": "no roster row this season"
+    },
+    "00-0036950": {
+     "name": "Avery Williams",
+     "reason": "no roster row this season"
+    },
+    "00-0037267": {
+     "name": "Jerome Ford",
+     "reason": "CUT (week 4, MIN)"
+    },
+    "00-0038465": {
+     "name": "Malik Heath",
+     "reason": "no roster row this season"
+    },
+    "00-0038492": {
+     "name": "Jason Brownlee",
+     "reason": "CUT (week 1, KC)"
+    },
+    "00-0038590": {
+     "name": "Justin Shorter",
+     "reason": "CUT (week 4, LV)"
+    },
+    "00-0038705": {
+     "name": "Emari Demercado",
+     "reason": "CUT (week 5, DAL)"
+    },
+    "00-0038809": {
+     "name": "Ben Sims",
+     "reason": "CUT (week 1, MIA)"
+    },
+    "00-0039754": {
+     "name": "Devin Culp",
+     "reason": "CUT (week 1, TB)"
+    },
+    "00-0039757": {
+     "name": "Terrell Jennings",
+     "reason": "no roster row this season"
+    }
+   },
+   "exempt": {
+    "00-0035700": {
+     "name": "Josh Jacobs",
+     "status": "EXE (week 5, GB)"
+    }
+   },
+   "picks": [
+    {
+     "model": "dart",
+     "pick_set": "all_k25",
+     "rank": 1,
+     "player_id": "00-0035100",
+     "name": "Jake Browning",
+     "exempt": false
+    },
+    {
+     "model": "dart",
+     "pick_set": "all_k25",
+     "rank": 8,
+     "player_id": "00-0038705",
+     "name": "Emari Demercado",
+     "exempt": false
+    },
+    {
+     "model": "dart",
+     "pick_set": "all_k25",
+     "rank": 9,
+     "player_id": "00-0035628",
+     "name": "D'Ernest Johnson",
+     "exempt": false
+    },
+    {
+     "model": "dart",
+     "pick_set": "all_k25",
+     "rank": 21,
+     "player_id": "00-0038465",
+     "name": "Malik Heath",
+     "exempt": false
+    },
+    {
+     "model": "dart",
+     "pick_set": "u50_k10",
+     "rank": 2,
+     "player_id": "00-0022942",
+     "name": "Philip Rivers",
+     "exempt": false
+    },
+    {
+     "model": "dart",
+     "pick_set": "u50_k25",
+     "rank": 5,
+     "player_id": "00-0031237",
+     "name": "Teddy Bridgewater",
+     "exempt": false
+    },
+    {
+     "model": "dart",
+     "pick_set": "u50_k25",
+     "rank": 23,
+     "player_id": "00-0038465",
+     "name": "Malik Heath",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "all_k10",
+     "rank": 5,
+     "player_id": "00-0034854",
+     "name": "KhaDarel Hodge",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "all_k25",
+     "rank": 7,
+     "player_id": "00-0034073",
+     "name": "Ross Dwelley",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "all_k25",
+     "rank": 8,
+     "player_id": "00-0034854",
+     "name": "KhaDarel Hodge",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "u50_k10",
+     "rank": 6,
+     "player_id": "00-0034073",
+     "name": "Ross Dwelley",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "u50_k10",
+     "rank": 7,
+     "player_id": "00-0034854",
+     "name": "KhaDarel Hodge",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "u50_k25",
+     "rank": 6,
+     "player_id": "00-0034073",
+     "name": "Ross Dwelley",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "u50_k25",
+     "rank": 7,
+     "player_id": "00-0034854",
+     "name": "KhaDarel Hodge",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "u50_k25",
+     "rank": 25,
+     "player_id": "00-0035628",
+     "name": "D'Ernest Johnson",
+     "exempt": false
+    },
+    {
+     "model": "odds_prod",
+     "pick_set": "u50_k25",
+     "rank": 14,
+     "player_id": "00-0033857",
+     "name": "JuJu Smith-Schuster",
+     "exempt": false
+    },
+    {
+     "model": "odds_shadow",
+     "pick_set": "u50_k25",
+     "rank": 13,
+     "player_id": "00-0033857",
+     "name": "JuJu Smith-Schuster",
+     "exempt": false
+    }
+   ]
+  },
+  "2026w05-sun-20261011T140005Z": {
+   "week": 5,
+   "slot": "sun",
+   "pool_size": 312,
+   "roster_file_later_than_run": true,
+   "off_roster": {
+    "00-0022942": {
+     "name": "Philip Rivers",
+     "reason": "no roster row this season"
+    },
+    "00-0024243": {
+     "name": "Marcedes Lewis",
+     "reason": "no roster row this season"
+    },
+    "00-0031687": {
+     "name": "Raheem Mostert",
+     "reason": "no roster row this season"
+    },
+    "00-0032434": {
+     "name": "Brandon Allen",
+     "reason": "no roster row this season"
+    },
+    "00-0033455": {
+     "name": "Anthony Firkser",
+     "reason": "no roster row this season"
+    },
+    "00-0034073": {
+     "name": "Ross Dwelley",
+     "reason": "no roster row this season"
+    },
+    "00-0034854": {
+     "name": "KhaDarel Hodge",
+     "reason": "CUT (week 4, SF)"
+    },
+    "00-0035100": {
+     "name": "Jake Browning",
+     "reason": "no roster row this season"
+    },
+    "00-0035291": {
+     "name": "Trayveon Williams",
+     "reason": "no roster row this season"
+    },
+    "00-0035628": {
+     "name": "D'Ernest Johnson",
+     "reason": "no roster row this season"
+    },
+    "00-0035956": {
+     "name": "Giovanni Ricci",
+     "reason": "no roster row this season"
+    },
+    "00-0036328": {
+     "name": "Antonio Gibson",
+     "reason": "no roster row this season"
+    },
+    "00-0036423": {
+     "name": "Albert Okwuegbunam",
+     "reason": "no week-5 row; last row week 1 DEV LV, which has week-5 rows"
+    },
+    "00-0036534": {
+     "name": "Shane Zylstra",
+     "reason": "CUT (week 2, NE)"
+    },
+    "00-0036569": {
+     "name": "Gary Brightwell",
+     "reason": "no roster row this season"
+    },
+    "00-0036950": {
+     "name": "Avery Williams",
+     "reason": "no roster row this season"
+    },
+    "00-0037267": {
+     "name": "Jerome Ford",
+     "reason": "CUT (week 4, MIN)"
+    },
+    "00-0038396": {
+     "name": "Eric Gray",
+     "reason": "CUT (week 5, CLE)"
+    },
+    "00-0038465": {
+     "name": "Malik Heath",
+     "reason": "no roster row this season"
+    },
+    "00-0038590": {
+     "name": "Justin Shorter",
+     "reason": "CUT (week 4, LV)"
+    },
+    "00-0038809": {
+     "name": "Ben Sims",
+     "reason": "CUT (week 1, MIA)"
+    },
+    "00-0039757": {
+     "name": "Terrell Jennings",
+     "reason": "no roster row this season"
+    }
+   },
+   "exempt": {
+    "00-0035700": {
+     "name": "Josh Jacobs",
+     "status": "EXE (week 5, GB)"
+    }
+   },
+   "picks": [
+    {
+     "model": "dart",
+     "pick_set": "all_k25",
+     "rank": 9,
+     "player_id": "00-0039757",
+     "name": "Terrell Jennings",
+     "exempt": false
+    },
+    {
+     "model": "dart",
+     "pick_set": "all_k25",
+     "rank": 12,
+     "player_id": "00-0035291",
+     "name": "Trayveon Williams",
+     "exempt": false
+    },
+    {
+     "model": "dart",
+     "pick_set": "u50_k10",
+     "rank": 2,
+     "player_id": "00-0022942",
+     "name": "Philip Rivers",
+     "exempt": false
+    },
+    {
+     "model": "dart",
+     "pick_set": "u50_k10",
+     "rank": 3,
+     "player_id": "00-0032434",
+     "name": "Brandon Allen",
+     "exempt": false
+    },
+    {
+     "model": "dart",
+     "pick_set": "u50_k25",
+     "rank": 17,
+     "player_id": "00-0034854",
+     "name": "KhaDarel Hodge",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "all_k10",
+     "rank": 3,
+     "player_id": "00-0034854",
+     "name": "KhaDarel Hodge",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "all_k25",
+     "rank": 6,
+     "player_id": "00-0034073",
+     "name": "Ross Dwelley",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "all_k25",
+     "rank": 7,
+     "player_id": "00-0034854",
+     "name": "KhaDarel Hodge",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "u50_k10",
+     "rank": 5,
+     "player_id": "00-0034854",
+     "name": "KhaDarel Hodge",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "u50_k25",
+     "rank": 5,
+     "player_id": "00-0034073",
+     "name": "Ross Dwelley",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "u50_k25",
+     "rank": 6,
+     "player_id": "00-0034854",
+     "name": "KhaDarel Hodge",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "u50_k25",
+     "rank": 22,
+     "player_id": "00-0035628",
+     "name": "D'Ernest Johnson",
+     "exempt": false
+    }
+   ]
+  },
+  "2026w06-thu-20261015T140007Z": {
+   "week": 6,
+   "slot": "thu",
+   "pool_size": 372,
+   "roster_file_later_than_run": false,
+   "off_roster": {
+    "00-0022942": {
+     "name": "Philip Rivers",
+     "reason": "no roster row this season"
+    },
+    "00-0024243": {
+     "name": "Marcedes Lewis",
+     "reason": "no roster row this season"
+    },
+    "00-0027973": {
+     "name": "Andy Dalton",
+     "reason": "CUT (week 5, PHI)"
+    },
+    "00-0031237": {
+     "name": "Teddy Bridgewater",
+     "reason": "RET (week 5, DET)"
+    },
+    "00-0031687": {
+     "name": "Raheem Mostert",
+     "reason": "no roster row this season"
+    },
+    "00-0032434": {
+     "name": "Brandon Allen",
+     "reason": "no roster row this season"
+    },
+    "00-0033857": {
+     "name": "JuJu Smith-Schuster",
+     "reason": "no roster row this season"
+    },
+    "00-0034854": {
+     "name": "KhaDarel Hodge",
+     "reason": "CUT (week 4, SF)"
+    },
+    "00-0035628": {
+     "name": "D'Ernest Johnson",
+     "reason": "no roster row this season"
+    },
+    "00-0035639": {
+     "name": "Parris Campbell",
+     "reason": "RET (week 6, DAL)"
+    },
+    "00-0036328": {
+     "name": "Antonio Gibson",
+     "reason": "no roster row this season"
+    },
+    "00-0036332": {
+     "name": "Josiah Deguara",
+     "reason": "CUT (week 6, PHI)"
+    },
+    "00-0036423": {
+     "name": "Albert Okwuegbunam",
+     "reason": "no week-6 row; last row week 1 DEV LV, which has week-6 rows"
+    },
+    "00-0036950": {
+     "name": "Avery Williams",
+     "reason": "no roster row this season"
+    },
+    "00-0038396": {
+     "name": "Eric Gray",
+     "reason": "CUT (week 5, CLE)"
+    },
+    "00-0038465": {
+     "name": "Malik Heath",
+     "reason": "no roster row this season"
+    },
+    "00-0038492": {
+     "name": "Jason Brownlee",
+     "reason": "CUT (week 1, KC)"
+    },
+    "00-0038590": {
+     "name": "Justin Shorter",
+     "reason": "CUT (week 4, LV)"
+    },
+    "00-0038728": {
+     "name": "Jared Wayne",
+     "reason": "CUT (week 6, HOU)"
+    },
+    "00-0039757": {
+     "name": "Terrell Jennings",
+     "reason": "no roster row this season"
+    }
+   },
+   "exempt": {
+    "00-0035700": {
+     "name": "Josh Jacobs",
+     "status": "EXE (week 6, GB)"
+    }
+   },
+   "picks": [
+    {
+     "model": "dart",
+     "pick_set": "all_k10",
+     "rank": 2,
+     "player_id": "00-0038396",
+     "name": "Eric Gray",
+     "exempt": false
+    },
+    {
+     "model": "dart",
+     "pick_set": "all_k25",
+     "rank": 24,
+     "player_id": "00-0038728",
+     "name": "Jared Wayne",
+     "exempt": false
+    },
+    {
+     "model": "dart",
+     "pick_set": "u50_k10",
+     "rank": 7,
+     "player_id": "00-0038728",
+     "name": "Jared Wayne",
+     "exempt": false
+    },
+    {
+     "model": "dart",
+     "pick_set": "u50_k25",
+     "rank": 7,
+     "player_id": "00-0022942",
+     "name": "Philip Rivers",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "all_k10",
+     "rank": 5,
+     "player_id": "00-0034854",
+     "name": "KhaDarel Hodge",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "all_k25",
+     "rank": 7,
+     "player_id": "00-0034854",
+     "name": "KhaDarel Hodge",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "u50_k10",
+     "rank": 5,
+     "player_id": "00-0034854",
+     "name": "KhaDarel Hodge",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "u50_k25",
+     "rank": 5,
+     "player_id": "00-0034854",
+     "name": "KhaDarel Hodge",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "u50_k25",
+     "rank": 16,
+     "player_id": "00-0036423",
+     "name": "Albert Okwuegbunam",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "u50_k25",
+     "rank": 17,
+     "player_id": "00-0027973",
+     "name": "Andy Dalton",
+     "exempt": false
+    },
+    {
+     "model": "heuristic",
+     "pick_set": "u50_k25",
+     "rank": 22,
+     "player_id": "00-0031237",
+     "name": "Teddy Bridgewater",
+     "exempt": false
+    },
+    {
+     "model": "odds_prod",
+     "pick_set": "u50_k25",
+     "rank": 20,
+     "player_id": "00-0027973",
+     "name": "Andy Dalton",
+     "exempt": false
+    }
+   ]
+  }
+ },
+ "week_6_first_snapshot": {
+  "production": {
+   "top_10": 0,
+   "top_25": 0,
+   "first_rank": null
+  },
+  "shadow": {
+   "top_10": 0,
+   "top_25": 0,
+   "first_rank": null
+  }
+ }
+}

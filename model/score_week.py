@@ -44,6 +44,19 @@ team) even though both now read the same file -- status_of is never
 filtered the way team_of/team_pos_roster are, so it sees every status,
 not just the "confirmed" ones.
 
+Off-roster check (from 2026-10-15): a player who is not on any NFL roster --
+his newest weekly row at or before the week says CUT or RET, he has no row
+this season at all (an unsigned player who passes eligibility on last
+season's games), or he has no row for the week although his last team does
+(a team on a bye has no rows that week, so a missing row only counts when the
+team HAS rows) -- is not scored and is listed in off_roster_watch_list. Runs
+right after the bye check. Found when Andy Dalton, released by PHI in week 5,
+was ranked in week 6 on his stats-history team. If the file would put more
+than OFF_ROSTER_MAX_SHARE of the candidates off a roster it is treated as
+broken: the check is NOT applied and a [ROSTER WARNING] is printed (the
+tracker's `log` refuses on it). Practice-squad (DEV) players stay in -- an
+open question, not a decision. EXE (exempt list) joins the availability gate.
+
 check_roster_staleness() prints a loud, hard-to-miss warning (not a hard
 failure) if --weekly-roster is more than a few days old on disk, or its
 newest rows don't reach close to the week being scored -- a quiet stale
@@ -170,10 +183,26 @@ NEW_COMPETITOR_REASON = "new same-position addition(s) this offseason — traili
 # was confirmed, via Jordan Mason, to mean IR). SUS (suspended) is
 # included per the task; PUP/RSN are included defensively in case a future
 # pull ever reports them as distinct top-level statuses. Does NOT include
-# CUT/RET/EXE -- those are a different category (no longer on the team at
-# all, or a legal-process exemption) and out of scope for this gate.
-UNAVAILABLE_STATUSES = {"RES", "PUP", "SUS", "RSN"}
-UNAVAILABLE_REASON = "known long-term unavailable (reserve/IR, PUP, non-football injury, or suspension) per the most recent weekly roster"
+# CUT/RET -- those are a different category (no longer on the team at all)
+# and handled by the off-roster check below. EXE (the exempt list) is here
+# since 2026-10-15: on a team, but not allowed to play.
+UNAVAILABLE_STATUSES = {"RES", "PUP", "SUS", "RSN", "EXE"}
+UNAVAILABLE_REASON = ("known long-term unavailable (reserve/IR, PUP, non-football injury, suspension, or exempt list) "
+                      "per the most recent weekly roster")
+
+# Not on any NFL roster (from 2026-10-15): released or retired as of the most
+# recent weekly row at or before the week, no row at all this season (an
+# unsigned player who passes eligibility on last season's games), or no row
+# for the week although his last team has rows for it (dropped without a CUT
+# row). A team with no rows for the week is on a bye, so a missing row is
+# evidence only when the team HAS rows. Found 2026-10-15: Andy Dalton, released
+# by PHI in week 5, was ranked in the week 6 pool on his stats-history team.
+OFF_ROSTER_STATUSES = {"CUT", "RET"}
+OFF_ROSTER_REASON = "not on an NFL roster per the weekly roster (released, retired, or unsigned) -- not scored"
+# A file that would put more of the candidates than this off a roster is broken (2026-10-15: 20 of 372 pool
+# players, ~5%), and the check is skipped with a [ROSTER WARNING] rather than gutting the pool.
+OFF_ROSTER_MAX_SHARE = 0.25
+OFF_ROSTER_WARNING_TAG = "[ROSTER WARNING]"
 
 # Fantasy-relevant offensive positions only; IDP/O-line/K/P aren't rosterable
 # in this league.
@@ -328,6 +357,8 @@ def render_markdown_report(output, status_flags=None, flag_note=None):
         lines.append(f"- Unavailable (reserve/PUP/NFI/suspended) suppressed: {counts['unavailable_suppressed']}")
     if counts.get("no_game"):
         lines.append(f"- No game this week (bye), not scored: {counts['no_game']}")
+    if counts.get("off_roster"):
+        lines.append(f"- Not on an NFL roster (released, retired or unsigned), not scored: {counts['off_roster']}")
     if counts.get("already_played") is not None:
         lines.append(f"- Already played as of this run (not re-scored, rank/score carried forward where available): "
                       f"{counts['already_played']}")
@@ -402,6 +433,45 @@ def load_current_roster(path, season, week):
         if r.get("rookie_year") == str(season) and r.get("draft_number"):
             draft_pick_of[pid] = int(r["draft_number"])
     return team_of, team_pos_roster, draft_pick_of, status_of
+
+
+def load_roster_presence(path, season, week):
+    """(latest, teams_in_week) from the weekly roster file: latest maps every
+    gsis_id with a row this season to (week, status, team) of its newest row at
+    or before `week`; teams_in_week is the set of teams with any row for
+    `week` itself (a team on a bye has none)."""
+    latest, teams_in_week = {}, set()
+    with open(path, encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            if r.get("season") != str(season):
+                continue
+            try:
+                w = int(r.get("week") or 0)
+            except ValueError:
+                continue
+            if w <= 0 or w > week:
+                continue
+            if w == week:
+                teams_in_week.add(r.get("team"))
+            pid = r.get("gsis_id")
+            if pid and (pid not in latest or w > latest[pid][0]):
+                latest[pid] = (w, r.get("status"), r.get("team"))
+    return latest, teams_in_week
+
+
+def off_roster_reason(pid, latest, teams_in_week, week):
+    """Why a player is not on an NFL roster for `week`, or None if he is (or
+    the file can't say). See OFF_ROSTER_STATUSES. Shared with the tracker's
+    pool rule (tracker.split_pool_off_roster)."""
+    row = latest.get(pid)
+    if row is None:
+        return "no roster row this season"
+    w, status, team = row
+    if status in OFF_ROSTER_STATUSES:
+        return f"{status} (week {w}, {team})"
+    if w < week and team in teams_in_week:
+        return f"no week-{week} row; last row week {w} {status} {team}, which has week-{week} rows"
+    return None
 
 
 STALE_ROSTER_DAYS = 3
@@ -492,7 +562,7 @@ def print_top_table(label, ranked, args, names):
 def write_output(model_path, model_commit, model_meta, args, names, ranked, stable, proba,
                   all_eligible_count, n_candidates, n_released_by_recency,
                   team_changed_records, new_competitor_records, unavailable_records,
-                  already_played_records, no_game_records,
+                  already_played_records, no_game_records, off_roster_records,
                   n_via_production_only, n_via_draft_only, n_via_both, json_out_path):
     def player_record(pid, feat, score=None):
         return {
@@ -529,6 +599,7 @@ def write_output(model_path, model_commit, model_meta, args, names, ranked, stab
             "released_from_offseason_suppression": n_released_by_recency,
             "unavailable_suppressed": len(unavailable_records),
             "no_game": len(no_game_records),
+            "off_roster": len(off_roster_records),
             "already_played": len(already_played_records),
             "team_changed_suppressed": len(team_changed_records),
             "new_competitor_suppressed": len(new_competitor_records),
@@ -540,6 +611,7 @@ def write_output(model_path, model_commit, model_meta, args, names, ranked, stab
         "scored_pool": scored_pool_records,
         "unavailable_watch_list": unavailable_records,
         "no_game_watch_list": no_game_records,
+        "off_roster_watch_list": off_roster_records,
         "already_played_watch_list": already_played_records,
         "team_changed_watch_list": team_changed_records,
         "new_competitor_watch_list": new_competitor_records,
@@ -589,11 +661,13 @@ def main():
 
     weekly_roster_path = args.weekly_roster or str(REPO_ROOT / "nflverse_raw" / f"roster_weekly_{args.season}.csv")
     roster_team_of, team_pos_roster, draft_pick_of, weekly_status_of = {}, {}, {}, {}
+    roster_latest, roster_teams_in_week = {}, set()
     if os.path.exists(weekly_roster_path):
         check_roster_staleness(weekly_roster_path, args.season, args.week)
         roster_team_of, team_pos_roster, draft_pick_of, weekly_status_of = load_current_roster(
             weekly_roster_path, args.season, args.week
         )
+        roster_latest, roster_teams_in_week = load_roster_presence(weekly_roster_path, args.season, args.week)
         n_flagged_unavailable = sum(1 for s in weekly_status_of.values() if s in UNAVAILABLE_STATUSES)
         print(f"[INFO] cross-referencing against {weekly_roster_path}: {len(roster_team_of)} players with a "
               f"confirmed current team, {len(draft_pick_of)} rookies with known {args.season}-draft pick numbers, "
@@ -685,6 +759,14 @@ def main():
 
     stable, team_changed_list, new_competitor_list, unavailable_list, already_played_list = [], [], [], [], []
     no_game_list = []
+    off_roster_list = []
+    if roster_latest:
+        would_drop = sum(1 for pid, _feat in candidates if off_roster_reason(pid, roster_latest, roster_teams_in_week, args.week))
+        if would_drop > OFF_ROSTER_MAX_SHARE * len(candidates):
+            print(f"{OFF_ROSTER_WARNING_TAG} {weekly_roster_path} would put {would_drop} of {len(candidates)} candidates off an "
+                  f"NFL roster (more than {OFF_ROSTER_MAX_SHARE:.0%}) -- it looks incomplete, so the off-roster check was NOT "
+                  f"applied. Refresh it with data/fetch_weekly_update.py.")
+            roster_latest = {}
     n_via_production_only = n_via_draft_only = n_via_both = 0
     n_released_by_recency = 0
     for pid, feat in candidates:
@@ -695,6 +777,14 @@ def main():
         # kickoff guard below. Skipped if the week's schedule isn't loaded.
         if scheduled_teams and (roster_team_of.get(pid) or feat["_team"]) not in scheduled_teams:
             no_game_list.append((pid, feat))
+            continue
+
+        # Not on an NFL roster: released, retired or unsigned (see
+        # OFF_ROSTER_STATUSES). Only with a weekly roster file for the season;
+        # without one nothing can be said and nobody is dropped.
+        off_reason = off_roster_reason(pid, roster_latest, roster_teams_in_week, args.week) if roster_latest else None
+        if off_reason:
+            off_roster_list.append((pid, feat, off_reason))
             continue
 
         # Kickoff guard first, unconditionally -- ahead of even the
@@ -771,8 +861,9 @@ def main():
     print(f"[INFO] {len(stable)} stable candidates scored ({n_released_by_recency} of those released from "
           f"offseason suppression this week, having reached {MIN_PRIOR_GAMES}+ current-season games); "
           f"{len(no_game_list)} with no game this week (bye, excluded); "
+          f"{len(off_roster_list)} not on an NFL roster (excluded); "
           f"{len(already_played_list)} already played as of {as_of.isoformat()} (excluded, not re-scored); "
-          f"{len(unavailable_list)} unavailable (reserve/PUP/NFI/suspended, score suppressed); "
+          f"{len(unavailable_list)} unavailable (reserve/PUP/NFI/suspended/exempt, score suppressed); "
           f"{len(team_changed_list)} team-changed (score suppressed); "
           f"{len(new_competitor_list)} with a meaningful new same-position competitor this offseason (score suppressed)")
     print(f"[INFO]   of those {len(new_competitor_list)}: {n_via_production_only} via prior-production threshold only, "
@@ -833,6 +924,11 @@ def main():
          "team": roster_team_of.get(pid) or feat["_team"], "reason": NO_GAME_REASON}
         for pid, feat in no_game_list
     ]
+    off_roster_records = [
+        {"player_id": pid, "name": names.get(pid, pid), "pos": feat["_pos"], "team": feat["_team"],
+         "roster": why, "reason": OFF_ROSTER_REASON}
+        for pid, feat, why in off_roster_list
+    ]
 
     unavailable_records = []
     for pid, feat, status in unavailable_list:
@@ -892,7 +988,7 @@ def main():
             write_output(model_path, model_commit, model_meta, args, names, ranked, stable, proba,
                          all_eligible_count, len(candidates), n_released_by_recency,
                          team_changed_records, new_competitor_records, unavailable_records,
-                         already_played_records, no_game_records,
+                         already_played_records, no_game_records, off_roster_records,
                          n_via_production_only, n_via_draft_only, n_via_both, json_out_path)
 
     json_out_path = Path(args.json_out) if args.json_out else None
