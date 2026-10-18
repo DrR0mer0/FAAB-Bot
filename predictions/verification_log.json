@@ -54,6 +54,19 @@
           "top_25": 0
         }
       }
+    },
+    {
+      "changed_at": "2026-10-18T15:25:46.968897+00:00",
+      "first_week_applied": {
+        "season": 2026,
+        "week": 7
+      },
+      "score_week_git_commit": "b4cff44f19116a25741f4a92d9159e4f350b9665",
+      "note": "From 2026 week 7, model/score_week.py no longer ranks a player designated Out or Doubtful on the week's NFL injury report when the snapshot is generated (tracker/injuries.py's rule, shared with the tracker's pool rule: nflverse's injuries release, ESPN's injuryStatus as the fallback; Questionable players stay in). He is listed in injury_watch_list instead. Before this, Out/Doubtful players were ranked and counted here as misses if they didn't play. Week 6's first snapshot (predictions/2026_week06.json, the thu run of 2026-10-15) was generated before the change and is frozen as logged; at its log time the report designated none of its pool players Out or Doubtful (a Thursday run only sees Thursday-game designations), so the check would not have changed it. What the check cannot know: Sunday teams' designations before Friday, and game-day inactives -- a thu snapshot will still rank players later ruled out.",
+      "week_6_first_snapshot_out_doubtful_at_log_time": {
+        "source": "nflverse",
+        "excluded": 0
+      }
     }
   ],
   "weeks": [
