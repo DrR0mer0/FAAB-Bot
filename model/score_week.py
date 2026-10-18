@@ -34,11 +34,8 @@ roster's status_of) indicates a known long-term absence -- reserve/IR,
 PUP, non-football injury, or suspension -- is suppressed unconditionally,
 checked BEFORE anything else in the suppression loop (including the
 recency-release above -- a player accumulating real current-season games
-doesn't matter if they're currently on IR and can't play). Deliberately
-does NOT gate on game-day designations (questionable/doubtful/out, from
-nflverse's separate `injuries` release): those post through the week,
-often after predictions are generated, and players already on long-term
-reserve typically don't even appear on that report. This is a separate
+doesn't matter if they're currently on IR and can't play). Game-day
+designations are a separate check (below), not part of this gate. This is a separate
 DECISION from team-mapping (a player on reserve still belongs to his
 team) even though both now read the same file -- status_of is never
 filtered the way team_of/team_pos_roster are, so it sees every status,
@@ -56,6 +53,22 @@ than OFF_ROSTER_MAX_SHARE of the candidates off a roster it is treated as
 broken: the check is NOT applied and a [ROSTER WARNING] is printed (the
 tracker's `log` refuses on it). Practice-squad (DEV) players stay in -- an
 open question, not a decision. EXE (exempt list) joins the availability gate.
+
+Out/Doubtful check (from 2026-10-18): a player designated Out or Doubtful
+on the week's NFL injury report at run time is not ranked and is listed in
+injury_watch_list -- the tracker's pool rule, applied to the ranking too.
+Questionable players stay in. The definition (which statuses, how old the
+report may be, the nflverse source and the ESPN fallback) is
+tracker/injuries.py's, shared with the tracker: `log` resolves the
+designations once and passes them in with --injury-designations; a run by
+hand resolves them itself (injuries.resolve_standalone); an --as-of run or
+--skip-injuries applies none (a live report would be from the run's future).
+Applied last, to the players who would otherwise be ranked, so a player left
+out for another reason keeps it. Like a bye week, this matches training: the
+historical table only holds player-weeks that were played (of 2,363
+skill-position player-weeks designated Out in 2016-2024 none recorded a stat).
+What it can't know: Sunday teams' designations before Friday (a Thursday run
+only sees Thursday-game players) and game-day inactives.
 
 check_roster_staleness() prints a loud, hard-to-miss warning (not a hard
 failure) if --weekly-roster is more than a few days old on disk, or its
@@ -162,7 +175,9 @@ from model_metadata import read_metadata
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "data"))
+sys.path.insert(0, str(REPO_ROOT / "tracker"))
 from team_crosswalk import norm_team  # noqa: E402 -- shared crosswalk; see data/team_crosswalk.py
+import injuries  # noqa: E402 -- the Out/Doubtful rule, shared with the tracker's pool rule
 
 # See the module docstring's TIMEZONE NOTE for how this was determined.
 KICKOFF_TZ = ZoneInfo("America/New_York")
@@ -203,6 +218,7 @@ OFF_ROSTER_REASON = "not on an NFL roster per the weekly roster (released, retir
 # players, ~5%), and the check is skipped with a [ROSTER WARNING] rather than gutting the pool.
 OFF_ROSTER_MAX_SHARE = 0.25
 OFF_ROSTER_WARNING_TAG = "[ROSTER WARNING]"
+INJURY_REASON = "designated on the week's NFL injury report (see injury_rule) -- not ranked"
 
 # Fantasy-relevant offensive positions only; IDP/O-line/K/P aren't rosterable
 # in this league.
@@ -359,6 +375,8 @@ def render_markdown_report(output, status_flags=None, flag_note=None):
         lines.append(f"- No game this week (bye), not scored: {counts['no_game']}")
     if counts.get("off_roster"):
         lines.append(f"- Not on an NFL roster (released, retired or unsigned), not scored: {counts['off_roster']}")
+    if counts.get("injury_out_doubtful"):
+        lines.append(f"- Out/Doubtful on the injury report, not ranked: {counts['injury_out_doubtful']}")
     if counts.get("already_played") is not None:
         lines.append(f"- Already played as of this run (not re-scored, rank/score carried forward where available): "
                       f"{counts['already_played']}")
@@ -379,6 +397,14 @@ def render_markdown_report(output, status_flags=None, flag_note=None):
         flag = (status_flags or {}).get(r["player_id"])
         name = f"{r['name']} **({flag})**" if flag else r["name"]
         lines.append(f"| {r['rank']} | {name} | {r['pos']} | {r['team']} | {r['score']:.4f} |")
+    withheld = output.get("injury_watch_list") or []
+    if withheld:
+        rule = output.get("injury_rule") or {}
+        src = {"nflverse": "the NFL injury report (nflverse)", "espn-fallback": "ESPN's injury status (the official report "
+               "was unavailable)"}.get(rule.get("source"), rule.get("source") or "the injury report")
+        lines += ["", "## Out/Doubtful (not ranked)", "",
+                  f"_Designated on {src} when this was generated; Questionable players are ranked as usual._", ""]
+        lines += [f"- {r['name']} ({r['pos']}, {r['team']}): {r['status']}" for r in withheld]
     return "\n".join(lines) + "\n"
 
 
@@ -562,7 +588,7 @@ def print_top_table(label, ranked, args, names):
 def write_output(model_path, model_commit, model_meta, args, names, ranked, stable, proba,
                   all_eligible_count, n_candidates, n_released_by_recency,
                   team_changed_records, new_competitor_records, unavailable_records,
-                  already_played_records, no_game_records, off_roster_records,
+                  already_played_records, no_game_records, off_roster_records, injury_records, injury_rule,
                   n_via_production_only, n_via_draft_only, n_via_both, json_out_path):
     def player_record(pid, feat, score=None):
         return {
@@ -600,6 +626,7 @@ def write_output(model_path, model_commit, model_meta, args, names, ranked, stab
             "unavailable_suppressed": len(unavailable_records),
             "no_game": len(no_game_records),
             "off_roster": len(off_roster_records),
+            "injury_out_doubtful": len(injury_records),
             "already_played": len(already_played_records),
             "team_changed_suppressed": len(team_changed_records),
             "new_competitor_suppressed": len(new_competitor_records),
@@ -612,6 +639,8 @@ def write_output(model_path, model_commit, model_meta, args, names, ranked, stab
         "unavailable_watch_list": unavailable_records,
         "no_game_watch_list": no_game_records,
         "off_roster_watch_list": off_roster_records,
+        "injury_watch_list": injury_records,
+        "injury_rule": {k: v for k, v in injury_rule.items() if k != "excluded"},
         "already_played_watch_list": already_played_records,
         "team_changed_watch_list": team_changed_records,
         "new_competitor_watch_list": new_competitor_records,
@@ -646,6 +675,10 @@ def main():
                      help="where to look for the week's FIRST (bare, unsuffixed) snapshot when carrying forward "
                           "already-played players' rank/score -- independent of --json-out, so a dry run to a "
                           "scratch location still carries forward from the real committed baseline")
+    ap.add_argument("--injury-designations", default=None,
+                    help="the week's Out/Doubtful designations as resolved by tracker/tracker.py log (a JSON file from "
+                         "injuries.write_designations); without it they are resolved here, from the same sources")
+    ap.add_argument("--skip-injuries", action="store_true", help="apply no Out/Doubtful check (recorded as skipped)")
     ap.add_argument("--as-of", default=None,
                      help="ISO8601 instant to evaluate the kickoff guard against (default: now; naive input is "
                           "assumed UTC). For testing, e.g. --as-of 2026-10-05T14:00:00+00:00 to simulate a "
@@ -757,9 +790,23 @@ def main():
         via_draft = pick is not None and pick <= DRAFT_CAPITAL_PICK_CUTOFF
         return (via_production or via_draft), via_production, via_draft
 
+    # Out/Doubtful designations (tracker/injuries.py's rule; see the module docstring)
+    if args.injury_designations:
+        injury_rule = injuries.read_designations(args.injury_designations)
+    elif args.skip_injuries or args.as_of:
+        injury_rule = injuries.skipped_record("--skip-injuries" if args.skip_injuries else "--as-of run: no live injury report",
+                                              injuries.rule()[0], "score_week")
+    else:
+        injury_rule = injuries.resolve_standalone(con, args.season, args.week, as_of)
+    injury_out = injuries.excluded_ids(injury_rule["excluded"], injury_rule["exclude"])
+    print(f"[INFO] injury designations: source {injury_rule['source']} (from {injury_rule.get('provided_by')})"
+          + (f" -- {injury_rule['reason']}" if injury_rule.get("reason") else "")
+          + f"; {len(injury_out)} player(s) designated {'/'.join(injury_rule['exclude'])}")
+
     stable, team_changed_list, new_competitor_list, unavailable_list, already_played_list = [], [], [], [], []
     no_game_list = []
     off_roster_list = []
+    injury_list = []
     if roster_latest:
         would_drop = sum(1 for pid, _feat in candidates if off_roster_reason(pid, roster_latest, roster_teams_in_week, args.week))
         if would_drop > OFF_ROSTER_MAX_SHARE * len(candidates):
@@ -800,6 +847,7 @@ def main():
             if kickoff_dt <= as_of:
                 already_played_list.append((pid, feat, kickoff_dt, opponent))
                 continue
+
 
         # Availability gate next, unconditionally -- ahead of even the
         # recency-release below. A player on reserve who happens to have
@@ -858,10 +906,19 @@ def main():
         else:
             stable.append((pid, feat))
 
+    # Out or Doubtful on the week's injury report: not ranked (tracker/injuries.py's rule, shared with the tracker's
+    # pool rule). Applied LAST, to the players who would otherwise be ranked: a player already left out for another
+    # reason (bye, off roster, game started, reserve list, offseason suppression) keeps that reason, so
+    # injury_watch_list means "ranked but for the injury report" -- the same set the tracker's pool rule excluded
+    # before score_week.py applied it.
+    injury_list = [(pid, feat, injury_out[pid]) for pid, feat in stable if pid in injury_out]
+    stable = [(pid, feat) for pid, feat in stable if pid not in injury_out]
+
     print(f"[INFO] {len(stable)} stable candidates scored ({n_released_by_recency} of those released from "
           f"offseason suppression this week, having reached {MIN_PRIOR_GAMES}+ current-season games); "
           f"{len(no_game_list)} with no game this week (bye, excluded); "
           f"{len(off_roster_list)} not on an NFL roster (excluded); "
+          f"{len(injury_list)} Out/Doubtful (excluded); "
           f"{len(already_played_list)} already played as of {as_of.isoformat()} (excluded, not re-scored); "
           f"{len(unavailable_list)} unavailable (reserve/PUP/NFI/suspended/exempt, score suppressed); "
           f"{len(team_changed_list)} team-changed (score suppressed); "
@@ -923,6 +980,11 @@ def main():
         {"player_id": pid, "name": names.get(pid, pid), "pos": feat["_pos"],
          "team": roster_team_of.get(pid) or feat["_team"], "reason": NO_GAME_REASON}
         for pid, feat in no_game_list
+    ]
+    injury_records = [
+        {"player_id": pid, "name": names.get(pid, pid), "pos": feat["_pos"], "team": roster_team_of.get(pid) or feat["_team"],
+         "status": status, "reason": INJURY_REASON}
+        for pid, feat, status in sorted(injury_list, key=lambda x: (x[2], names.get(x[0], x[0])))
     ]
     off_roster_records = [
         {"player_id": pid, "name": names.get(pid, pid), "pos": feat["_pos"], "team": feat["_team"],
@@ -988,7 +1050,7 @@ def main():
             write_output(model_path, model_commit, model_meta, args, names, ranked, stable, proba,
                          all_eligible_count, len(candidates), n_released_by_recency,
                          team_changed_records, new_competitor_records, unavailable_records,
-                         already_played_records, no_game_records, off_roster_records,
+                         already_played_records, no_game_records, off_roster_records, injury_records, injury_rule,
                          n_via_production_only, n_via_draft_only, n_via_both, json_out_path)
 
     json_out_path = Path(args.json_out) if args.json_out else None

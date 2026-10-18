@@ -998,6 +998,73 @@ class TestInjuryDesignations(unittest.TestCase):
         self.assertEqual(injuries.disagreements(pool, None, {"out1": "Out"}, EXCLUDE), [])
 
 
+class TestInjuryRuleShared(unittest.TestCase):
+    """The one Out/Doubtful definition tracker.py and score_week.py both use (from 2026-10-18)."""
+
+    def test_rule_comes_from_hit_config_and_questionable_stays_in(self):
+        exclude, max_age, espn_age = injuries.rule()
+        self.assertEqual((exclude, max_age, espn_age), (("Out", "Doubtful"), CFG["run"]["injury_report_max_age_hours"],
+                                                        CFG["run"]["ownership_max_age_hours"]))
+        self.assertEqual(injuries.rule(CFG), injuries.rule())
+        self.assertEqual(injuries.excluded_ids({"a": "Out", "b": "Doubtful", "c": "Questionable", "d": ""}, exclude),
+                         {"a": "Out", "b": "Doubtful"})
+        kept, out = injuries.split_pool([{"player_id": p} for p in "abcz"], {"a": "Out", "b": "Doubtful", "c": "Questionable"}, exclude)
+        self.assertEqual(([r["player_id"] for r in kept], out), (["c", "z"], {"a": "Out", "b": "Doubtful"}))
+
+    def test_designations_travel_to_score_week_in_a_file_unchanged(self):
+        with mock.patch("sys.stderr"):
+            inj = injuries.resolve(2026, 5, NOW, 20, None, fetch=fetched())
+        rec = injuries.designations_record(inj, ("Out", "Doubtful"), "tracker")
+        self.assertEqual(rec["excluded"], {"out1": "Out", "dbt1": "Doubtful"})     # q1 (Questionable) isn't in it
+        self.assertEqual((rec["source"], rec["provided_by"], rec["nflverse_sha256"]), ("nflverse", "tracker", inj["sha256"]))
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "d.json"
+            injuries.write_designations(path, rec)
+            self.assertEqual(injuries.read_designations(path), json.loads(json.dumps(rec)))
+            path.write_text(json.dumps({"source": "nflverse"}), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                injuries.read_designations(path)                                       # never a silent "nobody is out"
+
+    def ownership_db(self, taken_at, statuses):
+        con = ledger.connect(":memory:")
+        sid = con.execute("INSERT INTO tr_ownership_snapshots (taken_at, source, ok) VALUES (?, 'espn', 1)", (taken_at,)).lastrowid
+        for pid, st in statuses.items():
+            con.execute("INSERT INTO tr_ownership (snapshot_id, source, external_id, player_id, percent_owned, injury_status) "
+                        "VALUES (?, 'espn', ?, ?, 10.0, ?)", (sid, pid, pid, st))
+        con.commit()
+        self.addCleanup(con.close)
+        return con
+
+    def test_score_week_on_its_own_uses_the_same_sources_and_fallback(self):
+        con = self.ownership_db("2026-10-11T13:30:00+00:00", {"out1": "ACTIVE", "espn_out": "OUT"})
+        with mock.patch("sys.stderr"):
+            rec = injuries.resolve_standalone(con, 2026, 5, NOW, fetch=fetched())
+            self.assertEqual((rec["source"], rec["excluded"], rec["provided_by"]),
+                             ("nflverse", {"out1": "Out", "dbt1": "Doubtful"}, "score_week"))
+            down = injuries.resolve_standalone(con, 2026, 5, NOW, fetch=fetched(ok=False, error="HTTP 503"))
+            self.assertEqual((down["source"], down["excluded"]), ("espn-fallback", {"espn_out": "Out"}))
+            stale = self.ownership_db("2026-10-09T13:30:00+00:00", {"espn_out": "OUT"})          # 48h: past the 36h limit
+            none = injuries.resolve_standalone(stale, 2026, 5, NOW, fetch=fetched(ok=False, error="HTTP 503"))
+            self.assertEqual((none["source"], none["excluded"]), ("unavailable", {}))
+            bare = sqlite3.connect(":memory:")                                                  # no snapshot tables at all
+            self.assertEqual(injuries.resolve_standalone(bare, 2026, 5, NOW, fetch=fetched())["source"], "nflverse")
+            bare.close()
+
+    def test_markdown_lists_who_was_not_ranked_only_when_someone_was(self):
+        plain = render_markdown_report(PREDICTION_OUTPUT)
+        self.assertEqual(render_markdown_report(dict(PREDICTION_OUTPUT, injury_watch_list=[], injury_rule={"source": "nflverse"},
+                                                     counts=dict(PREDICTION_OUTPUT["counts"], injury_out_doubtful=0))), plain)
+        out = dict(PREDICTION_OUTPUT, injury_rule={"source": "nflverse"}, counts=dict(PREDICTION_OUTPUT["counts"], injury_out_doubtful=2),
+                   injury_watch_list=[{"player_id": "x", "name": "Hurt Back", "pos": "RB", "team": "TEN", "status": "Out"},
+                                      {"player_id": "y", "name": "Iffy End", "pos": "TE", "team": "KC", "status": "Doubtful"}])
+        md = render_markdown_report(out)
+        self.assertIn("- Out/Doubtful on the injury report, not ranked: 2", md)
+        self.assertTrue(md.endswith("## Out/Doubtful (not ranked)\n\n_Designated on the NFL injury report (nflverse) when this "
+                                    "was generated; Questionable players are ranked as usual._\n\n- Hurt Back (RB, TEN): Out\n"
+                                    "- Iffy End (TE, KC): Doubtful\n"), md)
+        self.assertIn("| 1 | Alpha One | WR | MIN | 0.6134 |", md)                # the ranking itself is untouched
+
+
 class TestEspnInjuryStatus(unittest.TestCase):
     def test_status_is_parsed_stored_and_optional(self):
         payload = espn_payload()
@@ -1129,8 +1196,14 @@ class TestLogInjuryPoolRule(TestLogInternationalWeek):
             return mock.Mock(returncode=0, stdout="deadbeef\n", stderr="")
         out = Path(cmd[cmd.index("--json-out") + 1])
         out.parent.mkdir(parents=True, exist_ok=True)
+        self.designations = injuries.read_designations(cmd[cmd.index("--injury-designations") + 1])
+        if getattr(self, "honor_designations", False):        # what the real score_week.py does with them
+            withheld = self.designations["excluded"]
+            self.unranked = [dict(r, status=withheld[r["player_id"]]) for r in self.scored_pool if r["player_id"] in withheld]
+            self.scored_pool = [r for r in self.scored_pool if r["player_id"] not in withheld]
         top = [dict(r, rank=i) for i, r in enumerate(self.scored_pool, start=1)]
         payload = json.dumps(dict(PREDICTION_OUTPUT, week=4, scored_pool=self.scored_pool, top=top,
+                                  injury_watch_list=getattr(self, "unranked", []),
                                   no_game_watch_list=getattr(self, "unscored", []),
                                   off_roster_watch_list=getattr(self, "unscored_off", [])))
         for path in (out, out.with_name(out.stem + "_shadow.json")):
@@ -1377,6 +1450,38 @@ class TestLogInjuryPoolRule(TestLogInternationalWeek):
         pool = {r["player_id"] for r in self.rows("SELECT player_id FROM tr_pool")}
         self.assertNotIn("TEN-RB1", pool)          # nflverse decides: out, whatever Yahoo says
         self.assertIn("KC-RB0", pool)              # a practice-squad player Yahoo marks NA stays in
+
+    # ---- Out/Doubtful: decided once, applied by score_week.py too (from 2026-10-18)
+
+    def test_score_week_gets_the_same_designations_the_pool_rule_uses(self):
+        self.add_espn_snapshot({"TEN-RB0": "OUT"})
+        self.assertEqual(self.log_live(self.fresh)[0], 0)
+        d = self.designations
+        self.assertEqual((d["source"], d["provided_by"], d["exclude"]), ("nflverse", "tracker", ["Out", "Doubtful"]))
+        self.assertEqual(d["excluded"], {"TEN-RB0": "Out", "BAL-WR2": "Doubtful", "IND-RB0": "Out"})   # KC-TE5 is Questionable
+        self.assertEqual(d["nflverse_sha256"], hashlib.sha256(self.REPORT).hexdigest())
+        self.assertEqual(self.run_config()["injury"]["excluded"], {"TEN-RB0": "Out", "BAL-WR2": "Doubtful"})
+
+    def test_players_score_week_left_unranked_are_this_runs_exclusions_by_slot_and_still_cross_checked(self):
+        self.honor_designations = True
+        self.add_espn_snapshot({"BAL-WR2": "ACTIVE", "TEN-RB0": "OUT"})
+        rc, out = self.log_live(self.fresh)
+        self.assertEqual(rc, 0)
+        self.assertEqual({r["player_id"] for r in self.unranked}, {"TEN-RB0", "BAL-WR2", "IND-RB0"})
+        inj = self.run_config()["injury"]
+        self.assertEqual(inj["excluded"], {"BAL-WR2": "Doubtful", "TEN-RB0": "Out"})     # IND-RB0 plays before the sun cutoff
+        self.assertEqual(inj["unranked_by_score_week"], ["BAL-WR2", "IND-RB0", "TEN-RB0"])
+        self.assertEqual([d["player_id"] for d in inj["disagreements"]], ["BAL-WR2"])        # ESPN has him active
+        self.assertIn("2 player(s) left out of the pool as Out/Doubtful (2 of them already unranked by O.D.D.S.)", out)
+        pool = {r["player_id"] for r in self.rows("SELECT player_id FROM tr_pool")}
+        self.assertEqual(len(pool), 22)
+        self.assertFalse(pool & {"TEN-RB0", "BAL-WR2"})
+        md = (self.dir / "preds" / "2026_week04.md").read_text(encoding="utf-8")
+        self.assertNotIn("**(OUT)**", md)                    # nobody left in the ranking to flag
+
+    def test_an_as_of_run_hands_score_week_no_designations(self):
+        self.assertEqual(self.log("sun", "2026-10-04T14:00:00+00:00"), 0)
+        self.assertEqual((self.designations["source"], self.designations["excluded"]), ("skipped", {}))
 
     def test_out_and_doubtful_are_left_out_for_every_model_and_recorded(self):
         self.add_espn_snapshot({"TEN-RB0": "OUT", "KC-TE5": "QUESTIONABLE", "LV-WR3": "OUT"})

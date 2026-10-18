@@ -33,6 +33,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import tempfile
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -460,8 +461,7 @@ def resolve_injuries(args, con, cfg, season, week, as_of, snap_id):
         return {"source": "skipped", "reason": "--skip-injuries" if args.skip_injuries else "--as-of run: no live injury report",
                 "status": {}, "nflverse": None, "espn": None, "raw_bytes": None, "sha256": None, "last_modified": None}
     espn_status = ownership.injury_status_by_player(con, snap_id) if snap_id is not None else None
-    return injuries.resolve(season, week, as_of, cfg["run"]["injury_report_max_age_hours"], espn_status,
-                            fetch=injuries.fetch_nflverse)
+    return injuries.resolve(season, week, as_of, injuries.rule(cfg)[1], espn_status, fetch=injuries.fetch_nflverse)
 
 
 BYE_FLAG_NOTE = ("**(BYE)** = his team has no game this week. Display only -- scores and ranks are unchanged. Flagged "
@@ -470,10 +470,13 @@ FA_FLAG_NOTE = ("**(FA)** = not on an NFL roster per nflverse's weekly roster (r
                 "scores and ranks are unchanged. Flagged players are not in the tracker's pool.")
 
 
-def flag_note(inj, exclude, any_bye, any_fa=False):
-    """The line(s) printed above the prediction markdown's table, or None to leave the markdown as score_week.py wrote it."""
-    parts = (([FA_FLAG_NOTE] if any_fa else []) + ([BYE_FLAG_NOTE] if any_bye else [])
-             + [n for n in (injury_flag_note(inj, exclude),) if n])
+def flag_note(inj, exclude, any_bye, any_fa=False, any_injury_flag=True):
+    """The line(s) printed above the prediction markdown's table, or None to leave the markdown as score_week.py wrote it.
+    any_injury_flag: does the ranking still hold a player the injury rule flags? Since score_week.py leaves Out/Doubtful
+    players unranked itself (2026-10-18) it normally doesn't, and then the flag legend is left out -- but a run with NO
+    designations always says so."""
+    injury = injury_flag_note(inj, exclude) if (any_injury_flag or inj["source"] == "unavailable") else None
+    parts = ([FA_FLAG_NOTE] if any_fa else []) + ([BYE_FLAG_NOTE] if any_bye else []) + ([injury] if injury else [])
     return " ".join(parts) or None
 
 
@@ -577,11 +580,25 @@ def cmd_log(args, con):
     # the same roster file score_week.py's kickoff guard resolves teams from (its default path, made explicit)
     weekly_roster = Path(args.raw_dir) / f"roster_weekly_{season}.csv"
 
+    # Ownership and injury designations are settled BEFORE O.D.D.S. runs, so score_week.py applies the very same
+    # Out/Doubtful designations to its ranking that the pool rule below uses (injuries.py: one definition).
+    allow_live = args.as_of is None and not args.skip_ownership
+    if args.skip_ownership:
+        status, snap_id, own = "skipped", None, {}
+    else:
+        status, snap_id, own = resolve_ownership(con, cfg, season, as_of, allow_live, args.ownership_raw_dir)
+    exclude = injuries.rule(cfg)[0]
+    inj = resolve_injuries(args, con, cfg, season, week, as_of, snap_id)
+
     cmd = [sys.executable, str(REPO_ROOT / "model" / "score_week.py"), "--season", str(season), "--week", str(week),
            "--json-out", str(pred_path), "--as-of", as_of.isoformat(), "--db", str(args.db),
            "--predictions-dir", str(args.predictions_dir), "--weekly-roster", str(weekly_roster)]
     print(f"[INFO] running O.D.D.S. as-is: {' '.join(cmd[1:])}")
-    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    with tempfile.TemporaryDirectory() as tmp:
+        designations = Path(tmp) / "injury_designations.json"
+        injuries.write_designations(designations, injuries.designations_record(inj, exclude, "tracker"))
+        proc = subprocess.run(cmd + ["--injury-designations", str(designations)], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace")
     written = [pred_path, pred_path.with_suffix(".md"),
                pred_path.with_name(pred_path.stem + "_shadow.json"), pred_path.with_name(pred_path.stem + "_shadow.md")]
     if proc.returncode != 0:
@@ -648,21 +665,21 @@ def cmd_log(args, con):
         print(f"[INFO] {len(early)} scored player(s) left out of the {slot} pool: their game kicks off before the "
               f"slot's cutoff ({cutoff.isoformat()}) -- teams {sorted({r['team'] for r in early})}")
 
-    allow_live = args.as_of is None and not args.skip_ownership
-    if args.skip_ownership:
-        status, snap_id, own = "skipped", None, {}
-    else:
-        status, snap_id, own = resolve_ownership(con, cfg, season, as_of, allow_live, args.ownership_raw_dir)
-
     # Pool rule, part 3: nobody designated Out/Doubtful at log time, for every model alike (see injuries.py).
-    exclude = tuple(cfg["run"]["pool_exclude_injury_statuses"])
-    inj = resolve_injuries(args, con, cfg, season, week, as_of, snap_id)
+    # score_week.py already left them unranked (injury_watch_list); those whose game is in this slot are this run's
+    # exclusions too, and the tracker's own split below stays as the guarantee.
+    withheld = [{"player_id": r["player_id"], "name": r["name"], "team": r["team"], "status": r["status"]}
+                for r in prod.get("injury_watch_list") or []]
+    withheld_in_slot, _ = split_pool_at_cutoff(withheld, load_kickoffs(con, season, week), roster_team_of, cutoff)
     # a cross-check only means something when the official report is the one deciding
-    differ = injuries.disagreements(pool_src, inj["nflverse"], inj["espn"], exclude) if inj["source"] == "nflverse" else []
-    names = {r["player_id"]: r["name"] for r in pool_src}
+    differ = (injuries.disagreements(pool_src + withheld_in_slot, inj["nflverse"], inj["espn"], exclude)
+              if inj["source"] == "nflverse" else [])
+    names = {r["player_id"]: r["name"] for r in pool_src + withheld}
     pool_src, held_out = injuries.split_pool(pool_src, inj["status"], exclude)
-    print(f"[INJURY] source {inj['source']}" + (f" ({inj['reason']})" if inj["reason"] else "") + f": {len(held_out)} scored "
-          f"player(s) left out of the pool as {'/'.join(exclude)}"
+    still_ranked = bool(held_out)     # flagged in the markdown: O.D.D.S. ranked them, the pool rule didn't take them
+    held_out = dict(sorted({**{r["player_id"]: r["status"] for r in withheld_in_slot}, **held_out}.items()))
+    print(f"[INJURY] source {inj['source']}" + (f" ({inj['reason']})" if inj["reason"] else "") + f": {len(held_out)} "
+          f"player(s) left out of the pool as {'/'.join(exclude)} ({len(withheld_in_slot)} of them already unranked by O.D.D.S.)"
           + (": " + ", ".join(f"{names[p]} ({s})" for p, s in sorted(held_out.items(), key=lambda kv: names[kv[0]])) if held_out else ""))
     for d in differ:
         print(f"[INJURY] sources disagree on {d['name']}: nflverse {d['nflverse'] or 'not designated'} vs ESPN "
@@ -678,7 +695,7 @@ def cmd_log(args, con):
         raise Refused("O.D.D.S. scored an empty pool -- nothing to log")
     # Display only, part 1: flag those players in the prediction markdown. Scores, ranks and the JSON stay as
     # score_week.py wrote them.
-    note = flag_note(inj, exclude, bool(idle), bool(off))
+    note = flag_note(inj, exclude, bool(idle), bool(off), still_ranked)
     flags = {}
     if note:
         flags = {pid: st.upper() for pid, st in inj["status"].items() if st in exclude}
@@ -775,7 +792,8 @@ def cmd_log(args, con):
                            "yahoo_crosscheck": crosscheck},
             "sleeper_pool_rule": SLEEPER_POOL_RULE, "ownership_unknown_in_sleeper_pool": sorted(unknown_ids),
             "injury": {"source": inj["source"], "reason": inj["reason"], "exclude_statuses": list(exclude),
-                       "excluded": held_out, "disagreements": differ, "nflverse_sha256": inj["sha256"],
+                       "excluded": held_out, "unranked_by_score_week": sorted(r["player_id"] for r in withheld),
+                       "disagreements": differ, "nflverse_sha256": inj["sha256"],
                        "nflverse_last_modified": inj["last_modified"].isoformat() if inj["last_modified"] else None,
                        "nflverse_file": injury_file},
             "league_availability": league_availability.run_record(league, league_file, top_n, len(pool), n_pool_available),

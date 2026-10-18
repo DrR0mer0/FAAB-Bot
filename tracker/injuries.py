@@ -26,19 +26,32 @@ updated within `injury_report_max_age_hours`, or has no rows for the week. If
 neither source is available the run is still logged, loudly, with the rule not
 applied and that fact recorded -- same policy as a missing roster-% feed.
 
-Nothing here touches model/score_week.py's scores, ranks or JSON. The same
-designations are also used to FLAG players in the prediction markdown.
+ONE DEFINITION, TWO USERS (from 2026-10-18). model/score_week.py applies the
+same rule to its own ranking: an Out/Doubtful player is not ranked and is
+listed in its injury_watch_list. Both read the statuses and the age limit from
+rule() (tracker/hit_config.json's `run` section) and decide with
+excluded_ids(). In a tracker `log` run the designations are resolved ONCE here
+and handed to score_week.py as a file (designations_record /
+write_designations / read_designations), so the two can't see different
+reports; the tracker's own split_pool stays as its guarantee. A score_week.py
+run by hand resolves them itself with resolve_standalone() -- the same
+nflverse source and ESPN fallback, the fallback taken from the newest roster-%
+snapshot within ownership_max_age_hours (it never takes a live snapshot).
+The same designations are also used to FLAG players in the prediction markdown.
 """
 import csv
 import hashlib
 import io
+import json
 import sys
 from datetime import timezone
 from email.utils import parsedate_to_datetime
+from pathlib import Path
 
 import requests
 
 NFLVERSE_URL = "https://github.com/nflverse/nflverse-data/releases/download/injuries/injuries_{season}.csv"
+HIT_CONFIG = Path(__file__).resolve().parent / "hit_config.json"
 ESPN_TO_REPORT = {"OUT": "Out", "DOUBTFUL": "Doubtful", "QUESTIONABLE": "Questionable"}
 
 
@@ -134,17 +147,68 @@ def resolve(season, week, as_of, max_age_hours, espn_status, fetch=fetch_nflvers
     return out
 
 
+def rule(cfg=None):
+    """(exclude, max_age_hours, espn_max_age_hours): the designations that keep
+    a player out, how old the nflverse file may be, and how old the roster-%
+    snapshot behind the ESPN fallback may be. From hit_config.json's `run`
+    section -- the one place both the tracker and score_week.py read it."""
+    run = (cfg if cfg is not None else json.loads(HIT_CONFIG.read_text(encoding="utf-8")))["run"]
+    return tuple(run["pool_exclude_injury_statuses"]), run["injury_report_max_age_hours"], run["ownership_max_age_hours"]
+
+
+def excluded_ids(status, exclude):
+    """{player_id: designation} for every player designated one of `exclude` -- THE decision, for both users."""
+    return {pid: st for pid, st in (status or {}).items() if st in exclude}
+
+
 def split_pool(pool_src, status, exclude):
     """(kept, excluded {player_id: designation}) -- pool rows whose player is
     designated one of `exclude` are left out."""
-    kept, excluded = [], {}
-    for r in pool_src:
-        st = status.get(r["player_id"])
-        if st in exclude:
-            excluded[r["player_id"]] = st
-        else:
-            kept.append(r)
-    return kept, excluded
+    out = excluded_ids(status, exclude)
+    kept = [r for r in pool_src if r["player_id"] not in out]
+    return kept, {r["player_id"]: out[r["player_id"]] for r in pool_src if r["player_id"] in out}
+
+
+def designations_record(inj, exclude, provided_by):
+    """What score_week.py needs to apply the rule, and records with its output:
+    the source, why it was or wasn't nflverse, the excluded players and the
+    nflverse file's identity. JSON-ready."""
+    lm = inj.get("last_modified")
+    return {"source": inj["source"], "reason": inj.get("reason"), "exclude": list(exclude),
+            "excluded": excluded_ids(inj.get("status"), exclude), "nflverse_sha256": inj.get("sha256"),
+            "nflverse_last_modified": lm.isoformat() if hasattr(lm, "isoformat") else lm, "provided_by": provided_by}
+
+
+def skipped_record(reason, exclude, provided_by):
+    return {"source": "skipped", "reason": reason, "exclude": list(exclude), "excluded": {}, "nflverse_sha256": None,
+            "nflverse_last_modified": None, "provided_by": provided_by}
+
+
+def write_designations(path, record):
+    Path(path).write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+
+
+def read_designations(path):
+    record = json.loads(Path(path).read_text(encoding="utf-8"))
+    missing = {"source", "exclude", "excluded"} - set(record)
+    if missing:
+        raise ValueError(f"injury designations file {path} lacks {sorted(missing)}")
+    return record
+
+
+def resolve_standalone(con, season, week, as_of, cfg=None, fetch=fetch_nflverse):
+    """For a score_week.py run without the tracker: the same resolve(), with the
+    ESPN fallback taken from the newest successful roster-% snapshot within the
+    configured age (none is taken live). -> designations_record. Never raises."""
+    exclude, max_age, espn_max_age = rule(cfg)
+    espn = None
+    try:
+        import ownership  # same directory; only needed here
+        found = ownership.latest_ok_espn(con, as_of, espn_max_age)
+        espn = ownership.injury_status_by_player(con, found[0]) if found else None
+    except Exception as e:  # noqa: BLE001 -- no snapshot tables, say: there's just no fallback
+        print(f"[INJURY] no ESPN fallback available ({type(e).__name__}: {e})", file=sys.stderr)
+    return designations_record(resolve(season, week, as_of, max_age, espn, fetch=fetch), exclude, "score_week")
 
 
 def disagreements(pool_src, nflverse, espn, exclude):
