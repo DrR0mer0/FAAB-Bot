@@ -45,7 +45,7 @@ import re
 import sqlite3
 import sys
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 
 LEAGUE_DIR = Path(__file__).resolve().parent
@@ -59,7 +59,7 @@ ODDS_TOP_N = 10          # the tracker's headline pick set
 FLEX_LETTERS = {"Q": "QB", "W": "WR", "R": "RB", "T": "TE"}
 # fact fields whose values are names (a string or a list of strings): what check_text() treats as "a known name"
 NAME_KEYS = ("team", "manager", "player", "opponent", "winner", "team_a", "team_b", "next_team", "biggest_bid_team", "biggest_bid_added",
-             "sit", "start", "added", "dropped")
+             "sit", "start", "added", "dropped", "old_name")
 PRINTED_TEXT_KEYS = NAME_KEYS + ("day",)      # strings a template prints verbatim, so digits inside them may appear in prose
 NUMBER = re.compile(r"(?<![\w.])\d+(?:\.\d+)?")
 
@@ -211,6 +211,11 @@ def build_facts(con, week, owner_team=None):
                           ties=r["ties"], points_for=r["points_for"], points_against=r["points_against"], streak_type=r["streak_type"],
                           streak_length=r["streak_length"]))
 
+    # ---- name changes: a team whose name differs from the one it had when the week began gets a one-time note
+    for t, old in renamed_since(con, weeks[week][0]).items():
+        if t in name and old != name[t]:
+            facts.append(fact("team_renamed", "league", week=week, team=name[t], old_name=old))
+
     # ---- bench: league gets the totals, each team gets the detail
     bench = {w: {t: bench_report(rows, slots) for t, rows in lineups[w].items()} for w in played if lineups[w]}
     for t in order:
@@ -350,6 +355,20 @@ def odds_facts(con, season, week):
 
 # -------------------------------------------------------------------- rendering
 
+def renamed_since(con, week_start):
+    """{team_id: name} as of the newest teams snapshot taken before the league
+    week starting on `week_start` (a date, Pacific). The recap compares it
+    with today's names, so a rename gets its "formerly" note in the recap of
+    the week it happened -- once: next week's starting point already has the
+    new name. {} when nothing that old is on record."""
+    start = datetime.combine(week_start, time.min, ld.LEAGUE_TZ).astimezone(timezone.utc).isoformat()
+    snap = con.execute("SELECT snapshot_id FROM lg_snapshots WHERE resource='teams' AND ok=1 AND taken_at < ? "
+                       "ORDER BY taken_at DESC, snapshot_id DESC LIMIT 1", (start,)).fetchone()
+    if snap is None:
+        return {}
+    return {r[0]: r[1] for r in con.execute("SELECT team_id, team_name FROM lg_teams WHERE snapshot_id=?", (snap[0],))}
+
+
 def owner_team_of(facts):
     return next((f["team_id"] for f in facts if f["kind"] == "owner_team"), None)
 
@@ -411,8 +430,10 @@ def _league_sections(v):
     stat = {f["team"]: f for f in _of(v, "season_stat")}
     out += ["", f"## Standings after week {week}", "",
             "| Rank | Team | Manager | Record | Points for | Points against | Streak |", "|---:|---|---|---|---:|---:|---|"]
+    formerly = {f["team"]: f["old_name"] for f in _of(v, "team_renamed")}
     for f in _of(v, "standing"):
-        out.append(f"| {f['rank']} | {f['team']} | {f['manager']} | {_record(f)} | {_pts(f['points_for'])} | {_pts(f['points_against'])} | "
+        shown = f["team"] + (f" (formerly {formerly[f['team']]})" if f["team"] in formerly else "")
+        out.append(f"| {f['rank']} | {shown} | {f['manager']} | {_record(f)} | {_pts(f['points_for'])} | {_pts(f['points_against'])} | "
                    f"{_streak(f)} |")
     out += ["", "## Luck: record against the whole league", "",
             "All-play is each team's record if it had played every other team every week. Expected wins is what that all-play rate "
@@ -528,6 +549,8 @@ def render_group_chat(data):
     for s in _of(v, "top_starter")[:1]:
         out.append(f"Player of the week: {s['player']}, {_pts(s['points'])} for {s['team']}.")
     out.append("Standings: " + ", ".join(f"{f['rank']}. {f['team']} ({_record(f)})" for f in _of(v, "standing")))
+    for f in _of(v, "team_renamed"):
+        out.append(f"New name: {f['team']} is the team formerly known as {f['old_name']}.")
     worst = max(_of(v, "bench"), key=lambda f: f["left_on_bench"])
     out.append(f"Most points left on the bench: {worst['team']} ({_pts(worst['left_on_bench'])}).")
     lucky = sorted(_of(v, "season_stat"), key=lambda f: f["luck"])

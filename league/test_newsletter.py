@@ -73,6 +73,34 @@ class NewsletterCase(LeagueDataCase):
         return f
 
 
+class TestRename(NewsletterCase):
+    """A team renamed during the recapped week gets a one-time "formerly" note."""
+
+    def test_a_team_renamed_during_the_week_is_noted_once_under_its_new_name(self):
+        self.assertEqual(self.of("team_renamed"), [])                    # nothing on record from before week 4
+        # what Yahoo said the day before week 4 began (09-29): team 4 still had its old name
+        self.snapshot(Yahoo(scores=SCORES, bench=BENCH, delta=DELTA, team_names={4: "Old \u2019Name\u2019 Four"}),
+                      now=NOW.replace(month=9, day=28))
+        data = newsletter.build_facts(self.con, 4)
+        (f,) = [f for f in data["facts"] if f["kind"] == "team_renamed"]
+        self.assertEqual((f["audience"], f["team"], f["old_name"]), ("league", "Team Name 4", "Old \u2019Name\u2019 Four"))
+        recap = newsletter.render_recap(data, "league")
+        self.assertIn("| Team Name 4 (formerly Old \u2019Name\u2019 Four) |", recap)
+        self.assertEqual(recap.count("formerly"), 1)
+        self.assertIn("New name: Team Name 4 is the team formerly known as Old \u2019Name\u2019 Four.", newsletter.render_group_chat(data))
+        for audience, text in (("league", recap), ("league", newsletter.render_group_chat(data)),
+                               ("owner", newsletter.render_recap(data, "owner"))):
+            self.assertEqual(newsletter.check_text(text, data, audience), [])
+        self.assertIn("Old \u2019Name\u2019 Four", newsletter._names(data["facts"]))    # a known name the checker can verify
+
+    def test_the_note_is_one_time_because_next_weeks_starting_point_has_the_new_name(self):
+        self.snapshot(Yahoo(scores=SCORES, bench=BENCH, delta=DELTA, team_names={4: "Old Four"}), now=NOW.replace(month=9, day=28))
+        from datetime import date
+        self.assertEqual(newsletter.renamed_since(self.con, date(2026, 9, 29))[4], "Old Four")      # week 4 began with the old name
+        self.assertEqual(newsletter.renamed_since(self.con, date(2026, 10, 13))[4], "Team Name 4")  # a later week began with the new one
+        self.assertEqual(newsletter.renamed_since(self.con, date(2026, 9, 1)), {})                  # nothing that old: no claim
+
+
 class TestFacts(NewsletterCase):
     def test_every_fact_carries_an_audience_and_each_kind_belongs_to_one(self):
         self.assertTrue(all(f["audience"] == "league" or f["audience"] == "owner" or f["audience"] in {f"team:{t}" for t in (1, 2, 3, 4)}

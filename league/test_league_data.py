@@ -49,14 +49,14 @@ def player(yid, name, pos, nfl, extra):
                         {"editorial_team_abbr": nfl}, {"display_position": pos}, []], extra]}
 
 
-def team_info(tid, **extra):
-    return [{"team_key": f"{KEY}.t.{tid}"}, {"team_id": str(tid)}, {"name": f"Team Name {tid}"}, [],
+def team_info(tid, name=None, **extra):
+    return [{"team_key": f"{KEY}.t.{tid}"}, {"team_id": str(tid)}, {"name": name or f"Team Name {tid}"}, [],
             *({k: v} for k, v in extra.items())]
 
 
-def teams_payload(balances, mine=3):
+def teams_payload(balances, mine=3, names=None):
     return league({"teams": numbered([{"team": [team_info(
-        tid, faab_balance=str(bal), waiver_priority=str(tid), number_of_moves="4", number_of_trades="0",
+        tid, (names or {}).get(tid), faab_balance=str(bal), waiver_priority=str(tid), number_of_moves="4", number_of_trades="0",
         managers=[{"manager": dict({"manager_id": str(tid), "nickname": f"Nick{tid}", "guid": f"GUID{tid}", "image_url": "http://img"},
                                    **({"is_commissioner": "1"} if tid == 1 else {}))}],
         **({"is_owned_by_current_login": 1} if tid == mine else {}))]} for tid, bal in balances.items()])})
@@ -172,8 +172,10 @@ def scoreboard_payload(weeks, scores=SCORES, final_weeks=FINAL_WEEKS):
 class Yahoo:
     """A stand-in session: answers the league routes, and each team's weekly lineup, from the fixtures above."""
 
-    def __init__(self, transactions=TRANSACTIONS, fail=None, odd=None, scores=SCORES, final_weeks=FINAL_WEEKS, bench=None, delta=None):
+    def __init__(self, transactions=TRANSACTIONS, fail=None, odd=None, scores=SCORES, final_weeks=FINAL_WEEKS, bench=None, delta=None,
+                 team_names=None):
         self.transactions, self.fail, self.odd, self.paths = transactions, fail or {}, odd or {}, []
+        self.team_names = team_names
         self.scores, self.final_weeks, self.lineup_kw = scores, final_weeks, dict(scores=scores, bench=bench, delta=delta)
 
     def get(self, url, timeout=None):
@@ -192,7 +194,7 @@ class Yahoo:
         if resource in self.odd:
             body = league(self.odd[resource])
         elif resource == "teams":
-            body = teams_payload(BALANCES)
+            body = teams_payload(BALANCES, names=self.team_names)
         elif resource == "transactions":
             opts = dict(p.split("=") for p in path.split(";")[1:])
             start, count = int(opts["start"]), int(opts["count"])
@@ -711,6 +713,32 @@ class TestBids(LeagueDataCase):
         self.addCleanup(empty.close)
         league_data.init_schema(empty)
         self.assertIn("run `snapshot` first", league_data.import_bids(empty, FIXTURE, self.dir / "raw", now=NOW)["error"])
+
+    # ---- a team renamed mid-season (2026-10-20: Yahoo stores the new name with a curly apostrophe)
+
+    def rename_team_3(self):
+        self.snapshot(Yahoo(team_names={3: "Team O\u2019Brien"}), now=NOW.replace(day=11))
+
+    def test_a_renamed_team_answers_to_its_old_name_its_new_name_and_either_apostrophe(self):
+        self.rename_team_3()
+        idx = league_data.team_index(self.con)
+        for typed in ("Team Name 3", "team name 3", "Team O\u2019Brien", "Team O'Brien", "TEAM  O'BRIEN", "Nick3"):
+            self.assertEqual(idx.get(league_data.name_key(typed)), 3, typed)
+        self.assertEqual(league_data.name_key("Who’s  Got  Next"), league_data.name_key("who's got next"))
+
+    def test_rows_typed_before_and_after_a_rename_stay_with_the_same_team(self):
+        self.bids(self.FIXTURE_ROWS)                                    # typed while the team was "Team Name 3"
+        before = self.current()
+        self.rename_team_3()
+        out = self.bids(self.FIXTURE_ROWS.replace("Big Claim,Team Name 3,27", "Big Claim,Team O'Brien,27")
+                        + "2026-10-07,Late Claim,Team O'Brien,0,Team Name 2,0\n")   # new name, typed with a plain apostrophe
+        self.assertEqual((out["rejected"], out["n_new"], out["n_corrected"], out["n_withdrawn"]), ([], 1, 0, 0))
+        self.assertEqual(self.current(), sorted(before + [("2026-10-07", "Late Claim", 2, 0)]))
+        self.assertTrue(all(b["winning_team_id"] == 3 for b in league_data.current_bids(self.con)
+                            if b["player"] in ("Big Claim", "Week Three Claim", "Late Claim")))
+        md = league_data.build_report(self.con, today=date(2026, 10, 10))
+        self.assertIn("## Team O\u2019Brien (me)", md)                   # shown under the name Yahoo has now
+        self.assertNotIn("Team Name 3", md)
 
     def test_report_counts_all_bids_and_shows_my_margin_over_the_next_offer(self):
         self.bids()

@@ -99,6 +99,7 @@ import sqlite3
 import sys
 import threading
 import time
+import unicodedata
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -777,15 +778,27 @@ def read_checked_through(text, today):
     return day, []
 
 
-def _name_key(name):
-    return " ".join(str(name or "").casefold().split())
+# Apostrophes and quotes as Yahoo and keyboards write them: a name stored as "I’m" (U+2019) must match a typed "I'm".
+QUOTE_FOLD = str.maketrans({"\u2019": "'", "\u2018": "'", "\u02bc": "'", "\u2032": "'", "\u0060": "'", "\u00b4": "'",
+                            "\u201c": '"', "\u201d": '"', "\u2033": '"'})
+
+
+def name_key(name):
+    """How a team name or nickname is compared: Unicode-normalized (NFKC), apostrophes and quotes folded to plain ones,
+    case and spacing ignored. Shared with tools/privacy_scan.py."""
+    return " ".join(unicodedata.normalize("NFKC", str(name or "")).translate(QUOTE_FOLD).casefold().split())
+
+
+_name_key = name_key
 
 
 def team_index(con):
     """{typed name: team_id} for every team name the snapshots have ever seen
-    (a team can be renamed mid-season) and every manager nickname, compared
-    case-insensitively. A name that has belonged to two teams is left out
-    rather than guessed."""
+    (a team can be renamed mid-season: both the old and the new name keep
+    working, for rows typed before or after) and every manager nickname,
+    compared with name_key (case, spacing and apostrophe style ignored). A
+    name that has belonged to two teams -- or a nickname two managers share --
+    is left out rather than guessed."""
     seen = defaultdict(set)
     for team_id, name, nick in con.execute("SELECT DISTINCT team_id, team_name, manager_nickname FROM lg_teams"):
         for label in (name, nick):
