@@ -51,6 +51,10 @@ METRICS = ("payoff", "snap_growth", "target_growth", "crowd", "league_add")
 # before-window, W-3..W-1, only exists from week 4. A code constant, not a hit_config key, so the trend hash -- and with it
 # the pre-registered definitions -- stays the same (added 2026-10-22, when no outcome was stored and no run predated week 4).
 FIRST_PICK_WEEK = 4
+# Outcomes kept in the local DB only, never in the committed JSONL export: a league-add row says which NFL players were
+# available in the user's league and whether someone in it added them -- the league's own activity (user decision
+# 2026-10-22). The season summary shows them as counts and rates only.
+LOCAL_ONLY_METRICS = ("league_add",)
 POSITIONS = ("QB", "RB", "WR", "TE")
 TARGET_POSITIONS = ("RB", "WR", "TE")
 
@@ -317,7 +321,7 @@ def run_outcomes(con, store, run, metric, cfg, season_data):
 
 def compute_trends(con, cfg, store, now, weekly_roster_rows=None, export_path=None):
     """Append outcomes for every official run x metric whose window has closed and isn't stored under this trend hash.
-    -> {(run_id, metric): n rows}."""
+    -> {(run_id, metric): n rows}. The JSONL export (committed) leaves out LOCAL_ONLY_METRICS; the DB keeps everything."""
     init_schema(con)
     th = trend_hash(cfg)
     role = cfg["trend"]["role"]
@@ -347,8 +351,9 @@ def compute_trends(con, cfg, store, now, weekly_roster_rows=None, export_path=No
     if new_rows:
         with con:
             ledger.insert_rows(con, "tr_trend_outcomes", new_rows)
-        if export_path is not None:
-            ledger.export_jsonl(export_path, {"tr_trend_outcomes": new_rows})
+        exported = [r for r in new_rows if r["metric"] not in LOCAL_ONLY_METRICS]
+        if export_path is not None and exported:
+            ledger.export_jsonl(export_path, {"tr_trend_outcomes": exported})
     return written
 
 

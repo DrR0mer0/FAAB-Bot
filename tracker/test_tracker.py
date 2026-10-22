@@ -2576,6 +2576,22 @@ class TestTrends(unittest.TestCase):
         self.assertEqual({k: v for k, v in written.items() if k[0] != "r3"},
                          {k: 40 for k in [("r4", m) for m in trends.METRICS] + [("r5", "target_growth")]})   # the rest as before
 
+    def test_league_add_outcomes_stay_in_the_db_and_never_reach_the_committed_export(self):
+        path = self.raw / "export" / "trends_x.jsonl"
+        trends.compute_trends(self.con, CFG, self.store, self.NOW, export_path=path)
+        exported = [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines()]
+        self.assertTrue(exported)
+        self.assertEqual({e["row"]["metric"] for e in exported}, {"payoff", "snap_growth", "target_growth", "crowd"})
+        self.assertNotIn("league_add", path.read_text(encoding="utf-8"))
+        self.assertEqual(self.con.execute("SELECT COUNT(*) FROM tr_trend_outcomes WHERE metric='league_add'").fetchone()[0], 40)
+
+    def test_an_export_of_league_add_rows_alone_writes_no_file(self):
+        path = self.raw / "export" / "trends_y.jsonl"
+        with mock.patch.object(trends, "METRICS", ("league_add",)):
+            written = trends.compute_trends(self.con, CFG, self.store, self.NOW, export_path=path)
+        self.assertEqual(list(written), [("r4", "league_add")])
+        self.assertFalse(path.exists())
+
     def test_stored_outcomes_cannot_be_updated(self):
         self.compute()
         with self.assertRaisesRegex(sqlite3.DatabaseError, "UPDATE on tr_trend_outcomes is blocked"):
