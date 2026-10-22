@@ -16,12 +16,29 @@ Only dependency: `numpy` (already in `requirements.txt`). Runs in well under a s
 ## How it fits into FAAB
 
 ```
-league/ (Yahoo fetcher) ──► roster, slots, statuses, opponent ─┐
-                                                               ├─► league_data/<week>.json ──► startsit/lineup_sim.py ──► report / JSON
-projection models (+ O.D.D.S. signal) ──► p10 / p50 / p90 ─────┘                                                        (newsletter, chat)
+league/league_data.py snapshots (lg_* tables) ──► roster, slots, opponent ─┐
+nfl_games + nflverse weekly roster + tracker/injuries.py ──► team, opp, status ─┼─► startsit/build_week.py ──► league_data/<season>_week<NN>_<stage>.json ──► lineup_sim.py ──► report / JSON
+startsit/projections.py (baseline | csv) ──► p10 / p50 / p90 ──────────────┘
 ```
 
-The simulator doesn't know or care where numbers come from. When the Yahoo fetch works, the fetcher's only job is to write a `week.json` that matches the contract below. Until then, you can hand-write one or fill medians from any projection source.
+The simulator doesn't know or care where numbers come from. **`startsit/build_week.py` (from 2026-10-22) writes the week file from data the project already has:**
+
+```
+python startsit/build_week.py --season 2026 --week 7 --stage thursday --run
+python startsit/build_week.py --season 2026 --week 7 --stage sunday --run
+python startsit/build_week.py ... --projections csv --projections-file my_projections.csv
+```
+
+- **Roster and slots:** `league.slots` from the newest settings snapshot (Yahoo's positions straight through). `my_team.players` is the whole roster, bench and IR included, from the newest roster snapshot if it is for that week, else that week's final lineup. `--team-id` defaults to the team the logged-in Yahoo account owns.
+- **Opponent:** this week's opponent from the scoreboard, non-BN/IR slots only. If their lineup isn't on record the file has no `opponent` (a warning says so) -- never a guessed lineup.
+- **`team` / `opp`:** nflverse's weekly-roster team (Yahoo's otherwise; Yahoo's `LAR` is nflverse's `LA`, and an unknown code stops the build), and that week's opponent from `nfl_games`; no game = `BYE`.
+- **`status`:** `BYE`, else nflverse's long-term roster status (`RES` -> `IR`, `PUP`, `SUS` -> `SUSP`, `EXE` -> `EXEMPT`, `CUT`/`RET` -> `O`), else the week's injury designation (`tracker/injuries.py`, resolved like a hand-run `score_week.py`: Out `O`, Doubtful `D`, Questionable `Q`). `play_prob` is left to `STATUS_PLAY_PROB`. The source and its age go into `_meta`.
+- **Projections (`startsit/projections.py`, swappable providers):** `baseline` is an **exponentially weighted mean** (half-life 3 games) of the player's last 8 league-scored games strictly *before* the week -- the tracker's league scoring, and never the week being projected (tested). It is a weighted mean, not a median, so it sits a little above the median lineup_sim treats `p50` as. `p10`/`p90` are his own weighted 10th/90th percentiles with 6+ games; otherwise left out, so `DEFAULT_SPREADS` applies. Players with 1-2 games ("thin history"), a new team, or no games this season are listed in `_meta` and in their `note`. `csv` layers a hand-supplied file (`id` or `name`, `p50`, optional `p10`/`p90`) over the baseline, row by row.
+- **No projection:** one of *my* players with no `p50` is **left out with a loud warning** -- the simulator must never start or bench someone on an invented number (decide him by hand, or give him a csv row). An *opponent* starter with no `p50` gets a fallback (the median `p50` of that position in the file), labelled in his `note` -- he is starting, and leaving him out would overstate the win probability.
+- **Sunday stage:** a game whose scheduled kickoff has passed is `locked`; `started` / `locked_slot` come from the newest roster snapshot, which must have been taken after that kickoff -- otherwise the build **stops** (moving a locked player is worse than no recommendation; run `league_data.py snapshot` first). `actual` is Yahoo's points for a completed week, else the league-scored nflverse stats once published.
+- `--run` saves lineup_sim's report beside the file (`..._report.md`, `..._report.json`). Everything goes in gitignored `league_data/`.
+
+**Still missing:** projections with real uncertainty (the baseline's spread is a player's own history, or position defaults), anything for rookies or players whose role is changing (a trailing mean misses both -- the 2026 weeks 1-6 backtest's two big misses were exactly that), per-player projections from Yahoo (its API has none: `stats;type=week` returns actual points, `projected_week` / `projected_stats` are rejected; only team totals, `team_projected_points`, exist), and lock state from Yahoo itself (derived from kickoff times and snapshot timing instead).
 
 ## What it does
 
@@ -108,6 +125,6 @@ As with the model, any fitted constant should come from a chronological split, n
 
 Upstream, in the projections, and only as a signal. O.D.D.S. ranks low-usage players by spike-week likelihood; it isn't a start/sit model for established starters and shouldn't be used as one. Where it matters here is the edges of the lineup: the flex, bench depth, and a waiver add you're deciding whether to start. A high O.D.D.S. rank can widen that player's `p90` and set `note` (e.g. `"O.D.D.S. top-10"`) so the reason shows up in the close-call explanation. The simulator stays model-agnostic, so you can A/B projection sources by running the same week file twice.
 
-## Backtesting idea
+## Backtesting
 
 For past weeks, build week files with the projections you *would have had* plus real `actual`s. Run the simulator with actuals removed, then score its lineup with the actuals. Track two numbers: **points left on the bench** vs. the hindsight-optimal lineup, and **record on calls labelled lean/clear** vs. just starting Yahoo's top projections. As with O.D.D.S., 2026 weeks can only be judged prospectively, as they happen.
