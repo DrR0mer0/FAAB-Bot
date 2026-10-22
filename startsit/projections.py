@@ -29,8 +29,11 @@ PROVIDERS
             right-skewed, so it sits a little above the median lineup_sim
             treats p50 as.
   csv       CsvProvider: a hand-supplied file (id or name, p50, optional
-            p10/p90) layered over the baseline: a row overrides the baseline
-            for that player only.
+            p10/p90, optional play_prob) layered over the baseline: a row
+            overrides the baseline for that player only. A row may give only
+            play_prob (the projection stays the baseline's); the builder then
+            uses it instead of the status-derived chance of playing and lists
+            it in _meta as a manual override.
 """
 import csv
 import io
@@ -57,6 +60,7 @@ class Projections:
     provenance: str
     flags: dict = field(default_factory=dict)
     warnings: list = field(default_factory=list)
+    play_prob: dict = field(default_factory=dict)     # {player id: 0-1} set by hand (csv), overriding the status-derived chance
 
 
 def weighted_quantile(values, weights, q):
@@ -127,27 +131,34 @@ class BaselineProvider:
 
 
 def read_override_csv(text):
-    """(rows, problems): rows = [{"key", "p50", "p10", "p90", "line"}] from a file with a header holding `id` and/or `name`
-    and `p50` (optional `p10`, `p90`). Lines starting with # are comments."""
+    """(rows, problems): rows = [{"key", "p50", "p10", "p90", "play_prob", "line"}] from a file with a header holding `id`
+    and/or `name` and `p50` and/or `play_prob` (optional `p10`, `p90`). A row needs a p50 or a play_prob. Lines starting with
+    # are comments."""
     rows, problems = [], []
     lines = [ln for ln in text.lstrip("﻿").splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
     reader = csv.DictReader(io.StringIO("\n".join(lines)))
     fields = [f.strip().lower() for f in (reader.fieldnames or [])]
-    if "p50" not in fields or not ({"id", "name"} & set(fields)):
-        return [], ["the header needs p50 and id and/or name"]
+    if not ({"p50", "play_prob"} & set(fields)) or not ({"id", "name"} & set(fields)):
+        return [], ["the header needs p50 and/or play_prob, and id and/or name"]
     for n, raw in enumerate(reader, start=2):
         r = {k.strip().lower(): (v or "").strip() for k, v in raw.items() if k}
         key = r.get("id") or r.get("name")
         try:
-            nums = {k: float(r[k]) for k in ("p50", "p10", "p90") if r.get(k)}
+            nums = {k: float(r[k]) for k in ("p50", "p10", "p90", "play_prob") if r.get(k)}
         except ValueError:
-            problems.append(f"line {n}: p10/p50/p90 must be numbers")
+            problems.append(f"line {n}: p10/p50/p90/play_prob must be numbers")
             continue
-        if not key or "p50" not in nums:
-            problems.append(f"line {n}: needs an id or name and a p50")
+        if not key or not ({"p50", "play_prob"} & set(nums)):
+            problems.append(f"line {n}: needs an id or name and a p50 and/or a play_prob")
             continue
-        if not nums.get("p10", nums["p50"]) <= nums["p50"] <= nums.get("p90", nums["p50"]):
+        if ("p10" in nums or "p90" in nums) and "p50" not in nums:
+            problems.append(f"line {n}: p10/p90 need a p50")
+            continue
+        if "p50" in nums and not nums.get("p10", nums["p50"]) <= nums["p50"] <= nums.get("p90", nums["p50"]):
             problems.append(f"line {n}: needs p10 <= p50 <= p90")
+            continue
+        if "play_prob" in nums and not 0.0 <= nums["play_prob"] <= 1.0:
+            problems.append(f"line {n}: play_prob must be between 0 and 1")
             continue
         rows.append(dict(nums, key=key, by="id" if r.get("id") else "name", line=n))
     return rows, problems
@@ -183,8 +194,11 @@ class CsvProvider:
                                 f"{'no player in this week file' if not hits else f'{len(hits)} players -- use the id'}; ignored")
                 continue
             pid = hits[0]["id"]
-            out.values[pid] = {k: r[k] for k in ("p10", "p50", "p90") if k in r}
-            out.flags[pid] = [f for f in out.flags.get(pid, []) if not f.startswith("no ")] + [f"csv override ({self.path.name})"]
+            if "p50" in r:
+                out.values[pid] = {k: r[k] for k in ("p10", "p50", "p90") if k in r}
+                out.flags[pid] = [f for f in out.flags.get(pid, []) if not f.startswith("no ")] + [f"csv override ({self.path.name})"]
+            if "play_prob" in r:
+                out.play_prob[pid] = r["play_prob"]
             n += 1
         out.provenance = f"csv: {self.path.name} ({n} override(s)) over {out.provenance}"
         out.warnings += warnings

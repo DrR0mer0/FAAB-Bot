@@ -303,6 +303,20 @@ def build_week(con, season, week, stage, team_id=None, provider=None, as_of=None
             flags = proj.flags.get(p["id"], [])
             if flags:
                 p["note"] = "; ".join(flags)
+    manual = []
+    for side in ("mine", "opp"):
+        for p in players[side]:
+            if p["id"] in proj.play_prob:
+                x = proj.play_prob[p["id"]]
+                was = p.get("status")
+                p["play_prob"] = x
+                p["status"] = None              # lineup_sim zeroes any out status: the manual chance must not be undone
+                note = f"manual play_prob {x:g}" + (f" (status was {was})" if was else "")
+                p["note"] = "; ".join(filter(None, [p.get("note"), note]))
+                manual.append({"name": p["name"], "play_prob": x, "status_was": was, "source": "csv override"})
+    for m in manual:
+        set_aside = f" (status {m['status_was']} set aside)" if m["status_was"] else ""
+        warnings.append(f"MANUAL play_prob: {m['name']} {m['play_prob']:g}{set_aside}")
     pos_p50 = {}
     for p in players["mine"] + players["opp"]:
         if p.get("p50") is not None:
@@ -347,7 +361,7 @@ def build_week(con, season, week, stage, team_id=None, provider=None, as_of=None
                          "age_hours": round((as_of - lm).total_seconds() / 3600, 1) if lm else None,
                          "resolved_by": "injuries.resolve_designations (as a hand-run score_week.py resolves them)",
                          "espn_snapshot_taken_at": inj.get("espn_taken_at")},
-            "status_conflicts": conflicts, "espn_cross_check": espn_notes,
+            "status_conflicts": conflicts, "espn_cross_check": espn_notes, "manual_overrides": manual,
             "yahoo_status": ("captured with the roster snapshot" if any(r.get("status") is not None for rows in sides.values() for r in rows)
                              else "not available (a past week, or a snapshot from before 2026-10-22): long-term statuses stand"),
             "projections": {"provider": getattr(provider, "name", "?"), "provenance": proj.provenance,

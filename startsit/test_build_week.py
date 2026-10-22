@@ -349,6 +349,34 @@ class TestCsvOverride(BuildCase):
         self.assertTrue(wf["_meta"]["projections"]["provenance"].startswith("csv: proj.csv (2 override(s)) over baseline:"))
 
 
+class TestCsvPlayProb(BuildCase):
+    def build_with(self, text):
+        path = self.dir / "proj.csv"
+        path.write_text(text, encoding="utf-8")
+        store = projections.scoring.StatsStore(self.raw, projections.scoring.load_config()["scoring"])
+        return self.build(provider=projections.CsvProvider(path, projections.BaselineProvider(store)))
+
+    def test_a_manual_play_prob_overrides_the_status_and_is_listed(self):
+        base = self.by_name(self.build()[0])
+        wf, warnings = self.build_with("name,p50,play_prob\nOwen Out,,0.9\nFlex Iffy,9,0.5\n")
+        mine = self.by_name(wf)
+        owen = mine["Owen Out"]
+        self.assertEqual((owen["play_prob"], owen.get("status"), owen["p50"]), (0.9, None, base["Owen Out"]["p50"]))   # baseline kept
+        self.assertIn("manual play_prob 0.9 (status was O)", owen["note"])
+        self.assertEqual((mine["Flex Iffy"]["play_prob"], mine["Flex Iffy"]["p50"]), (0.5, 9))
+        players = {p.name: p for p in lineup_sim.parse_week(wf)[2]}
+        self.assertAlmostEqual(players["Owen Out"].play_prob, 0.9)          # not zeroed by lineup_sim's out statuses
+        self.assertEqual({m["name"]: (m["play_prob"], m["status_was"]) for m in wf["_meta"]["manual_overrides"]},
+                         {"Owen Out": (0.9, "O"), "Flex Iffy": (0.5, "Q")})
+        self.assertTrue(any(w.startswith("MANUAL play_prob: Owen Out 0.9 (status O set aside)") for w in warnings))
+
+    def test_bad_play_prob_rows_are_rejected_with_the_line(self):
+        wf, warnings = self.build_with("name,p10,play_prob\nOwen Out,,1.5\nWade Mine,3,\n")
+        self.assertTrue(any("line 2: play_prob must be between 0 and 1" in w for w in warnings))
+        self.assertTrue(any("line 3: needs an id or name and a p50 and/or a play_prob" in w for w in warnings))
+        self.assertEqual(wf["_meta"]["manual_overrides"], [])
+
+
 class TestSundayLocks(BuildCase):
     AFTER_THU = datetime(2026, 10, 25, 14, 0, tzinfo=TZ)                    # Sunday morning, the Thursday game is over
 
