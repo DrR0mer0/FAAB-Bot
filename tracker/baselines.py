@@ -76,6 +76,20 @@ def rank_last_week(pool):
     ))
 
 
+def rebuild_dart_sets(con, run_id):
+    """Recreate exactly the (pool, mix) per pick set that `log` used, from the
+    ledger alone -- pool snapshot + O.D.D.S. production's logged picks."""
+    pool = [dict(r) for r in con.execute("SELECT * FROM tr_pool WHERE run_id=?", (run_id,))]
+    sets = {}
+    for ps in sorted({r[0] for r in con.execute("SELECT DISTINCT pick_set FROM tr_predictions WHERE run_id=?", (run_id,))}):
+        scope = ps.split("_k")[0]
+        subset = pool if scope == "all" else [r for r in pool if r["in_u50"]]
+        picks = [dict(r) for r in con.execute(
+            "SELECT position FROM tr_predictions WHERE run_id=? AND model_name='odds_prod' AND pick_set=?", (run_id, ps))]
+        sets[ps] = (subset, position_mix(picks))
+    return sets
+
+
 def dart_draws(sets, seed, n_draws):
     """sets: {pick_set: (pool, mix)} with pool a list of dicts having
     player_id/position, mix {position: n}. Yields n_draws dicts

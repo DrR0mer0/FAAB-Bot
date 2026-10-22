@@ -7,6 +7,7 @@ Stdlib unittest only; every test uses temp dirs / in-memory SQLite, never the
 real DB or predictions/.
 """
 import contextlib
+import copy
 import csv
 import gzip
 import hashlib
@@ -33,6 +34,7 @@ import report
 import scheduled_run
 import scoring
 import tracker
+import trends
 from score_week import (OFF_ROSTER_WARNING_TAG, UNAVAILABLE_STATUSES, load_roster_presence, load_scheduled_teams,  # noqa: E402
                         off_roster_reason, render_markdown_report)
 
@@ -2456,6 +2458,161 @@ class TestCrowd(unittest.TestCase):
         self.assertIsNone(got["unknown"]["crowd_hit"])
         self.assertIsNone(got["nosnap"]["crowd_hit"])
         self.assertEqual(got["nosnap"]["snapshots_in_window"], 0)
+
+
+class TestTrends(unittest.TestCase):
+    """Breakout-trend observations (trends.py; pre-registered 2026-10-20): a made-up season in memory."""
+
+    NOW = datetime(2026, 10, 20, 14, 0, tzinfo=timezone.utc)
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.raw = Path(self.tmp.name)
+        self.con = mem_db()
+        c = self.con
+        c.execute("CREATE TABLE nfl_games (season INTEGER, week INTEGER, game_id TEXT, kickoff_utc TEXT, home_team TEXT, "
+                  "away_team TEXT, home_score INTEGER, away_score INTEGER, is_playoffs INTEGER DEFAULT 0)")
+        for wk in range(1, 10):                     # AAA plays every week; BBB is on a bye in week 6
+            c.execute("INSERT INTO nfl_games VALUES (2026, ?, 'g', 't', 'AAA', ?, 20, 17, 0)", (wk, "CCC" if wk == 6 else "BBB"))
+        # 40 players: p30-p39 break out in week 4 (snap share 0.2 -> 0.7, 8 -> 20 points, target share 0.1 -> 0.3); p39 misses
+        # week 5; the rest stay at 0.4 / 8 points / 0.15. Odd players are on BBB.
+        rows, self.pool = [], []
+        for i in range(40):
+            pid, pos, team = f"p{i:02d}", ("WR" if i % 2 == 0 else "RB"), ("AAA" if i % 2 == 0 else "BBB")
+            hot = i >= 30
+            for wk in range(1, 8):
+                if (team, wk) == ("BBB", 6) or (pid, wk) == ("p39", 5):
+                    continue
+                late = hot and wk >= 4
+                rows.append(dict(player_id=pid, season=2026, week=wk, season_type="REG", position=pos, team=team, receptions=0,
+                                 receiving_yards=200 if late else 80, target_share=0.3 if late else 0.15))
+                if wk <= 6:
+                    c.execute("INSERT INTO tr_snap_counts (season, week, player_id, position, team, offense_snaps, offense_pct) "
+                              "VALUES (2026, ?, ?, ?, ?, 30, ?)", (wk, pid, pos, team, (0.7 if late else 0.2) if hot else 0.4))
+            self.pool.append(dict(run_id="r4", player_id=pid, name=pid, position=pos, team=team, percent_owned=float(i * 2),
+                                  in_u50=1 if i * 2 < 50 else 0, odds_prod_score=i / 40, odds_shadow_score=(40 - i) / 40,
+                                  snap_delta=(i % 7) / 10, target_share=0.1, last_week_points=8.0, last_week_label="w",
+                                  snap_recent=None, snap_prior=None, snap_games=4))
+        with open(self.raw / "stats_player_week_2026.csv", "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=["player_id", "season", "week", "season_type", "position", "team", "receptions",
+                                              "receiving_yards", "target_share"])
+            w.writeheader()
+            w.writerows(rows)
+        for run_id, week, ts in (("r4", 4, "2026-10-01T14:00:00+00:00"), ("r5", 5, "2026-10-08T14:00:00+00:00")):
+            pool = [dict(r, run_id=run_id) for r in self.pool]
+            preds, _ = tracker.make_predictions(run_id, pool, CFG, 5, {})
+            ledger.insert_rows(c, "tr_runs", [dict(run_id=run_id, run_timestamp=ts, season=2026, week=week, run_slot="thu",
+                                                   n_draws=200, dart_seed=5, pool_size=40)])
+            ledger.insert_rows(c, "tr_pool", pool)
+            ledger.insert_rows(c, "tr_predictions", preds)
+        # a later sun run of week 4: never an official run
+        ledger.insert_rows(c, "tr_runs", [dict(run_id="r4sun", run_timestamp="2026-10-04T14:00:00+00:00", season=2026, week=4,
+                                               run_slot="sun", n_draws=200, dart_seed=5, pool_size=40)])
+        sid = c.execute("INSERT INTO tr_ownership_snapshots (taken_at, source, ok) VALUES ('2026-10-05T13:30:00+00:00', 'espn', 1)").lastrowid
+        c.execute("INSERT INTO tr_ownership (snapshot_id, source, external_id, player_id, percent_owned) VALUES (?, 'espn', 'x', 'p00', 60.0)", (sid,))
+        c.execute("INSERT INTO tr_ownership (snapshot_id, source, external_id, player_id, percent_owned) VALUES (?, 'espn', 'y', 'p02', 30.0)", (sid,))
+        lsid = c.execute("INSERT INTO tr_league_snapshots (run_id, taken_at, source, ok) VALUES ('r4', 't', 'yahoo', 1)").lastrowid
+        for pid in ("p01", "p03"):
+            c.execute("INSERT INTO tr_league_availability (snapshot_id, external_id, player_id, status) VALUES (?, ?, ?, 'FA')", (lsid, pid, pid))
+        c.execute("CREATE TABLE lg_snapshots (snapshot_id INTEGER PRIMARY KEY, batch_id TEXT, taken_at TEXT, resource TEXT, ok INTEGER)")
+        c.execute("CREATE TABLE lg_transactions (snapshot_id INTEGER, transaction_id INTEGER, happened_at TEXT)")
+        c.execute("CREATE TABLE lg_transaction_players (snapshot_id INTEGER, transaction_id INTEGER, player_id TEXT, action TEXT, source_type TEXT)")
+        c.execute("INSERT INTO lg_snapshots VALUES (1, 'b', '2026-10-20T13:35:00+00:00', 'transactions', 1)")
+        c.execute("INSERT INTO lg_transactions VALUES (1, 7, '2026-10-03T07:35:00+00:00')")
+        c.execute("INSERT INTO lg_transaction_players VALUES (1, 7, 'p01', 'add', 'waivers')")
+        c.commit()
+        self.store = scoring.StatsStore(self.raw, RULES)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def compute(self, now=None):
+        return trends.compute_trends(self.con, CFG, self.store, now or self.NOW)
+
+    def out(self, run_id, metric):
+        return {r["player_id"]: dict(r) for r in self.con.execute(
+            "SELECT * FROM tr_trend_outcomes WHERE run_id=? AND metric=?", (run_id, metric))}
+
+    def test_only_closed_windows_of_official_runs_are_recorded_once(self):
+        written = self.compute()
+        self.assertEqual(sorted(written), sorted([("r4", m) for m in trends.METRICS] + [("r5", "target_growth")]))
+        self.assertTrue(all(n == 40 for n in written.values()))              # every pool player, not only the picks
+        self.assertEqual(self.compute(), {})                                # nothing twice
+        self.assertFalse(self.con.execute("SELECT 1 FROM tr_trend_outcomes WHERE run_id='r4sun'").fetchone())
+        pend = {(w, m): why for w, _s, m, why in trends.pending(self.con, self.store, CFG, self.NOW)}
+        self.assertEqual(pend[(5, "league_add")], "not evaluable: no league-availability snapshot with this run")
+        self.assertIn("needs week 8 final and loaded", pend[(5, "payoff")])
+        self.assertIn("window closes 10-22", pend[(5, "crowd")])
+        with self.assertRaises(Exception):
+            self.con.execute("DELETE FROM tr_trend_outcomes")                # append-only
+
+    def test_payoff_uses_the_spike_baseline_skips_byes_and_counts_a_missed_game_as_zero(self):
+        self.compute()
+        o = self.out("r4", "payoff")
+        d = json.loads(o["p30"]["detail"])
+        self.assertEqual((o["p30"]["eligible"], o["p30"]["hit"], d["baseline"], d["payoff"], d["games"]), (1, 1, 8.0, 20.0, 4))
+        self.assertEqual(json.loads(o["p31"]["detail"])["games"], 3)         # BBB's week-6 bye is skipped
+        d39 = json.loads(o["p39"]["detail"])
+        self.assertEqual((d39["payoff"], d39["games"], o["p39"]["hit"]), (13.33, 3, 1))  # BBB: weeks 4, 5 (missed = 0), 7; bye skipped
+        self.assertEqual((o["p00"]["hit"], o["p00"]["value"]), (0, 0.0))
+        self.assertAlmostEqual(o["p30"]["value"], 12.0)
+
+    def test_role_growth_against_the_history_cutoffs(self):
+        self.compute()
+        snap, tgt = self.out("r4", "snap_growth"), self.out("r4", "target_growth")
+        self.assertAlmostEqual(snap["p30"]["value"], 0.5)
+        self.assertEqual((snap["p30"]["hit"], snap["p00"]["hit"]), (1, 0))
+        self.assertEqual(json.loads(snap["p30"]["detail"])["cutoff"], CFG["trend"]["role"]["snap_cutoff"]["WR"])
+        self.assertAlmostEqual(tgt["p30"]["value"], 0.15)
+        self.assertEqual(tgt["p30"]["hit"], 1)
+
+    def test_crowd_and_league_add(self):
+        self.compute()
+        crowd, add = self.out("r4", "crowd"), self.out("r4", "league_add")
+        self.assertEqual((crowd["p00"]["eligible"], crowd["p00"]["hit"]), (1, 1))          # 0% at pick, 60% four days later
+        self.assertEqual((crowd["p02"]["eligible"], crowd["p02"]["hit"]), (1, 0))
+        self.assertEqual(crowd["p30"]["eligible"], 0)                                     # 60% owned at pick: can't cross
+        self.assertEqual({p: (r["eligible"], r["hit"]) for p, r in add.items() if r["eligible"]}, {"p01": (1, 1), "p03": (1, 0)})
+
+    def test_season_table_dedupes_consecutive_weeks_and_ranks_against_the_dart_draws(self):
+        self.compute()
+        table, weeks = trends.season_table(self.con, 2026, "target_growth", CFG)
+        self.assertEqual(weeks, [4, 5])
+        prod = table[("odds_prod", "all_k10")]
+        self.assertEqual([x[0] for x in prod["per_week"]], [4, 5])
+        self.assertEqual(prod["per_week"][1][1], 0)          # week 5 picked the same ten again: they count once
+        self.assertEqual(prod["n"], prod["per_week"][0][1])
+        self.assertGreater(prod["percentile"], 90)           # the breakout players beat nearly every dart draw
+        no_dedupe, _ = trends.season_table(self.con, 2026, "target_growth", CFG, dedupe=False)
+        self.assertGreater(no_dedupe[("odds_prod", "all_k10")]["n"], prod["n"])
+
+    def test_no_interval_before_eight_weeks_and_the_section_is_marked_observation_only(self):
+        self.compute()
+        md = "\n".join(report.build_trend_section(self.con, 2026, CFG, trends.pending(self.con, self.store, CFG, self.NOW)))
+        self.assertIn("## Observation only: breakout trends", md)
+        self.assertIn("NOT part of the official record", md)
+        self.assertIn("_Resolved: week 4. Pending: week 5 `thu` (needs week 8 final and loaded)._", md)
+        self.assertNotIn("95% interval", md)
+        self.assertIsNone(trends.moving_block_ci([(4, 10, 3, 0.0)], 4))
+        lo, hi = trends.moving_block_ci([(w, 10, 3 + (w % 2), 0.0) for w in range(1, 10)], 3)
+        self.assertLessEqual(lo, 0.35)
+        self.assertGreaterEqual(hi, 0.3)
+
+    def test_the_trend_definitions_are_hashed_apart_from_the_official_record(self):
+        changed = copy.deepcopy(CFG)
+        changed["trend"]["payoff"]["multiplier"] = 2.0
+        self.assertEqual(scoring.config_hash(changed), scoring.config_hash(CFG))
+        self.assertNotEqual(trends.trend_hash(changed), trends.trend_hash(CFG))
+        unset = copy.deepcopy(CFG)
+        unset["trend"]["role"]["snap_cutoff"] = None
+        with self.assertRaisesRegex(ValueError, "trend-cutoffs"):
+            trends.compute_trends(self.con, unset, self.store, self.NOW)
+
+    def test_cutoffs_come_from_the_history_seasons_with_the_same_rules(self):
+        cut = trends.cutoffs_from_history(self.con, self.store, CFG, seasons=[2026])
+        self.assertEqual(set(cut["snap"]), {"RB", "WR"})
+        self.assertGreater(cut["n"]["snap"]["WR"], 0)
+        self.assertGreaterEqual(cut["snap"]["WR"], 0.0)
 
 
 class TestScoreEndToEnd(unittest.TestCase):

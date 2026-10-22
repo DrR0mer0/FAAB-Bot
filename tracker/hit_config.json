@@ -32,6 +32,20 @@
     "owned_pct_threshold": 50,
     "window_days": 14
   },
+  "trend": {
+    "_comment": "Breakout-trend observations (tracker/trends.py), observation only, never part of the official record. Pre-registered 2026-10-20 (docs/tracker_handoff.md, decision 15); hashed on its own (trends.trend_hash), NOT with the sections above. Any change is a new version.",
+    "version": 1,
+    "pre_registered": "2026-10-20 (docs/tracker_handoff.md, decision 15)",
+    "last_week": 17,
+    "payoff": {"weeks": 4, "last_pick_week": 14, "multiplier": 1.5, "min_points": 10.0, "baseline_games": 3, "min_prior_games": 3},
+    "role": {"before_weeks": 3, "after_weeks": 3, "min_games": 2, "last_pick_week": 15, "percentile": 90,
+             "history_seasons": [2022, 2023, 2024, 2025],
+             "snap_cutoff": {"QB": 0.31, "RB": 0.1533, "TE": 0.1733, "WR": 0.215}, "target_cutoff": {"RB": 0.0427, "TE": 0.0501, "WR": 0.0678}, "cutoff_sample_sizes": {"snap": {"QB": 3948, "RB": 7260, "TE": 6768, "WR": 12000}, "target": {"RB": 7260, "TE": 6768, "WR": 12000}}},
+    "crowd": {"owned_pct_threshold": 50, "window_days": 14},
+    "league_add": {"window_days": 14},
+    "dedupe_consecutive": true,
+    "intervals": {"min_weeks": 8, "block_weeks": {"payoff": 4, "snap_growth": 3, "target_growth": 3, "crowd": 2, "league_add": 2}}
+  },
   "run": {
     "ks": [10, 25],
     "n_draws": 1000,

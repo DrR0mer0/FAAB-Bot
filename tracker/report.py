@@ -355,7 +355,9 @@ def build_weekly_report(con, season, week, stats_notes=None):
     ks = sorted({int(r[0].split("_k")[1]) for r in con.execute(
         "SELECT DISTINCT pick_set FROM tr_run_results WHERE scoring_id=?", (sid,))})
     out = [f"# O.D.D.S. vs the baselines -- {season} Week {week}", "",
-           f"_Scored {sc['scored_at'][:16].replace('T', ' ')} UTC; hit definition `{sc['hit_config_hash'][:10]}`._", ""]
+           f"_Scored {sc['scored_at'][:16].replace('T', ' ')} UTC; hit definition `{sc['hit_config_hash'][:10]}`._", "",
+           f"_Week {week}'s breakout-trend windows (observation only) resolve after week {week + 3} at the latest (role growth "
+           f"after week {week + 2}); they appear in the season summary, never in this scoreboard._", ""]
     out += stats_warning(stats_notes)
     out += _hit_defs_block(cfg_json) + [""]
     for scope in ("all", "u50"):
@@ -480,7 +482,7 @@ def thu_vs_sun_lines(thu, sun):
     return out + [""]
 
 
-def build_season_report(con, season, report_cfg, stats_notes=None):
+def build_season_report(con, season, report_cfg, stats_notes=None, trend=None):
     weeks = scored_weeks(con, season)
     if not weeks:
         return None
@@ -551,12 +553,68 @@ def build_season_report(con, season, report_cfg, stats_notes=None):
         out += ["_No scored week has a `sun` run yet._", ""]
     out += thu_vs_sun_lines(thu_res, sun_res)
 
-    crowd = build_crowd_section(con, season)
+    crowd = build_trend_section(con, season, *trend) if trend else build_crowd_section(con, season)
     noted = used_runs + [r for r in sun_runs if r["run_id"] not in {u["run_id"] for u in used_runs}]
     out += crowd + ["", "## Caveats", ""] + [f"- {c}" for c in KNOWN_CAVEATS + pool_rule_notes(noted) + no_game_notes(con, noted)
                                                     + off_roster_notes(noted) + ownership_notes(con, noted)
                                                     + sleeper_pool_lines(con, noted, only_if_unknown=True)] + [""]
     return "\n".join(out)
+
+
+TREND_TITLE = "## Observation only: breakout trends"
+TREND_METRICS = (
+    ("payoff", "Multi-week payoff (weeks W..W+3 vs his trailing baseline)", "Sustained breakouts", "Mean lift (pts/game)", 1.0),
+    ("snap_growth", "Role growth: snap share (W..W+2 vs W-3..W-1)", "Role-growth hits", "Mean change (pct pts)", 100.0),
+    ("target_growth", "Role growth: target share (W..W+2 vs W-3..W-1, RB/WR/TE)", "Role-growth hits", "Mean change (pct pts)", 100.0),
+    ("crowd", "Crowd: ownership crosses 50% within 14 days (ESPN)", "Crowd hits", None, None),
+    ("league_add", "League add: added by a team in my league within 14 days", "Added", None, None),
+)
+BLOCK_WEEKS = {"payoff": 4, "snap_growth": 3, "target_growth": 3, "crowd": 2, "league_add": 2}
+
+
+def fmt_rate(r):
+    return "-" if r is None else f"{100 * r:.0f}%"
+
+
+def build_trend_section(con, season, cfg, pending_rows):
+    """The breakout-trend observations (trends.py), after the Sunday section: never part of the official record."""
+    import trends
+    t = cfg["trend"]
+    out = ["", TREND_TITLE, "",
+           f"_Observation only, pre-registered {t['pre_registered']} -- NOT part of the official record above. Definitions hash "
+           f"`{trends.trend_hash(cfg)[:10]}`. One run per week (the first snapshot). A player picked by the same model in consecutive "
+           f"weeks counts once (dart: per draw). Dart = the same 1000 draws as the scoring; the percentile is where the model's rate "
+           f"falls among them. No interval until {t['intervals']['min_weeks']} weeks have resolved; then a moving-block bootstrap "
+           f"(block = the window length), because consecutive windows overlap. League adds are counts and rates only._", ""]
+    for metric, title, hit_label, value_label, scale in TREND_METRICS:
+        try:
+            table, weeks = trends.season_table(con, season, metric, cfg)
+        except Exception:  # noqa: BLE001 -- the table doesn't exist yet
+            table, weeks = {}, []
+        waiting = [f"week {w} `{s}` ({why})" for w, s, m, why in pending_rows if m == metric]
+        out += [f"### {title}", ""]
+        out.append(f"_Resolved: {', '.join(f'week {w}' for w in weeks) if weeks else 'none yet'}. "
+                   f"Pending: {'; '.join(waiting) if waiting else 'none'}._")
+        out.append("")
+        if not table:
+            continue
+        ci = len(weeks) >= t["intervals"]["min_weeks"]
+        head = ["Model", "Pick set", "Picks evaluated", hit_label, "Rate"] + ([value_label] if value_label else []) + ["Dart rate", "Dart percentile"] + (["95% interval"] if ci else [])
+        out += ["| " + " | ".join(head) + " |", "|" + "|".join(["---"] * 2 + ["---:"] * (len(head) - 2)) + "|"]
+        for (model, ps), a in sorted(table.items(), key=lambda kv: (kv[0][1], MODEL_ORDER.index(kv[0][0]) if kv[0][0] in MODEL_ORDER else 9)):
+            cells = [MODEL_LABELS.get(model, model), ps, str(a["n"]), str(a["hits"]), fmt_rate(a["rate"])]
+            if value_label:
+                cells.append("-" if a["mean_value"] is None else f"{a['mean_value'] * scale:+.2f}")
+            cells += [fmt_rate(a["dart_mean_rate"]),
+                      "-" if a["percentile"] is None else f"{a['percentile']:.0f}"]
+            if ci:
+                iv = trends.moving_block_ci(a["per_week"], BLOCK_WEEKS[metric])
+                cells.append("-" if iv is None else f"{fmt_rate(iv[0])}-{fmt_rate(iv[1])}")
+            out.append("| " + " | ".join(cells) + " |")
+        out.append("")
+    out += ["_The original crowd-hit table (every run, one stored dart draw) is still computed into `tr_crowd_results`; this "
+            "section replaces it in the summary._"]
+    return out
 
 
 def build_crowd_section(con, season):

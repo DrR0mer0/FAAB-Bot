@@ -54,6 +54,7 @@ import ownership  # noqa: E402
 import report  # noqa: E402
 import scoring  # noqa: E402
 import snapcounts  # noqa: E402
+import trends  # noqa: E402
 from score_week import (  # noqa: E402 -- the one place kickoff timezone and roster-status logic live
     KICKOFF_TZ, OFF_ROSTER_MAX_SHARE, OFF_ROSTER_WARNING_TAG, load_current_roster, load_kickoffs, load_roster_presence,
     off_roster_reason, parse_kickoff_utc, render_markdown_report)
@@ -437,18 +438,7 @@ def make_predictions(run_id, pool, cfg, seed, versions):
     return rows, sets
 
 
-def rebuild_dart_sets(con, run_id):
-    """Recreate exactly the (pool, mix) per pick set that `log` used, from the
-    ledger alone -- pool snapshot + O.D.D.S. production's logged picks."""
-    pool = [dict(r) for r in con.execute("SELECT * FROM tr_pool WHERE run_id=?", (run_id,))]
-    sets = {}
-    for ps in sorted({r[0] for r in con.execute("SELECT DISTINCT pick_set FROM tr_predictions WHERE run_id=?", (run_id,))}):
-        scope = ps.split("_k")[0]
-        subset = pool if scope == "all" else [r for r in pool if r["in_u50"]]
-        picks = [dict(r) for r in con.execute(
-            "SELECT position FROM tr_predictions WHERE run_id=? AND model_name='odds_prod' AND pick_set=?", (run_id, ps))]
-        sets[ps] = (subset, baselines.position_mix(picks))
-    return sets
+rebuild_dart_sets = baselines.rebuild_dart_sets   # lives in baselines.py so trends.py can rebuild the same draws
 
 
 # ---------------------------------------------------------------------- log
@@ -1069,6 +1059,46 @@ def cmd_score(args, con):
         warn_stats_changes(stats_changes(con, store, args.season), skip_week=args.week if out else None)
     n = compute_crowd(con, cfg, now, export_dir=args.export_dir)
     print(f"[CROWD] appended {n} crowd-hit row(s) for runs whose {cfg['crowd_hit']['window_days']}-day window has closed")
+    # Breakout-trend observations (trends.py; pre-registered 2026-10-20, observation only -- never the official record)
+    store = scoring.StatsStore(args.raw_dir, cfg["scoring"])
+    seasons = sorted({r[0] for r in con.execute("SELECT DISTINCT season FROM tr_runs")})
+    try:
+        written = trends.compute_trends(con, cfg, store, now, trends.weekly_roster_rows(args.raw_dir, seasons),
+                                        export_path=Path(args.export_dir) / f"trends_{now:%Y%m%dT%H%M%SZ}.jsonl")
+    except ValueError as e:
+        print(f"[TRENDS] not computed: {e}", file=sys.stderr)
+        return 0
+    for (run_id, metric), n_rows in sorted(written.items()):
+        print(f"[TRENDS] {run_id} {metric}: {n_rows} pool player(s) recorded")
+    if not written:
+        print("[TRENDS] no trend window closed since the last score")
+    return 0
+
+
+@with_db
+def cmd_trend_cutoffs(args, con):
+    """The role-growth cut-offs: the pre-registered percentile over the history seasons, by position. --write puts them
+    into hit_config.json -- refused once any role-growth outcome is stored, since the cut-offs must be fixed BEFORE any
+    2026 number is computed (decision 15)."""
+    cfg = scoring.load_config(args.config)
+    store = scoring.StatsStore(args.raw_dir, cfg["scoring"])
+    cut = trends.cutoffs_from_history(con, store, cfg)
+    print(json.dumps(cut, indent=1))
+    if args.write:
+        trends.init_schema(con)
+        if con.execute("SELECT 1 FROM tr_trend_outcomes WHERE metric IN ('snap_growth','target_growth') LIMIT 1").fetchone():
+            raise Refused("role-growth outcomes are already stored -- the cut-offs are fixed; a change is a new trend version")
+        path = Path(args.config) if args.config else scoring.DEFAULT_CONFIG_PATH
+        text = path.read_text(encoding="utf-8")
+        fills = {'"snap_cutoff": null': f'"snap_cutoff": {json.dumps(cut["snap"])}',
+                 '"target_cutoff": null': f'"target_cutoff": {json.dumps(cut["target"])}',
+                 '"cutoff_sample_sizes": null': f'"cutoff_sample_sizes": {json.dumps(cut["n"])}'}
+        if any(text.count(k) != 1 for k in fills):
+            raise Refused(f"{path} has no empty cut-off placeholders (\"snap_cutoff\": null, ...) -- they are set already")
+        for k, v in fills.items():
+            text = text.replace(k, v)
+        path.write_text(text, encoding="utf-8")      # in place: the file's own formatting is kept
+        print(f"[TRENDS] wrote the cut-offs into {path}")
     return 0
 
 
@@ -1100,7 +1130,9 @@ def cmd_report(args, con):
         md = report.build_weekly_report(con, args.season, args.week, stats_notes=stale)
         name = f"{args.season}_week{args.week:02d}_scoreboard.md"
     else:
-        md = report.build_season_report(con, args.season, cfg["report"], stats_notes=stale)
+        store = scoring.StatsStore(args.raw_dir, cfg["scoring"])
+        md = report.build_season_report(con, args.season, cfg["report"], stats_notes=stale,
+                                        trend=(cfg, trends.pending(con, store, cfg, utcnow())) if "trend" in cfg else None)
         name = f"{args.season}_season_summary.md"
     if md is None:
         raise Refused(f"nothing scored yet for {args.season}" + (f" week {args.week}" if args.week else "")
@@ -1224,6 +1256,11 @@ def build_parser():
     p.add_argument("--seasons", default=None, help="e.g. 2024-2026 or 2025,2026 (default: last 3 seasons)")
     p.add_argument("--no-fetch", action="store_true", help="load files already on disk")
     p.set_defaults(fn=cmd_fetch_snaps)
+
+    p = sub.add_parser("trend-cutoffs", help="role-growth cut-offs from the history seasons (breakout-trend observations)")
+    common(p)
+    p.add_argument("--write", action="store_true", help="write them into hit_config.json (refused once role outcomes exist)")
+    p.set_defaults(fn=cmd_trend_cutoffs)
 
     p = sub.add_parser("backtest", help="phase 2 (not built yet)")
     common(p)
