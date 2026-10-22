@@ -1050,6 +1050,14 @@ class TestInjuryRuleShared(unittest.TestCase):
             self.assertEqual(injuries.resolve_standalone(bare, 2026, 5, NOW, fetch=fetched())["source"], "nflverse")
             bare.close()
 
+    def test_full_designations_keep_questionable_and_the_standalone_rule_is_built_from_them(self):
+        con = self.ownership_db("2026-10-11T13:30:00+00:00", {"espn_out": "OUT"})
+        with mock.patch("sys.stderr"):
+            full = injuries.resolve_designations(con, 2026, 5, NOW, fetch=fetched())
+            rec = injuries.resolve_standalone(con, 2026, 5, NOW, fetch=fetched())
+        self.assertEqual(full["status"], {"out1": "Out", "dbt1": "Doubtful", "q1": "Questionable"})
+        self.assertEqual(rec, injuries.designations_record(full, ("Out", "Doubtful"), "score_week"))
+
     def test_markdown_lists_who_was_not_ranked_only_when_someone_was(self):
         plain = render_markdown_report(PREDICTION_OUTPUT)
         self.assertEqual(render_markdown_report(dict(PREDICTION_OUTPUT, injury_watch_list=[], injury_rule={"source": "nflverse"},

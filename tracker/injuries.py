@@ -196,11 +196,13 @@ def read_designations(path):
     return record
 
 
-def resolve_standalone(con, season, week, as_of, cfg=None, fetch=fetch_nflverse):
-    """For a score_week.py run without the tracker: the same resolve(), with the
-    ESPN fallback taken from the newest successful roster-% snapshot within the
-    configured age (none is taken live). -> designations_record. Never raises."""
-    exclude, max_age, espn_max_age = rule(cfg)
+def resolve_designations(con, season, week, as_of, cfg=None, fetch=fetch_nflverse):
+    """resolve() for a run without the tracker, with the ESPN fallback taken from
+    the newest successful roster-% snapshot within the configured age (none is
+    taken live). -> resolve()'s dict, EVERY designation included (Questionable
+    too) -- for a caller that needs more than the Out/Doubtful rule, such as the
+    start/sit week-file builder. Never raises."""
+    _exclude, max_age, espn_max_age = rule(cfg)
     espn = None
     try:
         import ownership  # same directory; only needed here
@@ -208,7 +210,13 @@ def resolve_standalone(con, season, week, as_of, cfg=None, fetch=fetch_nflverse)
         espn = ownership.injury_status_by_player(con, found[0]) if found else None
     except Exception as e:  # noqa: BLE001 -- no snapshot tables, say: there's just no fallback
         print(f"[INJURY] no ESPN fallback available ({type(e).__name__}: {e})", file=sys.stderr)
-    return designations_record(resolve(season, week, as_of, max_age, espn, fetch=fetch), exclude, "score_week")
+    return resolve(season, week, as_of, max_age, espn, fetch=fetch)
+
+
+def resolve_standalone(con, season, week, as_of, cfg=None, fetch=fetch_nflverse):
+    """For a score_week.py run without the tracker: resolve_designations(),
+    reduced to the Out/Doubtful rule. -> designations_record. Never raises."""
+    return designations_record(resolve_designations(con, season, week, as_of, cfg, fetch=fetch), rule(cfg)[0], "score_week")
 
 
 def disagreements(pool_src, nflverse, espn, exclude):
