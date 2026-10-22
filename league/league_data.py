@@ -207,6 +207,7 @@ CREATE TABLE IF NOT EXISTS lg_rosters (
   position TEXT,
   team TEXT,
   selected_position TEXT,
+  status TEXT,
   PRIMARY KEY (snapshot_id, team_id, external_id)
 );
 
@@ -328,6 +329,10 @@ def init_schema(con):
     # the file's "# checked_through:" date (NULL before 2026-10-14, or when the line is missing)
     if "checked_through" not in ledger.table_columns(con, "lg_bid_imports"):
         con.execute("ALTER TABLE lg_bid_imports ADD COLUMN checked_through TEXT")
+    # Yahoo's own player status on each roster row (from 2026-10-22): '' = Yahoo gives none (available); NULL = a snapshot
+    # taken before it was captured, which says nothing
+    if "status" not in ledger.table_columns(con, "lg_rosters"):
+        con.execute("ALTER TABLE lg_rosters ADD COLUMN status TEXT")
     for t in TABLES:
         ledger.create_append_only_triggers(con, t)
     con.commit()
@@ -518,7 +523,7 @@ def parse_rosters(payloads):
         for p in numbered(roster["0"]["players"]):
             slot = flat(next(x["selected_position"] for x in p["player"][1:] if isinstance(x, dict) and "selected_position" in x))
             rows.append(dict(_player(p["player"]), team_id=team_id, week=int(roster["week"]) if roster.get("week") else None,
-                             selected_position=slot.get("position")))
+                             selected_position=slot.get("position"), status=flat(p["player"][0]).get("status") or ""))
     return rows
 
 

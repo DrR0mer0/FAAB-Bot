@@ -302,6 +302,25 @@ class TestSnapshot(LeagueDataCase):
         self.assertTrue(summary["transactions"]["ok"])
         self.assertEqual(self.rows("SELECT COUNT(*), COUNT(DISTINCT transaction_id) FROM lg_transactions"), [(10, 10)])
 
+    def test_yahoo_player_status_is_kept_with_each_roster_row(self):
+        """'' = Yahoo gives no status (available); a code (Q, IR, CEL, ...) as Yahoo sends it; NULL only in older snapshots."""
+        payload = roster_payload()
+        teams = payload["fantasy_content"]["league"][1]["teams"]
+        first = teams["0"]["team"][1]["roster"]["0"]["players"]["0"]["player"][0]
+        first.insert(-1, {"status": "CEL", "status_full": "Commissioner Exempt List"})
+        rows = league_data.parse_rosters([payload])
+        self.assertEqual([(r["name"], r["status"]) for r in rows if r["team_id"] == 1], [("Starter 1", "CEL"), ("Bench 1", "")])
+        self.snapshot()
+        self.assertEqual(self.rows("SELECT DISTINCT status FROM lg_rosters"), [("",)])
+        old = sqlite3.connect(":memory:")                    # a DB created before the column existed gains it, empty
+        self.addCleanup(old.close)
+        old.execute("CREATE TABLE lg_rosters (snapshot_id INTEGER NOT NULL, week INTEGER, team_id INTEGER NOT NULL, external_id TEXT "
+                    "NOT NULL, player_id TEXT, match_method TEXT, name TEXT, position TEXT, team TEXT, selected_position TEXT, "
+                    "PRIMARY KEY (snapshot_id, team_id, external_id))")
+        old.execute("INSERT INTO lg_rosters (snapshot_id, team_id, external_id) VALUES (1, 1, 'x')")
+        league_data.init_schema(old)
+        self.assertEqual(old.execute("SELECT status FROM lg_rosters").fetchall(), [(None,)])
+
     def test_rosters_and_matchups(self):
         self.snapshot()
         self.assertEqual(self.rows("SELECT week, team_id, name, position, team, selected_position FROM lg_rosters WHERE team_id=2 ORDER BY name"),

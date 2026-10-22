@@ -29,14 +29,19 @@ WHERE EACH FIELD COMES FROM
                       resolved like a hand-run score_week.py: Out -> O,
                       Doubtful -> D, Questionable -> Q). play_prob is left to
                       lineup_sim's own STATUS_PLAY_PROB.
-                      A long-term EXE / RES / PUP / SUS never silently beats a
-                      current-week source that says he may play (the week's
-                      injury report, or ESPN's status in the pinned roster-%
-                      snapshot): he stays IN, with the more cautious of the
-                      current-week sources (ESPN DAY_TO_DAY -> GTD), and the
-                      conflict is listed in the warnings and _meta. Found
-                      2026-10-22: nflverse kept Josh Jacobs on the exempt list
-                      in week 7 after his reinstatement. CUT / RET stay as is.
+                      A long-term EXE / RES / PUP / SUS stays authoritative
+                      unless YAHOO's current status for the player contradicts
+                      it (lg_rosters.status, captured with the roster snapshot):
+                      then Yahoo's status is used -- no status = available,
+                      subject to the week's injury report -- and the conflict
+                      is a STATUS CONFLICT warning and a _meta entry. ESPN is a
+                      cross-check only: a disagreement adds a warning, never a
+                      decision. Without a Yahoo status (a past week built from
+                      final lineups, or a snapshot from before 2026-10-22) the
+                      long-term status stands. Found 2026-10-22: nflverse kept
+                      Josh Jacobs on the exempt list after his reinstatement;
+                      Yahoo had tracked it (CEL on 10-15, nothing on 10-22) while
+                      ESPN said DAY_TO_DAY throughout. CUT / RET stay as is.
   p10 / p50 / p90     a projection provider (startsit/projections.py). A player
                       of MINE with no p50 is DROPPED with a warning: the
                       simulator must never start or bench someone on an invented
@@ -89,6 +94,10 @@ DESIGNATION = {"Out": "O", "Doubtful": "D", "Questionable": "Q"}
 OVERRIDABLE = {"EXE", "RES", "PUP", "SUS"}
 ESPN_CURRENT = {"ACTIVE": "ACTIVE", "DAY_TO_DAY": "GTD", "QUESTIONABLE": "Q", "DOUBTFUL": "D", "OUT": "O",
                 "INJURY_RESERVE": "IR", "SUSPENSION": "SUSP"}
+# Yahoo's player status -> lineup_sim's; "" (no status) = available. CEL = commissioner exempt list; NA = not active.
+YAHOO_STATUS = {"": "ACTIVE", "Q": "Q", "D": "D", "O": "O", "GTD": "GTD", "DTD": "GTD", "IR": "IR", "IR-R": "IR", "IR-NR": "IR",
+                "PUP-R": "PUP", "PUP-P": "PUP", "PUP": "PUP", "NFI-R": "NFI", "NFI-A": "NFI", "NFI": "NFI", "SUSP": "SUSP",
+                "CEL": "EXEMPT", "NA": "O", "COVID-19": "O"}
 
 
 def play_chance(code):
@@ -202,6 +211,7 @@ def build_week(con, season, week, stage, team_id=None, provider=None, as_of=None
 
     mismatches, unknown_codes, players, conflicts = [], set(), {"mine": [], "opp": []}, []
     espn_raw = inj.get("espn_raw") or {}
+    espn_notes = []
     for side, rows in sides.items():
         for r in rows:
             yahoo_team = YAHOO_TEAM_CODES.get(r["team"], r["team"]) if r["team"] else None
@@ -216,29 +226,36 @@ def build_week(con, season, week, stage, team_id=None, provider=None, as_of=None
             designation = DESIGNATION.get(inj["status"].get(gsis))
             espn = ESPN_CURRENT.get(espn_raw.get(gsis))
             long_term = nfl_status.get(gsis)
+            raw_yahoo = r.get("status")                      # None: not captured (says nothing); "": no status
+            yahoo = YAHOO_STATUS.get(raw_yahoo) if raw_yahoo is not None else None
+            if raw_yahoo is not None and raw_yahoo not in YAHOO_STATUS:
+                warnings.append(f"{r['name']}: unknown Yahoo status {raw_yahoo!r} -- ignored; add it to YAHOO_STATUS")
             if team and team not in games:
                 status = "BYE"
             elif long_term in NFLVERSE_STATUS:
-                current = [(src, code) for src, code in (("injury report", designation), ("ESPN", espn)) if code]
-                if long_term in OVERRIDABLE and any(play_chance(c) > 0 for _s, c in current):
-                    # a current-week source says he may play: never let the weekly roster's status silently win
-                    chosen = min((c for _s, c in current), key=play_chance)
-                    status = None if chosen == "ACTIVE" else chosen
+                status = NFLVERSE_STATUS[long_term]
+                if long_term in OVERRIDABLE and yahoo is not None and play_chance(yahoo) > 0:
+                    # Yahoo's current status says he may play: it wins over the weekly roster, never silently
+                    status = designation if yahoo == "ACTIVE" else yahoo
                     conflicts.append({"name": r["name"], "gsis_id": gsis, "nflverse_weekly_roster": long_term,
-                                      "injury_report": inj["status"].get(gsis), "espn": espn_raw.get(gsis),
-                                      "used": chosen, "play_chance": play_chance(chosen)})
-                else:
-                    status = NFLVERSE_STATUS[long_term]
+                                      "yahoo": raw_yahoo, "injury_report": inj["status"].get(gsis), "espn": espn_raw.get(gsis),
+                                      "used": status or "available", "play_chance": play_chance(status)})
+                if espn is not None and (play_chance(espn) > 0) != (play_chance(status) > 0):
+                    espn_notes.append(f"{r['name']}: ESPN says {espn_raw.get(gsis)}, the file has him "
+                                      f"{'in' if play_chance(status) > 0 else 'out'} ({status or 'available'}) -- cross-check only")
             elif designation:
                 status = designation
             players[side].append({"id": r["external_id"], "name": r["name"], "pos": r["position"], "team": team, "opp": opp,
                                   "status": status, "gsis_id": gsis, "yahoo_slot": r.get("selected_position"),
                                   "_kickoff": kickoff, "_points": r.get("points")})
     for c in conflicts:
-        others = ", ".join(f"{k} {c[k2]}" for k, k2 in (("the injury report says", "injury_report"), ("ESPN says", "espn")) if c[k2])
-        warnings.append(f"STATUS CONFLICT: {c['name']} -- nflverse's weekly roster says {c['nflverse_weekly_roster']}, but {others}. "
-                        f"Kept in as {c['used']} (play chance {c['play_chance']:.2f}, the more cautious current-week source) -- "
+        yahoo_said = f"Yahoo shows {'no status' if c['yahoo'] == '' else c['yahoo']}"
+        extra = "; ".join(f"{k} {c[k2]}" for k, k2 in (("injury report", "injury_report"), ("ESPN", "espn")) if c[k2])
+        warnings.append(f"STATUS CONFLICT: {c['name']} -- nflverse's weekly roster says {c['nflverse_weekly_roster']}, but {yahoo_said}"
+                        + (f" ({extra})" if extra else "") + f". Using Yahoo: {c['used']} (play chance {c['play_chance']:.2f}) -- "
                         f"check him before relying on this lineup")
+    for n in espn_notes:
+        warnings.append(f"ESPN CROSS-CHECK: {n}")
     if unknown_codes:
         raise BuildError(f"Yahoo team code(s) {sorted(unknown_codes)} are not in the {season} nflverse schedule -- add them to "
                          f"YAHOO_TEAM_CODES after checking")
@@ -330,7 +347,9 @@ def build_week(con, season, week, stage, team_id=None, provider=None, as_of=None
                          "age_hours": round((as_of - lm).total_seconds() / 3600, 1) if lm else None,
                          "resolved_by": "injuries.resolve_designations (as a hand-run score_week.py resolves them)",
                          "espn_snapshot_taken_at": inj.get("espn_taken_at")},
-            "status_conflicts": conflicts,
+            "status_conflicts": conflicts, "espn_cross_check": espn_notes,
+            "yahoo_status": ("captured with the roster snapshot" if any(r.get("status") is not None for rows in sides.values() for r in rows)
+                             else "not available (a past week, or a snapshot from before 2026-10-22): long-term statuses stand"),
             "projections": {"provider": getattr(provider, "name", "?"), "provenance": proj.provenance,
                             "flagged": {p["name"]: proj.flags[p["id"]] for side in players.values() for p in side if p["id"] in proj.flags},
                             "dropped_no_projection": dropped, "fallback": fallback},

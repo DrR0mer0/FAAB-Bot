@@ -215,52 +215,76 @@ class TestWeekFile(BuildCase):
 
 
 class TestStatusConflicts(BuildCase):
-    """A long-term roster status never silently overrides a current-week signal (2026-10-22)."""
+    """A long-term roster status stands unless YAHOO's current status contradicts it; ESPN only cross-checks (2026-10-22)."""
+
+    LONG_TERM = {"g-te": "EXE", "g-flex": "PUP", "g-out": "EXE", "g-ir": "RES", "g-wr1": "SUS"}
+    ESPN = {"g-te": "DAY_TO_DAY", "g-flex": "ACTIVE", "g-out": "ACTIVE", "g-ir": "INJURY_RESERVE"}
 
     def setUp(self):
         super().setUp()
         bw.ld.ledger.init_schema(self.con)                                     # the tracker's tables: an ESPN roster-% snapshot
         sid = self.con.execute("INSERT INTO tr_ownership_snapshots (taken_at, source, ok) VALUES (?, 'espn', 1)",
                                ((AS_OF - timedelta(hours=1)).isoformat(),)).lastrowid
-        espn = {"g-te": "DAY_TO_DAY", "g-flex": "ACTIVE", "g-out": "ACTIVE", "g-ir": "INJURY_RESERVE"}
         self.con.executemany("INSERT INTO tr_ownership (snapshot_id, source, external_id, player_id, percent_owned, injury_status) "
-                             "VALUES (?, 'espn', ?, ?, 1.0, ?)", [(sid, p, p, st) for p, st in espn.items()])
+                             "VALUES (?, 'espn', ?, ?, 1.0, ?)", [(sid, p, p, st) for p, st in self.ESPN.items()])
         self.con.commit()
-        long_term = {"g-te": "EXE", "g-flex": "PUP", "g-out": "EXE", "g-ir": "RES", "g-wr1": "SUS"}
         with open(self.raw / "roster_weekly_2026.csv", "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=["season", "week", "gsis_id", "team", "position", "status"])
             w.writeheader()
             for pid, team in TEAM_OF.items():
-                w.writerow(dict(season=2026, week=7, gsis_id=pid, team=team, position="WR", status=long_term.get(pid, "ACT")))
+                w.writerow(dict(season=2026, week=7, gsis_id=pid, team=team, position="WR", status=self.LONG_TERM.get(pid, "ACT")))
 
-    def test_a_current_week_signal_keeps_him_in_at_the_more_cautious_status_and_the_conflict_is_loud(self):
+    def with_yahoo(self, statuses, taken="2026-10-22T13:40:00+00:00"):
+        """A newer roster snapshot that carries Yahoo's status for every player ('' unless given)."""
+        sid = self.snap("rosters", taken)
+        self.con.executemany("INSERT INTO lg_rosters (snapshot_id, week, team_id, external_id, player_id, name, position, team, "
+                             "selected_position, status) VALUES (?, 7, ?, ?, ?, ?, ?, ?, ?, ?)",
+                             [(sid, t, y, g, n, p, tm, slot, statuses.get(g, "")) for y, g, n, p, tm, slot, t in ROSTER])
+        self.con.commit()
+
+    def test_jacobs_case_nflverse_exempt_yahoo_no_status_is_in_and_the_conflict_is_loud(self):
+        self.with_yahoo({"g-ir": "IR", "g-wr1": "SUSP"})
         wf, warnings = self.build()
         mine = self.by_name(wf)
-        self.assertEqual(mine["Tate Mine"]["status"], "GTD")          # nflverse EXE, ESPN DAY_TO_DAY -> in, game-time decision
-        self.assertEqual(mine["Flex Iffy"]["status"], "Q")            # nflverse PUP, report Questionable, ESPN ACTIVE -> Q
-        self.assertEqual(mine["Owen Out"]["status"], "O")             # nflverse EXE, report Out, ESPN ACTIVE -> the report's Out
-        self.assertEqual(mine["Ira Reserve"]["status"], "IR")         # nflverse RES and ESPN INJURY_RESERVE agree: no conflict
-        self.assertEqual(mine["Wade Mine"]["status"], "SUSP")         # nflverse SUS, no current-week signal at all
+        self.assertNotIn("status", mine["Tate Mine"])                 # nflverse EXE, Yahoo no status, ESPN DTD: available
+        self.assertEqual(mine["Flex Iffy"]["status"], "Q")            # nflverse PUP, Yahoo no status: the injury report's Q
+        self.assertEqual(mine["Owen Out"]["status"], "O")             # nflverse EXE, Yahoo no status: the report's Out still holds
+        self.assertEqual(mine["Ira Reserve"]["status"], "IR")         # Yahoo agrees (IR): no conflict
+        self.assertEqual(mine["Wade Mine"]["status"], "SUSP")         # Yahoo agrees (SUSP)
         conflicts = {c["name"]: c for c in wf["_meta"]["status_conflicts"]}
         self.assertEqual(set(conflicts), {"Tate Mine", "Flex Iffy", "Owen Out"})
-        self.assertEqual((conflicts["Tate Mine"]["nflverse_weekly_roster"], conflicts["Tate Mine"]["espn"], conflicts["Tate Mine"]["used"],
-                          conflicts["Tate Mine"]["play_chance"]), ("EXE", "DAY_TO_DAY", "GTD", 0.7))
+        self.assertEqual((conflicts["Tate Mine"]["yahoo"], conflicts["Tate Mine"]["used"], conflicts["Tate Mine"]["play_chance"]),
+                         ("", "available", 1.0))
         loud = [w for w in warnings if w.startswith("STATUS CONFLICT:")]
         self.assertEqual(len(loud), 3)
-        self.assertTrue(any("Tate Mine -- nflverse's weekly roster says EXE, but ESPN says DAY_TO_DAY. Kept in as GTD" in w for w in loud))
-        self.assertEqual(wf["_meta"]["injuries"]["espn_snapshot_taken_at"], (AS_OF - timedelta(hours=1)).isoformat())
+        self.assertTrue(any("Tate Mine -- nflverse's weekly roster says EXE, but Yahoo shows no status (ESPN DAY_TO_DAY). Using "
+                            "Yahoo: available" in w for w in loud))
+        self.assertIn("captured", wf["_meta"]["yahoo_status"])
         lineup_sim.parse_week(wf)
-        self.assertAlmostEqual(lineup_sim.parse_week(wf)[2][[p.name for p in lineup_sim.parse_week(wf)[2]].index("Tate Mine")].play_prob, 0.7)
 
-    def test_without_an_espn_snapshot_the_long_term_status_stands(self):
-        self.con.execute("DROP TRIGGER IF EXISTS tr_ownership_snapshots_no_delete")
-        for (name,) in self.con.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='tr_ownership_snapshots'").fetchall():
-            self.con.execute(f'DROP TRIGGER "{name}"')
-        self.con.execute("DELETE FROM tr_ownership_snapshots")
-        self.con.commit()
+    def test_espn_day_to_day_but_yahoo_exempt_stays_out_and_espn_only_adds_a_warning(self):
+        self.with_yahoo({"g-te": "CEL", "g-flex": "PUP-R", "g-out": "CEL", "g-ir": "IR", "g-wr1": "SUSP"})
+        wf, warnings = self.build()
+        mine = self.by_name(wf)
+        self.assertEqual((mine["Tate Mine"]["status"], mine["Flex Iffy"]["status"]), ("EXEMPT", "PUP"))
+        self.assertEqual(wf["_meta"]["status_conflicts"], [])
+        cross = [w for w in warnings if w.startswith("ESPN CROSS-CHECK:")]
+        self.assertTrue(any("Tate Mine: ESPN says DAY_TO_DAY, the file has him out (EXEMPT) -- cross-check only" in w for w in cross))
+        self.assertEqual(len(wf["_meta"]["espn_cross_check"]), 3)          # Tate, Flex and Owen: ESPN says they may play
+
+    def test_without_a_yahoo_status_the_long_term_status_stands(self):
+        wf, warnings = self.build()                                         # the setUp snapshot predates the capture: NULL
+        mine = self.by_name(wf)
+        self.assertEqual((mine["Tate Mine"]["status"], mine["Flex Iffy"]["status"]), ("EXEMPT", "PUP"))
+        self.assertEqual(wf["_meta"]["status_conflicts"], [])
+        self.assertIn("not available", wf["_meta"]["yahoo_status"])
+        self.assertTrue(any(w.startswith("ESPN CROSS-CHECK: Tate Mine") for w in warnings))
+
+    def test_an_unknown_yahoo_code_is_ignored_loudly(self):
+        self.with_yahoo({"g-te": "WEIRD"})
         wf, warnings = self.build()
         self.assertEqual(self.by_name(wf)["Tate Mine"]["status"], "EXEMPT")
-        self.assertEqual(wf["_meta"]["status_conflicts"][0]["name"], "Flex Iffy")      # the injury report still contradicts PUP
+        self.assertTrue(any("unknown Yahoo status 'WEIRD'" in w for w in warnings))
 
 
 class TestBaseline(BuildCase):
