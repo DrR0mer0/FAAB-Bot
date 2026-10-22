@@ -29,6 +29,14 @@ WHERE EACH FIELD COMES FROM
                       resolved like a hand-run score_week.py: Out -> O,
                       Doubtful -> D, Questionable -> Q). play_prob is left to
                       lineup_sim's own STATUS_PLAY_PROB.
+                      A long-term EXE / RES / PUP / SUS never silently beats a
+                      current-week source that says he may play (the week's
+                      injury report, or ESPN's status in the pinned roster-%
+                      snapshot): he stays IN, with the more cautious of the
+                      current-week sources (ESPN DAY_TO_DAY -> GTD), and the
+                      conflict is listed in the warnings and _meta. Found
+                      2026-10-22: nflverse kept Josh Jacobs on the exempt list
+                      in week 7 after his reinstatement. CUT / RET stay as is.
   p10 / p50 / p90     a projection provider (startsit/projections.py). A player
                       of MINE with no p50 is DROPPED with a warning: the
                       simulator must never start or bench someone on an invented
@@ -76,6 +84,18 @@ BENCH = {"BN", "IR", "IR+", "NA"}
 YAHOO_TEAM_CODES = {"LAR": "LA"}                 # Yahoo's code -> nflverse's; checked 2026-10-22: the only difference
 NFLVERSE_STATUS = {"RES": "IR", "PUP": "PUP", "SUS": "SUSP", "EXE": "EXEMPT", "CUT": "O", "RET": "O"}
 DESIGNATION = {"Out": "O", "Doubtful": "D", "Questionable": "Q"}
+# Long-term statuses a current-week source may contradict (2026-10-22: nflverse still had Josh Jacobs on the exempt list in
+# week 7, three days after his reinstatement). CUT / RET (not on any roster) stay authoritative.
+OVERRIDABLE = {"EXE", "RES", "PUP", "SUS"}
+ESPN_CURRENT = {"ACTIVE": "ACTIVE", "DAY_TO_DAY": "GTD", "QUESTIONABLE": "Q", "DOUBTFUL": "D", "OUT": "O",
+                "INJURY_RESERVE": "IR", "SUSPENSION": "SUSP"}
+
+
+def play_chance(code):
+    """lineup_sim's own reading of a status: 0 for an out status, its STATUS_PLAY_PROB, else 1."""
+    if code in lineup_sim.OUT_STATUSES:
+        return 0.0
+    return lineup_sim.STATUS_PLAY_PROB.get(code, 1.0)
 SLOT_ORDER = ["QB", "WR", "RB", "TE", "W/R/T", "W/R", "W/T", "Q/W/R/T", "K", "DEF", "BN", "IR", "IR+", "NA"]
 
 
@@ -180,7 +200,8 @@ def build_week(con, season, week, stage, team_id=None, provider=None, as_of=None
     else:
         sides["opp"] = [r for r in rosters[opp_id] if (r.get("selected_position") or "BN") not in BENCH]
 
-    mismatches, unknown_codes, players = [], set(), {"mine": [], "opp": []}
+    mismatches, unknown_codes, players, conflicts = [], set(), {"mine": [], "opp": []}, []
+    espn_raw = inj.get("espn_raw") or {}
     for side, rows in sides.items():
         for r in rows:
             yahoo_team = YAHOO_TEAM_CODES.get(r["team"], r["team"]) if r["team"] else None
@@ -192,15 +213,32 @@ def build_week(con, season, week, stage, team_id=None, provider=None, as_of=None
                 mismatches.append(f"{r['name']}: Yahoo {r['team']}, nflverse {nfl_team[gsis]} (nflverse used)")
             opp, kickoff = games.get(team, (None, None))
             status = None
+            designation = DESIGNATION.get(inj["status"].get(gsis))
+            espn = ESPN_CURRENT.get(espn_raw.get(gsis))
+            long_term = nfl_status.get(gsis)
             if team and team not in games:
                 status = "BYE"
-            elif nfl_status.get(gsis) in NFLVERSE_STATUS:
-                status = NFLVERSE_STATUS[nfl_status[gsis]]
-            elif inj["status"].get(gsis) in DESIGNATION:
-                status = DESIGNATION[inj["status"][gsis]]
+            elif long_term in NFLVERSE_STATUS:
+                current = [(src, code) for src, code in (("injury report", designation), ("ESPN", espn)) if code]
+                if long_term in OVERRIDABLE and any(play_chance(c) > 0 for _s, c in current):
+                    # a current-week source says he may play: never let the weekly roster's status silently win
+                    chosen = min((c for _s, c in current), key=play_chance)
+                    status = None if chosen == "ACTIVE" else chosen
+                    conflicts.append({"name": r["name"], "gsis_id": gsis, "nflverse_weekly_roster": long_term,
+                                      "injury_report": inj["status"].get(gsis), "espn": espn_raw.get(gsis),
+                                      "used": chosen, "play_chance": play_chance(chosen)})
+                else:
+                    status = NFLVERSE_STATUS[long_term]
+            elif designation:
+                status = designation
             players[side].append({"id": r["external_id"], "name": r["name"], "pos": r["position"], "team": team, "opp": opp,
                                   "status": status, "gsis_id": gsis, "yahoo_slot": r.get("selected_position"),
                                   "_kickoff": kickoff, "_points": r.get("points")})
+    for c in conflicts:
+        others = ", ".join(f"{k} {c[k2]}" for k, k2 in (("the injury report says", "injury_report"), ("ESPN says", "espn")) if c[k2])
+        warnings.append(f"STATUS CONFLICT: {c['name']} -- nflverse's weekly roster says {c['nflverse_weekly_roster']}, but {others}. "
+                        f"Kept in as {c['used']} (play chance {c['play_chance']:.2f}, the more cautious current-week source) -- "
+                        f"check him before relying on this lineup")
     if unknown_codes:
         raise BuildError(f"Yahoo team code(s) {sorted(unknown_codes)} are not in the {season} nflverse schedule -- add them to "
                          f"YAHOO_TEAM_CODES after checking")
@@ -290,7 +328,9 @@ def build_week(con, season, week, stage, team_id=None, provider=None, as_of=None
             "injuries": {"source": inj["source"], "reason": inj.get("reason"), "nflverse_sha256": inj.get("sha256"),
                          "nflverse_last_modified": lm.isoformat() if lm else None,
                          "age_hours": round((as_of - lm).total_seconds() / 3600, 1) if lm else None,
-                         "resolved_by": "injuries.resolve_designations (as a hand-run score_week.py resolves them)"},
+                         "resolved_by": "injuries.resolve_designations (as a hand-run score_week.py resolves them)",
+                         "espn_snapshot_taken_at": inj.get("espn_taken_at")},
+            "status_conflicts": conflicts,
             "projections": {"provider": getattr(provider, "name", "?"), "provenance": proj.provenance,
                             "flagged": {p["name"]: proj.flags[p["id"]] for side in players.values() for p in side if p["id"] in proj.flags},
                             "dropped_no_projection": dropped, "fallback": fallback},

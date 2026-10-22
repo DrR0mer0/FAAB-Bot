@@ -203,14 +203,19 @@ def resolve_designations(con, season, week, as_of, cfg=None, fetch=fetch_nflvers
     too) -- for a caller that needs more than the Out/Doubtful rule, such as the
     start/sit week-file builder. Never raises."""
     _exclude, max_age, espn_max_age = rule(cfg)
-    espn = None
+    espn, found = None, None
     try:
         import ownership  # same directory; only needed here
         found = ownership.latest_ok_espn(con, as_of, espn_max_age)
         espn = ownership.injury_status_by_player(con, found[0]) if found else None
     except Exception as e:  # noqa: BLE001 -- no snapshot tables, say: there's just no fallback
         print(f"[INJURY] no ESPN fallback available ({type(e).__name__}: {e})", file=sys.stderr)
-    return resolve(season, week, as_of, max_age, espn, fetch=fetch)
+    out = resolve(season, week, as_of, max_age, espn, fetch=fetch)
+    # ESPN's own, unmapped statuses (ACTIVE, DAY_TO_DAY, INJURY_RESERVE, ...) and when that snapshot was taken: a
+    # current-week signal the start/sit builder weighs against nflverse's long-term roster statuses.
+    out["espn_raw"] = dict(espn) if espn else None
+    out["espn_taken_at"] = found[1] if found else None
+    return out
 
 
 def resolve_standalone(con, season, week, as_of, cfg=None, fetch=fetch_nflverse):
