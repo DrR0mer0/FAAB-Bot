@@ -47,6 +47,10 @@ import baselines
 import ledger
 
 METRICS = ("payoff", "snap_growth", "target_growth", "crowd", "league_add")
+# Payoff and role growth are evaluated for picks from week 4 on (decision 15: "picks in weeks 4-14"); role growth's
+# before-window, W-3..W-1, only exists from week 4. A code constant, not a hit_config key, so the trend hash -- and with it
+# the pre-registered definitions -- stays the same (added 2026-10-22, when no outcome was stored and no run predated week 4).
+FIRST_PICK_WEEK = 4
 POSITIONS = ("QB", "RB", "WR", "TE")
 TARGET_POSITIONS = ("RB", "WR", "TE")
 
@@ -201,6 +205,8 @@ def resolvable(con, store, run, metric, cfg, now, finals, snap_weeks):
     """(ready, why not)."""
     t, w, s = cfg["trend"], run["week"], run["season"]
     start = datetime.fromisoformat(run["run_timestamp"])
+    if metric in ("payoff", "snap_growth", "target_growth") and w < FIRST_PICK_WEEK:
+        return False, f"picks before week {FIRST_PICK_WEEK} are not evaluated on {'payoff' if metric == 'payoff' else 'role growth'}"
     if metric == "payoff":
         last = w + t["payoff"]["weeks"] - 1
         if w > t["payoff"]["last_pick_week"]:

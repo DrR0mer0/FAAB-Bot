@@ -2546,6 +2546,43 @@ class TestTrends(unittest.TestCase):
         with self.assertRaises(Exception):
             self.con.execute("DELETE FROM tr_trend_outcomes")                # append-only
 
+    def why(self, week, metric, finals=frozenset(range(1, 19))):
+        run = {"run_id": "x", "season": 2026, "week": week, "run_timestamp": "2026-10-01T14:00:00+00:00"}
+        snap_weeks = {2026: list(range(1, 7))}                               # the fixture's snap counts: weeks 1-6
+        return trends.resolvable(self.con, self.store, run, metric, CFG, self.NOW, set(finals), snap_weeks)
+
+    def test_payoff_is_evaluated_for_picks_of_weeks_4_to_14_only(self):
+        self.assertEqual(self.why(15, "payoff"), (False, "picks after week 14 are not evaluated on payoff"))
+        self.assertEqual(self.why(14, "payoff"), (False, "needs week 17 final and loaded"))      # in range: waits for data
+        self.assertEqual(self.why(3, "payoff"), (False, "picks before week 4 are not evaluated on payoff"))
+        self.assertTrue(self.why(4, "payoff")[0])                                                   # weeks 4-7 are in the fixture
+        self.assertEqual(14 + CFG["trend"]["payoff"]["weeks"] - 1, CFG["trend"]["last_week"])         # its window ends by week 17
+
+    def test_role_growth_is_evaluated_for_picks_of_weeks_4_to_15_only(self):
+        for metric in ("snap_growth", "target_growth"):
+            self.assertEqual(self.why(16, metric), (False, "picks after week 15 are not evaluated on role growth"))
+            self.assertEqual(self.why(15, metric), (False, "needs week 17 final and loaded"))
+            self.assertEqual(self.why(3, metric), (False, "picks before week 4 are not evaluated on role growth"))
+        self.assertEqual(15 + CFG["trend"]["role"]["after_weeks"] - 1, CFG["trend"]["last_week"])
+        self.assertTrue(self.why(3, "crowd")[0])                    # the 14-day windows have no week bound
+
+    def test_a_week_3_run_records_no_payoff_or_role_outcome(self):
+        ledger.insert_rows(self.con, "tr_runs", [dict(run_id="r3", run_timestamp="2026-09-24T14:00:00+00:00", season=2026, week=3,
+                                                      run_slot="thu", n_draws=200, dart_seed=5, pool_size=40)])
+        ledger.insert_rows(self.con, "tr_pool", [dict(r, run_id="r3") for r in self.pool])
+        self.con.commit()
+        written = self.compute()
+        self.assertEqual(sorted(m for (r, m) in written if r == "r3"), ["crowd"])     # no league snapshot: league add not evaluable
+        self.assertEqual({k: v for k, v in written.items() if k[0] != "r3"},
+                         {k: 40 for k in [("r4", m) for m in trends.METRICS] + [("r5", "target_growth")]})   # the rest as before
+
+    def test_stored_outcomes_cannot_be_updated(self):
+        self.compute()
+        with self.assertRaisesRegex(sqlite3.DatabaseError, "UPDATE on tr_trend_outcomes is blocked"):
+            self.con.execute("UPDATE tr_trend_outcomes SET hit=1 WHERE metric='payoff'")
+        with self.assertRaisesRegex(sqlite3.DatabaseError, "DELETE on tr_trend_outcomes is blocked"):
+            self.con.execute("DELETE FROM tr_trend_outcomes WHERE metric='payoff'")
+
     def test_payoff_uses_the_spike_baseline_skips_byes_and_counts_a_missed_game_as_zero(self):
         self.compute()
         o = self.out("r4", "payoff")
