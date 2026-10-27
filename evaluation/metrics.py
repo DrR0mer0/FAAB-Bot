@@ -35,7 +35,11 @@ per-position one:
    labeled player that week regardless of position or suppression status
    -- deliberately population-wide, so the base rate answers "how rare is
    a spike, period" rather than "how rare is a spike among players the
-   model was willing to score." Don't assume every caller's precision_df
+   model was willing to score." From 2026-10-27 its POOLED lift is taken
+   against that population restricted to QB/RB/WR/TE (about a third of
+   it; the other positions almost never spike, so the all-positions rate
+   understated the rate among rankable players about 3x). Per-position
+   base rates were never affected. Don't assume every caller's precision_df
    and base_rate_df are the same population just because this module lets
    you pass either.
 """

@@ -64,6 +64,11 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
 
 from metrics import POSITIONS, pooled_report, per_position_report
 
+# Mirrors model/score_week.py's ROSTERABLE_POSITIONS: the only positions live
+# scoring ranks. The pooled base rate the pooled lift is measured against is
+# taken over these positions only (see main()).
+ROSTERABLE_POSITIONS = set(POSITIONS)
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PREDICTIONS_DIR = REPO_ROOT / "predictions"
 PER_POSITION_K = 10
@@ -133,19 +138,22 @@ def load_or_init_log(log_path):
     return {"weeks": []}
 
 
-def fmt_metric(m, label):
+def fmt_metric(m, label, base_label="base rate"):
     """m: a dict from pooled_report/per_position_report's per-k or
     per-position entry -- {hits, n, precision, base_rate, lift, ...}."""
     if m["precision"] is None:
         return f"{label}: n/a (0 candidates)"
-    lift_s = f"  ({m['lift']:.1f}x base rate)" if m["lift"] else ""
+    lift_s = f"  ({m['lift']:.1f}x {base_label})" if m["lift"] else ""
     hits_s = f"{m['hits']}/{m['n']}" if m["hits"] is not None else f"n={m['n']}"
     return f"{label}: {hits_s} = {m['precision']:.4f}{lift_s}"
 
 
-def verify_prediction_file(pred_path, labels_this_week, base_rate_df, loaded_seasons, con, args):
+def verify_prediction_file(pred_path, labels_this_week, base_rate_df, base_rate_rosterable_df,
+                           loaded_seasons, con, args):
     """Loads and scores ONE committed prediction file (production or
-    shadow) against labels_this_week/base_rate_df. Returns a result dict,
+    shadow) against labels_this_week/base_rate_df. The pooled lift is also
+    computed against base_rate_rosterable_df (QB/RB/WR/TE only, the
+    population live scoring ranks). Returns a result dict,
     or None if pred_path doesn't exist (the caller decides whether that's
     fatal -- required for production, optional for shadow)."""
     if not pred_path.exists():
@@ -181,6 +189,7 @@ def verify_prediction_file(pred_path, labels_this_week, base_rate_df, loaded_sea
     pool_df = pd.DataFrame(pool_rows)
 
     pooled = pooled_report(top_df, base_rate_df, ks=(10, 25), use_mean=False)
+    pooled_rosterable = pooled_report(top_df, base_rate_rosterable_df, ks=(10, 25), use_mean=False)
     per_pos = per_position_report(pool_df, base_rate_df, k=PER_POSITION_K, positions=POSITIONS) if len(pool_df) else {
         p: {"k": PER_POSITION_K, "hits": 0, "n": 0, "precision": None, "base_rate": None,
             "n_eligible": 0, "n_spiked": 0, "lift": None}
@@ -192,7 +201,8 @@ def verify_prediction_file(pred_path, labels_this_week, base_rate_df, loaded_sea
 
     return {
         "pred_path": pred_path, "predictions": predictions, "rows_out": rows_out,
-        "pooled": pooled, "per_pos": per_pos, "n_dnp": n_dnp, "n_no_label": n_no_label,
+        "pooled": pooled, "pooled_rosterable": pooled_rosterable,
+        "per_pos": per_pos, "n_dnp": n_dnp, "n_no_label": n_no_label,
         "has_scored_pool": bool(predictions.get("scored_pool")),
     }
 
@@ -204,8 +214,8 @@ def print_result(result, label):
     if not result["has_scored_pool"]:
         print("[WARN] no scored_pool in this prediction file -- per-position metrics will be empty "
               "(predates score_week.py writing scored_pool, or nothing was scored that week)")
-    print(fmt_metric(result["pooled"][10], "Precision@10 (pooled)"))
-    print(fmt_metric(result["pooled"][25], "Precision@25 (pooled)"))
+    print(fmt_metric(result["pooled_rosterable"][10], "Precision@10 (pooled)", "QB/RB/WR/TE base rate"))
+    print(fmt_metric(result["pooled_rosterable"][25], "Precision@25 (pooled)", "QB/RB/WR/TE base rate"))
     print(f"Of the top 25: {sum(1 for r in result['rows_out'] if r['status']=='HIT')} actually spiked")
     print(f"DNP (didn't play): {result['n_dnp']}; no label produced (ineligible despite playing): {result['n_no_label']} "
           f"-- both counted as non-hits in precision@k above, not silently dropped from the denominator")
@@ -233,8 +243,8 @@ def markdown_for_result(result, label):
     lines = [
         f"## {label}: `{model.get('filename')}` (commit `{model.get('git_commit')}`)",
         "",
-        f"- {fmt_metric(pooled[10], 'Precision@10 (pooled)')}",
-        f"- {fmt_metric(pooled[25], 'Precision@25 (pooled)')}",
+        f"- {fmt_metric(result['pooled_rosterable'][10], 'Precision@10 (pooled)', 'QB/RB/WR/TE base rate')}",
+        f"- {fmt_metric(result['pooled_rosterable'][25], 'Precision@25 (pooled)', 'QB/RB/WR/TE base rate')}",
         f"- Of the top 25: {sum(1 for r in result['rows_out'] if r['status']=='HIT')} actually spiked",
         f"- DNP: {result['n_dnp']}, no label produced: {result['n_no_label']} -- both counted as non-hits above, not dropped from the denominator",
         "",
@@ -280,6 +290,12 @@ def log_entry_for(result):
         "precision_at_25": {"hits": pooled[25]["hits"], "n": pooled[25]["n"], "precision": pooled[25]["precision"]},
         "per_position": {"k": PER_POSITION_K, **{pos: per_pos[pos] for pos in POSITIONS}},
         "n_dnp": result["n_dnp"], "n_no_label": result["n_no_label"],
+        # Pooled precision as a multiple of the week's QB/RB/WR/TE base rate
+        # (base_rate_rosterable on the week entry). See the metric_changes marker.
+        "lift_rosterable": {
+            "at_10": result["pooled_rosterable"][10]["lift"],
+            "at_25": result["pooled_rosterable"][25]["lift"],
+        },
     }
 
 
@@ -349,8 +365,23 @@ def main():
     n_spiked_week = int(base_rate_df["spike_flag"].sum()) if n_eligible_week else 0
     base_rate_val = (n_spiked_week / n_eligible_week) if n_eligible_week else None
 
-    prod_result = verify_prediction_file(pred_path, labels_this_week, base_rate_df, loaded_seasons, con, args)
-    shadow_result = verify_prediction_file(shadow_path, labels_this_week, base_rate_df, loaded_seasons, con, args)
+    # The same population restricted to QB/RB/WR/TE -- the positions live
+    # scoring ranks. About two thirds of eligible player-weeks are other
+    # positions (defenders, linemen, kickers) that almost never spike, so
+    # the all-positions rate above is roughly a third of the rate among
+    # players the model can actually pick; pooled lift is measured against
+    # this one. base_rate (all positions) stays in the log for continuity.
+    base_rate_rosterable_df = (
+        base_rate_df[base_rate_df["pos"].isin(ROSTERABLE_POSITIONS)] if n_eligible_week else base_rate_df
+    )
+    n_eligible_ros = len(base_rate_rosterable_df)
+    n_spiked_ros = int(base_rate_rosterable_df["spike_flag"].sum()) if n_eligible_ros else 0
+    base_rate_ros_val = (n_spiked_ros / n_eligible_ros) if n_eligible_ros else None
+
+    prod_result = verify_prediction_file(pred_path, labels_this_week, base_rate_df, base_rate_rosterable_df,
+                                         loaded_seasons, con, args)
+    shadow_result = verify_prediction_file(shadow_path, labels_this_week, base_rate_df, base_rate_rosterable_df,
+                                           loaded_seasons, con, args)
 
     con.close()
 
@@ -358,9 +389,12 @@ def main():
     print(f"[INFO] production file: {pred_path}")
     print(f"[INFO] shadow file: {shadow_path}" + ("" if shadow_result else " (not found -- shadow verification skipped)"))
     print(f"\n=== Verification: {args.season} week {args.week} ===")
-    print(f"Week base rate (shared by production and shadow -- same actual outcomes): "
-          f"{n_spiked_week}/{n_eligible_week} eligible players spiked "
-          f"({base_rate_val:.4f})" if base_rate_val is not None else "Week base rate: unavailable")
+    print(f"Week base rate, QB/RB/WR/TE (shared by production and shadow -- same actual outcomes): "
+          f"{n_spiked_ros}/{n_eligible_ros} eligible players spiked "
+          f"({base_rate_ros_val:.4f})" if base_rate_ros_val is not None else "Week base rate (QB/RB/WR/TE): unavailable")
+    print(f"Week base rate, all positions (logged as base_rate for continuity; not what pooled lift is "
+          f"measured against): {n_spiked_week}/{n_eligible_week}"
+          + (f" ({base_rate_val:.4f})" if base_rate_val is not None else ""))
 
     print_result(prod_result, "PRODUCTION")
     if shadow_result:
@@ -374,6 +408,10 @@ def main():
         "season": args.season, "week": args.week,
         "verified_at": datetime.now(timezone.utc).isoformat(),
         "base_rate": base_rate_val,
+        "base_rate_rosterable": {
+            "positions": sorted(ROSTERABLE_POSITIONS),
+            "n_eligible": n_eligible_ros, "n_spiked": n_spiked_ros, "rate": base_rate_ros_val,
+        },
         **log_entry_for(prod_result),
     }
     if shadow_result:
@@ -419,7 +457,10 @@ def main():
     lines = [
         f"# Verification: {args.season} week {args.week}",
         "",
-        f"- Week base rate (shared by production and shadow): {n_spiked_week}/{n_eligible_week} eligible players spiked"
+        f"- Week base rate, QB/RB/WR/TE (shared by production and shadow): {n_spiked_ros}/{n_eligible_ros} "
+        f"eligible players spiked" + (f" ({base_rate_ros_val:.4f})" if base_rate_ros_val is not None else ""),
+        f"- Week base rate, all positions (kept for continuity; pooled lift is measured against the "
+        f"QB/RB/WR/TE rate above): {n_spiked_week}/{n_eligible_week}"
         + (f" ({base_rate_val:.4f})" if base_rate_val is not None else ""),
         f"- Cumulative PRODUCTION across {len(log['weeks'])} verified week(s): "
         f"P@10 {cum_hits10}/{cum_n10}" + (f" = {cum_p10:.4f}" if cum_p10 is not None else "")
