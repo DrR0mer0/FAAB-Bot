@@ -215,6 +215,7 @@ CREATE TABLE IF NOT EXISTS tr_league_availability (
   team TEXT,
   status TEXT NOT NULL CHECK (status IN ('FA','W')),
   waiver_date TEXT,
+  player_status TEXT,
   PRIMARY KEY (snapshot_id, external_id)
 );
 
@@ -273,6 +274,10 @@ def init_schema(con):
     # ESPN's injuryStatus, parsed from the same response from 2026-10-04 on (NULL in earlier snapshots)
     if "injury_status" not in table_columns(con, "tr_ownership"):
         con.execute("ALTER TABLE tr_ownership ADD COLUMN injury_status TEXT")
+    # Yahoo's player status of each available player ('' = none), stored from 2026-10-27 (pool rule v4 reads it; NULL
+    # in earlier snapshots = not stored, which is not the same as no status)
+    if "player_status" not in table_columns(con, "tr_league_availability"):
+        con.execute("ALTER TABLE tr_league_availability ADD COLUMN player_status TEXT")
     for t in APPEND_ONLY_TABLES:
         create_append_only_triggers(con, t)
     con.commit()

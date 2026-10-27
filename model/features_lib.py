@@ -437,6 +437,12 @@ class FeatureEngine:
             window = []
         return window
 
+    def trailing_window(self, player_id, season, week):
+        """The games every trailing (last-MIN_PRIOR_GAMES) feature reads for this player at (season, week): up to
+        MIN_PRIOR_GAMES (season, week, team, pos, touches) tuples, oldest first. Read-only; used by score_week.py's
+        team check (pool rule v4), which compares each game's team with the player's current team."""
+        return self._touches_window(player_id, season, week)[-MIN_PRIOR_GAMES:]
+
     def _team_pbp_window(self, team, season, week):
         """Prior team_week_pbp_stats weeks for `team` strictly before
         (season,week), same gap-reset rule as _touches_window (reuses

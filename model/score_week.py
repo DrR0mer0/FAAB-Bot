@@ -28,6 +28,23 @@ entirely from this season's real data, so no stale prior-season usage feeds
 any feature and the offseason concern no longer applies -- regardless of
 what the static roster/production checks would otherwise say.
 
+Team check, pool rule v4 (from 2026 week 8): the recency release above only
+holds when EVERY game of the trailing window (the last MIN_PRIOR_GAMES games
+the trailing features read, features_lib.trailing_window) was played for the
+player's current weekly-roster team. Otherwise his usage features describe
+another team, and he goes through the team-changed suppression -- schedule-
+dependent features recomputed for the roster team, score suppressed --
+whatever his current-season game count. Two reasons, stored apart:
+team_changed_watch_list when his most recent game was for another team (the
+v3 test, now also for a player with 3+ games this season, e.g. traded this
+week), mixed_window_watch_list when his most recent game was for the roster
+team but an earlier window game was not. Found 2026-10-27: Marvin Harrison
+Jr. (ARI, ARI, HOU) was ranked in week 7 on two Arizona games; Dameon Pierce
+(KC 2025, PHI, PHI) was production's #1 and Audric Estime (NO, NO, CLE) its
+#25 on windows reaching into last season's team. A player whose roster team
+the file can't say (no row, or a status outside CONFIRMED_ROSTER_STATUSES)
+is not checked.
+
 Availability gate: a player whose most recent weekly roster status (from
 the same --weekly-roster file as team-mapping above, via load_current_
 roster's status_of) indicates a known long-term absence -- reserve/IR,
@@ -35,7 +52,17 @@ PUP, non-football injury, or suspension -- is suppressed unconditionally,
 checked BEFORE anything else in the suppression loop (including the
 recency-release above -- a player accumulating real current-season games
 doesn't matter if they're currently on IR and can't play). Game-day
-designations are a separate check (below), not part of this gate. This is a separate
+designations are a separate check (below), not part of this gate. From 2026
+week 8 (pool rule v4) Yahoo's current player status can overrule it:
+EXE / RES / PUP / SUS suppresses a player unless Yahoo says he may play (no
+status, Q, GTD; never D) -- then he is treated as available, subject to the
+Out/Doubtful check, and listed in yahoo_status_override_list. A player Yahoo
+says nothing about keeps the long-term status; ESPN never decides. The rule
+is tracker/yahoo_status.py's; `log` collects the statuses (league roster
+snapshot + the league-availability fetch) and passes them in with
+--yahoo-status. Without it (a run by hand) the long-term status stands, as
+in v3. Found when nflverse kept Josh Jacobs on the exempt list in week 7,
+three days after his reinstatement. This is a separate
 DECISION from team-mapping (a player on reserve still belongs to his
 team) even though both now read the same file -- status_of is never
 filtered the way team_of/team_pos_roster are, so it sees every status,
@@ -178,6 +205,7 @@ sys.path.insert(0, str(REPO_ROOT / "data"))
 sys.path.insert(0, str(REPO_ROOT / "tracker"))
 from team_crosswalk import norm_team  # noqa: E402 -- shared crosswalk; see data/team_crosswalk.py
 import injuries  # noqa: E402 -- the Out/Doubtful rule, shared with the tracker's pool rule
+import yahoo_status  # noqa: E402 -- Yahoo's status against a long-term roster status (pool rule v4), shared likewise
 
 # See the module docstring's TIMEZONE NOTE for how this was determined.
 KICKOFF_TZ = ZoneInfo("America/New_York")
@@ -186,7 +214,11 @@ KICKOFF_TZ = ZoneInfo("America/New_York")
 # EXE players aren't actually on the team a roster file last associated them
 # with, so they're excluded rather than asserting a bogus team.
 CONFIRMED_ROSTER_STATUSES = {"ACT", "DEV", "RES"}
-TEAM_CHANGE_REASON = "team changed this offseason — insufficient data on new team"
+TEAM_CHANGE_REASON = "team changed -- his most recent game was for another team; insufficient data on new team"
+MIXED_WINDOW_REASON = ("trailing window mixes teams -- his most recent game was for his current team but an earlier one "
+                       "the trailing features read was not")
+YAHOO_OVERRIDE_REASON = ("long-term weekly-roster status overruled: Yahoo's current status says he may play "
+                         "(tracker/yahoo_status.py) -- treated as available, subject to the injury report")
 NEW_COMPETITOR_REASON = "new same-position addition(s) this offseason — trailing touch share predates the competition"
 
 # Roster statuses that mean "known unavailable for an extended stretch,
@@ -234,6 +266,40 @@ DRAFT_CAPITAL_PICK_CUTOFF = 96  # ~3 rounds at 32 picks/round
 
 ALREADY_PLAYED_REASON = "game already kicked off as of this run -- not re-scored"
 NO_GAME_REASON = "team has no game this week (bye) -- not scored"
+
+
+def window_team_check(window_teams, roster_team):
+    """Pool rule v4's team check (see the module docstring). window_teams: the team of each trailing-window game,
+    oldest first; roster_team: his current weekly-roster team, or None if the file can't say.
+    -> None (all on the roster team, or nothing to compare), 'team_changed' (most recent game for another team) or
+    'mixed_window' (most recent on the roster team, an earlier one not)."""
+    if not roster_team or not window_teams:
+        return None
+    current = norm_team(roster_team)
+    teams = [norm_team(t) for t in window_teams]
+    if teams[-1] != current:
+        return "team_changed"
+    if any(t != current for t in teams):
+        return "mixed_window"
+    return None
+
+
+def classify_v4(roster_status, yahoo, window_teams, roster_team, games_this_season):
+    """Pool rule v4's decisions for one player who has a game, is on a roster and hasn't kicked off, in the loop's
+    order: the availability gate (Yahoo may overrule a long-term status), the team check, the recency release.
+    -> (outcome, yahoo_overruled); outcome 'unavailable' | 'team_changed' | 'mixed_window' | 'released' (ranked)
+    | None (on to the new-competitor check)."""
+    overruled = False
+    if roster_status in UNAVAILABLE_STATUSES:
+        if not yahoo_status.overrides(roster_status, yahoo):
+            return "unavailable", False
+        overruled = True
+    team = window_team_check(window_teams, roster_team)
+    if team:
+        return team, overruled
+    if games_this_season >= MIN_PRIOR_GAMES:
+        return "released", overruled
+    return None, overruled
 
 
 def parse_kickoff_utc(kickoff_str):
@@ -371,6 +437,8 @@ def render_markdown_report(output, status_flags=None, flag_note=None):
     ]
     if counts.get("unavailable_suppressed") is not None:
         lines.append(f"- Unavailable (reserve/PUP/NFI/suspended) suppressed: {counts['unavailable_suppressed']}")
+    if counts.get("yahoo_status_overrides"):
+        lines.append(f"- Long-term roster status overruled by Yahoo's current status (scored): {counts['yahoo_status_overrides']}")
     if counts.get("no_game"):
         lines.append(f"- No game this week (bye), not scored: {counts['no_game']}")
     if counts.get("off_roster"):
@@ -382,6 +450,8 @@ def render_markdown_report(output, status_flags=None, flag_note=None):
                       f"{counts['already_played']}")
     lines += [
         f"- Team-changed suppressed: {counts['team_changed_suppressed']}",
+        *([f"- Mixed-team trailing window suppressed: {counts['mixed_window_suppressed']}"]
+          if counts.get("mixed_window_suppressed") is not None else []),
         f"- New-competitor suppressed: {counts['new_competitor_suppressed']} "
         f"({counts['new_competitor_via_production_only']} via production, "
         f"{counts['new_competitor_via_draft_only']} via draft, {counts['new_competitor_via_both']} via both)",
@@ -589,7 +659,8 @@ def write_output(model_path, model_commit, model_meta, args, names, ranked, stab
                   all_eligible_count, n_candidates, n_released_by_recency,
                   team_changed_records, new_competitor_records, unavailable_records,
                   already_played_records, no_game_records, off_roster_records, injury_records, injury_rule,
-                  n_via_production_only, n_via_draft_only, n_via_both, json_out_path):
+                  n_via_production_only, n_via_draft_only, n_via_both, json_out_path,
+                  mixed_window_records, yahoo_override_records, yahoo_summary):
     def player_record(pid, feat, score=None):
         return {
             "player_id": pid, "name": names.get(pid, pid),
@@ -629,6 +700,8 @@ def write_output(model_path, model_commit, model_meta, args, names, ranked, stab
             "injury_out_doubtful": len(injury_records),
             "already_played": len(already_played_records),
             "team_changed_suppressed": len(team_changed_records),
+            "mixed_window_suppressed": len(mixed_window_records),
+            "yahoo_status_overrides": len(yahoo_override_records),
             "new_competitor_suppressed": len(new_competitor_records),
             "new_competitor_via_production_only": n_via_production_only,
             "new_competitor_via_draft_only": n_via_draft_only,
@@ -643,7 +716,10 @@ def write_output(model_path, model_commit, model_meta, args, names, ranked, stab
         "injury_rule": {k: v for k, v in injury_rule.items() if k != "excluded"},
         "already_played_watch_list": already_played_records,
         "team_changed_watch_list": team_changed_records,
+        "mixed_window_watch_list": mixed_window_records,
         "new_competitor_watch_list": new_competitor_records,
+        "yahoo_status_override_list": yahoo_override_records,
+        "yahoo_status": yahoo_summary,
     }
 
     json_out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -679,6 +755,9 @@ def main():
                     help="the week's Out/Doubtful designations as resolved by tracker/tracker.py log (a JSON file from "
                          "injuries.write_designations); without it they are resolved here, from the same sources")
     ap.add_argument("--skip-injuries", action="store_true", help="apply no Out/Doubtful check (recorded as skipped)")
+    ap.add_argument("--yahoo-status", default=None,
+                    help="Yahoo's current player statuses as collected by tracker/tracker.py log (a JSON file from "
+                         "yahoo_status.write); without it a long-term roster status is never overruled (as in pool rule v3)")
     ap.add_argument("--as-of", default=None,
                      help="ISO8601 instant to evaluate the kickoff guard against (default: now; naive input is "
                           "assumed UTC). For testing, e.g. --as-of 2026-10-05T14:00:00+00:00 to simulate a "
@@ -803,7 +882,21 @@ def main():
           + (f" -- {injury_rule['reason']}" if injury_rule.get("reason") else "")
           + f"; {len(injury_out)} player(s) designated {'/'.join(injury_rule['exclude'])}")
 
+    # Yahoo's current statuses (pool rule v4; tracker/yahoo_status.py): may overrule a long-term roster status
+    if args.yahoo_status:
+        yahoo_rec = yahoo_status.read(args.yahoo_status)
+    else:
+        yahoo_rec = yahoo_status.skipped("not provided (score_week.py run by hand): long-term roster statuses stand")
+    yahoo_of = yahoo_rec["status_by_player"]
+    print(f"[INFO] Yahoo statuses: {len(yahoo_of)} player(s) (rostered: "
+          + (f"snapshot {yahoo_rec['rostered']['snapshot_id']} taken {yahoo_rec['rostered']['taken_at']}"
+             if yahoo_rec["rostered"].get("used") else yahoo_rec["rostered"].get("reason"))
+          + f"; available: {yahoo_rec['available']['status']}, {yahoo_rec['available']['n']})")
+    for code in yahoo_rec["unknown_codes"]:
+        print(f"[WARN] unknown Yahoo status {code!r} -- it never overrules a roster status; add it to yahoo_status.py")
+
     stable, team_changed_list, new_competitor_list, unavailable_list, already_played_list = [], [], [], [], []
+    mixed_window_list, yahoo_override_list = [], []
     no_game_list = []
     off_roster_list = []
     injury_list = []
@@ -853,31 +946,35 @@ def main():
         # recency-release below. A player on reserve who happens to have
         # accumulated 3+ real current-season games (hurt mid-season, say)
         # still can't play; games_played_this_season says nothing about
-        # whether he's currently allowed on the field.
+        # whether he's currently allowed on the field. Pool rule v4: Yahoo's
+        # current status may overrule an EXE / RES / PUP / SUS (classify_v4).
+        #
+        # Then the team check (v4): the recency release -- a trailing window
+        # built entirely from current-season games -- only holds when every
+        # game in it was played for his current weekly-roster team; any
+        # window game for another team sends him to the team-changed
+        # suppression, whatever his current-season game count.
         roster_status = weekly_status_of.get(pid)
-        if roster_status in UNAVAILABLE_STATUSES:
-            unavailable_list.append((pid, feat, roster_status))
-            continue
-
-        # Release both offseason suppressions once this player's trailing
-        # window is built entirely from current-season games -- see the
-        # module docstring. games_played_this_season already counts real
-        # games strictly before this week, so >= MIN_PRIOR_GAMES here means
-        # the last MIN_PRIOR_GAMES window (what every trailing feature
-        # actually uses) can no longer reach back into stale prior-season
-        # data, independent of what the static roster/production checks
-        # below would otherwise conclude.
-        if feat["games_played_this_season"] >= MIN_PRIOR_GAMES:
-            stable.append((pid, feat))
-            n_released_by_recency += 1
-            continue
-
+        yahoo = yahoo_of.get(pid)
         inferred_team = feat["_team"]
         roster_team = roster_team_of.get(pid)
-
-        if roster_team is not None and roster_team != inferred_team:
+        if roster_team is None and yahoo_status.overrides(roster_status, yahoo) and pid in roster_latest:
+            roster_team = roster_latest[pid][2]   # exempt / suspended / PUP: not "confirmed", but still on that team
+        window_teams = [h[2] for h in engine.trailing_window(pid, args.season, args.week)]
+        outcome, overruled = classify_v4(roster_status, yahoo, window_teams, roster_team, feat["games_played_this_season"])
+        if outcome == "unavailable":
+            unavailable_list.append((pid, feat, roster_status, yahoo))
+            continue
+        if overruled:
+            yahoo_override_list.append((pid, feat, roster_status, yahoo, roster_team))
+        if outcome in ("team_changed", "mixed_window"):
             corrected = engine.compute_schedule_dependent_features(args.season, args.week, roster_team, feat["_pos"], pid)
-            team_changed_list.append((pid, feat, inferred_team, roster_team, corrected))
+            (team_changed_list if outcome == "team_changed" else mixed_window_list).append(
+                (pid, feat, inferred_team, roster_team, corrected, window_teams))
+            continue
+        if outcome == "released":
+            stable.append((pid, feat))
+            n_released_by_recency += 1
             continue
 
         team = roster_team or inferred_team
@@ -922,6 +1019,8 @@ def main():
           f"{len(already_played_list)} already played as of {as_of.isoformat()} (excluded, not re-scored); "
           f"{len(unavailable_list)} unavailable (reserve/PUP/NFI/suspended/exempt, score suppressed); "
           f"{len(team_changed_list)} team-changed (score suppressed); "
+          f"{len(mixed_window_list)} with a mixed-team trailing window (score suppressed); "
+          f"{len(yahoo_override_list)} long-term roster status(es) overruled by Yahoo; "
           f"{len(new_competitor_list)} with a meaningful new same-position competitor this offseason (score suppressed)")
     print(f"[INFO]   of those {len(new_competitor_list)}: {n_via_production_only} via prior-production threshold only, "
           f"{n_via_draft_only} via draft-capital only, {n_via_both} via both")
@@ -940,16 +1039,24 @@ def main():
         header1 = f"{'Name':24} {'Pos':4} {'Team':5} {'Status'}"
         print(header1)
         print("-" * len(header1))
-        for pid, feat, status in sorted(unavailable_list, key=lambda w: (w[1]["_team"], names.get(w[0], w[0]))):
+        for pid, feat, status, yahoo in sorted(unavailable_list, key=lambda w: (w[1]["_team"], names.get(w[0], w[0]))):
             display = names.get(pid, pid)
-            print(f"{display:24.24} {feat['_pos']:4} {feat['_team']:5} {status}")
+            print(f"{display:24.24} {feat['_pos']:4} {feat['_team']:5} {status}"
+                  + (f"  (Yahoo: {yahoo or 'no status'})" if yahoo is not None and status in yahoo_status.OVERRIDABLE else ""))
+
+    if yahoo_override_list:
+        print(f"\nOverruled by Yahoo -- {len(yahoo_override_list)} players whose long-term roster status Yahoo contradicts, "
+              f"treated as available ({YAHOO_OVERRIDE_REASON}):")
+        for pid, feat, status, yahoo, team in sorted(yahoo_override_list, key=lambda w: names.get(w[0], w[0])):
+            print(f"{names.get(pid, pid):24.24} {feat['_pos']:4} {team or feat['_team']:5} weekly roster {status}, "
+                  f"Yahoo {yahoo or 'no status'}")
 
     if team_changed_list:
-        print(f"\nWatch list -- {len(team_changed_list)} players with a confirmed offseason team change, score suppressed ({TEAM_CHANGE_REASON}):")
+        print(f"\nWatch list -- {len(team_changed_list)} players whose most recent game was for another team, score suppressed ({TEAM_CHANGE_REASON}):")
         header2 = f"{'Name':24} {'Pos':4} {'Old':4} {'New':4} {'Opp':4} {'Home':5} {'ShortWk':7} {'StarterAbsent':13} {'Matchup':>8}"
         print(header2)
         print("-" * len(header2))
-        for pid, feat, old_team, new_team, corrected in sorted(team_changed_list, key=lambda w: (w[3], names.get(w[0], w[0]))):
+        for pid, feat, old_team, new_team, corrected, _w in sorted(team_changed_list, key=lambda w: (w[3], names.get(w[0], w[0]))):
             display = names.get(pid, pid)
             opp = corrected["_opp"] or "?"
             home = corrected["is_home"]
@@ -958,6 +1065,12 @@ def main():
             matchup = corrected["opponent_position_matchup"]
             matchup_s = f"{matchup:.2f}" if matchup is not None else "None"
             print(f"{display:24.24} {feat['_pos']:4} {old_team:4} {new_team:4} {opp:4} {str(home):5} {str(sw):7} {str(sap):13} {matchup_s:>8}")
+
+    if mixed_window_list:
+        print(f"\nWatch list -- {len(mixed_window_list)} players whose trailing window mixes teams, score suppressed "
+              f"({MIXED_WINDOW_REASON}):")
+        for pid, feat, _old, new_team, _corrected, window in sorted(mixed_window_list, key=lambda w: (w[3], names.get(w[0], w[0]))):
+            print(f"{names.get(pid, pid):24.24} {feat['_pos']:4} window {', '.join(window)} -> now {new_team}")
 
     if new_competitor_list:
         print(f"\nWatch list -- {len(new_competitor_list)} players with a meaningful new same-position competitor this offseason, score suppressed ({NEW_COMPETITOR_REASON}):")
@@ -993,25 +1106,32 @@ def main():
     ]
 
     unavailable_records = []
-    for pid, feat, status in unavailable_list:
+    for pid, feat, status, yahoo in unavailable_list:
         unavailable_records.append({
             "player_id": pid, "name": names.get(pid, pid), "pos": feat["_pos"], "team": feat["_team"],
-            "status": status, "reason": UNAVAILABLE_REASON,
+            "status": status, "yahoo_status": yahoo, "reason": UNAVAILABLE_REASON,
         })
 
-    team_changed_records = []
-    for pid, feat, old_team, new_team, corrected in team_changed_list:
-        team_changed_records.append({
+    yahoo_override_records = [
+        {"player_id": pid, "name": names.get(pid, pid), "pos": feat["_pos"], "team": team or feat["_team"],
+         "weekly_roster_status": status, "yahoo_status": yahoo, "reason": YAHOO_OVERRIDE_REASON}
+        for pid, feat, status, yahoo, team in sorted(yahoo_override_list, key=lambda w: names.get(w[0], w[0]))]
+
+    def team_record(pid, feat, old_team, new_team, corrected, window, reason):
+        return {
             "player_id": pid, "name": names.get(pid, pid), "pos": feat["_pos"],
-            "old_team": old_team, "new_team": new_team,
-            "reason": TEAM_CHANGE_REASON,
+            "old_team": old_team, "new_team": new_team, "window_teams": window,
+            "reason": reason,
             "corrected_features": {
                 "opponent": corrected["_opp"], "is_home": corrected["is_home"],
                 "is_short_week": corrected["is_short_week"],
                 "starter_absent_proxy": corrected["starter_absent_proxy"],
                 "opponent_position_matchup": corrected["opponent_position_matchup"],
             },
-        })
+        }
+
+    team_changed_records = [team_record(*t, TEAM_CHANGE_REASON) for t in team_changed_list]
+    mixed_window_records = [team_record(*t, MIXED_WINDOW_REASON) for t in mixed_window_list]
 
     new_competitor_records = []
     for pid, feat, team, competitors in new_competitor_list:
@@ -1051,7 +1171,8 @@ def main():
                          all_eligible_count, len(candidates), n_released_by_recency,
                          team_changed_records, new_competitor_records, unavailable_records,
                          already_played_records, no_game_records, off_roster_records, injury_records, injury_rule,
-                         n_via_production_only, n_via_draft_only, n_via_both, json_out_path)
+                         n_via_production_only, n_via_draft_only, n_via_both, json_out_path,
+                         mixed_window_records, yahoo_override_records, yahoo_status.summary(yahoo_rec))
 
     json_out_path = Path(args.json_out) if args.json_out else None
     run_pass(args.model, "PRODUCTION", json_out_path, baseline_production_path)

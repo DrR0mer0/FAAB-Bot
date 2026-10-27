@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Who is available in the user's own Yahoo league -- a DISPLAY-ONLY view.
+"""Who is available in the user's own Yahoo league -- a DISPLAY-ONLY view, plus one input to the pool rule.
 
 At `log` time the tracker asks Yahoo which QB/RB/WR/TE are free agents or on
 waivers in the league, maps them to gsis ids, and adds a section to each
 prediction markdown listing that model's highest-ranked pool players who can
-actually be picked up. Nothing here feeds the pool, a score, a rank, a pick or
-a result, and the prediction JSON is never touched: O.D.D.S. is still measured
-against every scored player, not against one league's waiver wire.
+actually be picked up. WHO is available feeds nothing -- not the pool, a score,
+a rank, a pick or a result, and the prediction JSON is never touched: O.D.D.S.
+is still measured against every scored player, not against one league's waiver
+wire. The one thing read back is each player's Yahoo player STATUS (pool rule
+v4, from 2026 week 8; tracker/yahoo_status.py): the fetch runs before O.D.D.S.
+does, and a status that says he may play can overrule a stale long-term status
+on nflverse's weekly roster in score_week.py's availability gate.
 
 SOURCE -- Yahoo's Fantasy Sports API, read-only (league/yahoo_auth.py holds
 the OAuth side): league/<key>/players;status=A is everyone available, 25 per
@@ -128,8 +132,8 @@ def parse_page(payload):
             "position": info.get("primary_position") or info["display_position"].split(",")[0],
             "team": (info.get("editorial_team_abbr") or "").upper() or None,
             "status": STATUS[own["ownership_type"]], "waiver_date": own.get("waiver_date") or None,
-            # Yahoo's player status ("NA" = "Inactive: Coach's Decision or Not on Roster", "Q", "O", ...): kept in memory
-            # for the tracker's off-roster cross-check only, not stored in tr_league_availability
+            # Yahoo's player status ("NA" = "Inactive: Coach's Decision or Not on Roster", "Q", "O", ...; None = none): the
+            # tracker's off-roster cross-check and, from 2026-10-27, pool rule v4's availability gate (yahoo_status.py)
             "player_status": info.get("status") or None})
     return rows, n
 
@@ -281,7 +285,7 @@ def store(con, run_id, taken_at, league_key, view, raw_file):
     ledger.insert_rows(con, "tr_league_availability", [
         {"snapshot_id": sid, "external_id": r["external_id"], "player_id": r["player_id"], "match_method": r["match_method"],
          "name": r["name"], "position": r["position"], "team": r["team"], "status": r["status"],
-         "waiver_date": r["waiver_date"]} for r in view["rows"]])
+         "waiver_date": r["waiver_date"], "player_status": r.get("player_status") or ""} for r in view["rows"]])
     return sid
 
 

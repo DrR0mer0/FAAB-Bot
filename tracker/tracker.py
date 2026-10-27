@@ -55,6 +55,7 @@ import report  # noqa: E402
 import scoring  # noqa: E402
 import snapcounts  # noqa: E402
 import trends  # noqa: E402
+import yahoo_status  # noqa: E402
 from score_week import (  # noqa: E402 -- the one place kickoff timezone and roster-status logic live
     KICKOFF_TZ, OFF_ROSTER_MAX_SHARE, OFF_ROSTER_WARNING_TAG, load_current_roster, load_kickoffs, load_roster_presence,
     off_roster_reason, parse_kickoff_utc, render_markdown_report)
@@ -85,7 +86,15 @@ SLOT_RULE = "main-slate-v2"  # recorded with every run; v1 closed `sun` at the e
 #                                    the week although his team has rows (split_pool_off_roster). The week 6 thu run
 #                                    had 20 such players, Andy Dalton (released by PHI in week 5) among them.
 #                                    Practice-squad (DEV) players stay in: an open question, not a decision.
-POOL_RULE = "exclude-no-game-off-roster-out-doubtful-v3"
+#   exclude-no-game-off-roster-out-doubtful-v4  (from 2026 week 8) two changes to score_week.py's suppressions, both
+#                                    recorded with the run, each reason under its own key:
+#                                    (a) Yahoo's current player status can overrule a long-term EXE / RES / PUP / SUS on
+#                                    nflverse's weekly roster (yahoo_status.py; ESPN only cross-checks). Found: nflverse
+#                                    kept Josh Jacobs on the exempt list in week 7 after his reinstatement.
+#                                    (b) a player whose trailing 3-game window holds a game for a team other than his
+#                                    weekly-roster team is team-change suppressed, however many games he has this season
+#                                    (week 7: Marvin Harrison Jr. ARI, ARI, HOU; Dameon Pierce KC, PHI, PHI ranked #1).
+POOL_RULE = "exclude-no-game-off-roster-out-doubtful-v4"
 # Who is in the sleeper ("u50") pool, recorded with every run. v1 (2026 week 4 only, no key in run_config_json):
 # strictly under the threshold, and a pool player with no row in the roster-% snapshot was silently dropped.
 # v2: such a player stays IN, with percent_owned NULL as the "ownership unknown" flag -- he is not assumed to be
@@ -511,6 +520,36 @@ def league_sections(view, pool_src, outputs, top_n, as_of):
         top_n, as_of) for model, output in outputs.items() if output is not None}
 
 
+ESPN_MAY_PLAY = {"ACTIVE", "DAY_TO_DAY", "QUESTIONABLE", "DOUBTFUL"}
+
+
+def availability_record(prod, yahoo, espn_raw):
+    """What a v4 run keeps about score_week.py's suppressions (from its prediction JSON), one key per reason:
+      yahoo_status            the sources (yahoo_status.summary), every long-term status Yahoo overruled, and every
+                              overridable one it didn't (kept_out), each with ESPN's status beside it (cross-check only)
+      excluded_unavailable    {player_id: weekly-roster status} -- the availability gate
+      excluded_team_changed   {player_id: {window_teams, roster_team}} -- most recent game for another team
+      excluded_mixed_window   {player_id: {window_teams, roster_team}} -- an earlier window game for another team
+      excluded_new_competitor [player_id] -- unchanged rule, recorded for completeness"""
+    def team(rows):
+        return {r["player_id"]: {"window_teams": r.get("window_teams"), "roster_team": r["new_team"]} for r in rows or []}
+
+    overrides = [{"player_id": r["player_id"], "name": r["name"], "weekly_roster": r["weekly_roster_status"],
+                  "yahoo": r["yahoo_status"], "espn": espn_raw.get(r["player_id"])}
+                 for r in prod.get("yahoo_status_override_list") or []]
+    kept_out = {r["player_id"]: {"name": r["name"], "weekly_roster": r["status"], "yahoo": r.get("yahoo_status"),
+                                 "espn": espn_raw.get(r["player_id"])}
+                for r in prod.get("unavailable_watch_list") or [] if r["status"] in yahoo_status.OVERRIDABLE}
+    return {
+        "yahoo_status": {**yahoo_status.summary(yahoo), "rule": yahoo_status.VERSION, "overrides": overrides,
+                         "kept_out": dict(sorted(kept_out.items()))},
+        "excluded_unavailable": dict(sorted((r["player_id"], r["status"]) for r in prod.get("unavailable_watch_list") or [])),
+        "excluded_team_changed": dict(sorted(team(prod.get("team_changed_watch_list")).items())),
+        "excluded_mixed_window": dict(sorted(team(prod.get("mixed_window_watch_list")).items())),
+        "excluded_new_competitor": sorted(r["player_id"] for r in prod.get("new_competitor_watch_list") or []),
+    }
+
+
 def resolve_ownership(con, cfg, season, as_of, allow_live, raw_dir):
     """-> (status, snapshot_id, {gsis: percent_owned}). Never raises."""
     max_age = cfg["run"]["ownership_max_age_hours"]
@@ -579,6 +618,15 @@ def cmd_log(args, con):
         status, snap_id, own = resolve_ownership(con, cfg, season, as_of, allow_live, args.ownership_raw_dir)
     exclude = injuries.rule(cfg)[0]
     inj = resolve_injuries(args, con, cfg, season, week, as_of, snap_id)
+    # Yahoo's current player statuses, also before O.D.D.S. runs (pool rule v4, yahoo_status.py): rostered players from
+    # the newest league roster snapshot, free agents from the league-availability fetch -- which is made here now,
+    # once, and also feeds the display section further down.
+    league, league_key = resolve_league(args, con, weekly_roster)
+    yahoo = yahoo_status.collect(con, as_of, league)
+    print(f"[YAHOO] statuses for {len(yahoo['status_by_player'])} player(s): rostered "
+          + (f"from snapshot {yahoo['rostered']['snapshot_id']} ({yahoo['rostered']['taken_at'][:16]} UTC, {yahoo['rostered']['n']})"
+             if yahoo["rostered"]["used"] else f"none ({yahoo['rostered']['reason']})")
+          + f"; available players: league availability {yahoo['available']['status']} ({yahoo['available']['n']})")
 
     cmd = [sys.executable, str(REPO_ROOT / "model" / "score_week.py"), "--season", str(season), "--week", str(week),
            "--json-out", str(pred_path), "--as-of", as_of.isoformat(), "--db", str(args.db),
@@ -587,8 +635,10 @@ def cmd_log(args, con):
     with tempfile.TemporaryDirectory() as tmp:
         designations = Path(tmp) / "injury_designations.json"
         injuries.write_designations(designations, injuries.designations_record(inj, exclude, "tracker"))
-        proc = subprocess.run(cmd + ["--injury-designations", str(designations)], capture_output=True, text=True,
-                              encoding="utf-8", errors="replace")
+        statuses = Path(tmp) / "yahoo_status.json"
+        yahoo_status.write(statuses, yahoo)
+        proc = subprocess.run(cmd + ["--injury-designations", str(designations), "--yahoo-status", str(statuses)],
+                              capture_output=True, text=True, encoding="utf-8", errors="replace")
     written = [pred_path, pred_path.with_suffix(".md"),
                pred_path.with_name(pred_path.stem + "_shadow.json"), pred_path.with_name(pred_path.stem + "_shadow.md")]
     if proc.returncode != 0:
@@ -681,6 +731,20 @@ def cmd_log(args, con):
                                               inj["raw_bytes"], suffix=".csv.gz")
         except Exception as e:  # noqa: BLE001 -- the SHA-256 below still identifies the report that was used
             injuries._banner(f"could not keep a copy of the injury report under {args.injuries_raw_dir} ({type(e).__name__}: {e})")
+    # Pool rule v4: who score_week.py left unscored for each remaining reason, and what Yahoo overruled -- each under
+    # its own key. ESPN's status is recorded beside each long-term-status decision as a cross-check; it decides nothing.
+    espn_raw = ownership.injury_status_by_player(con, snap_id) if snap_id is not None else {}
+    v4 = availability_record(prod, yahoo, espn_raw)
+    for d in v4["yahoo_status"]["overrides"]:
+        print(f"[YAHOO] long-term status overruled: {d['name']} -- weekly roster {d['weekly_roster']}, Yahoo "
+              f"{d['yahoo'] or 'no status'}" + (f", ESPN {d['espn']}" if d["espn"] else "") + " -- scored as available")
+    for pid, d in v4["yahoo_status"]["kept_out"].items():
+        if d["espn"] in ESPN_MAY_PLAY:
+            print(f"[YAHOO] ESPN says {d['espn']} for {d['name']}, kept out: weekly roster {d['weekly_roster']}, Yahoo "
+                  f"{'no status' if d['yahoo'] == '' else d['yahoo'] or 'says nothing'} -- ESPN is a cross-check only")
+    if v4["excluded_mixed_window"] or v4["excluded_team_changed"]:
+        print(f"[INFO] team check: {len(v4['excluded_team_changed'])} player(s) whose most recent game was for another team, "
+              f"{len(v4['excluded_mixed_window'])} with a mixed-team trailing window -- not scored")
     if not pool_src:
         raise Refused("O.D.D.S. scored an empty pool -- nothing to log")
     # Display only, part 1: flag those players in the prediction markdown. Scores, ranks and the JSON stay as
@@ -692,8 +756,8 @@ def cmd_log(args, con):
         flags.update({r["player_id"]: "BYE" for r in idle})   # no game at all outranks an injury designation
         flags.update({pid: "FA" for pid in off})              # and no team at all outranks a bye
     # Display only, part 2: which of each model's pool players are available in the user's own Yahoo league
-    # (league_availability.py). The pool is already final here and nothing below reads the answer back into it.
-    league, league_key = resolve_league(args, con, weekly_roster)
+    # (league_availability.py; fetched above, before O.D.D.S. ran). The pool is already final here and nothing below
+    # reads the answer back into it -- only the player statuses above ever were.
     top_n = cfg["run"]["league_available_top_n"]
     outputs = {"prod": prod, "shadow": shadow}
     try:
@@ -787,6 +851,7 @@ def cmd_log(args, con):
                        "nflverse_last_modified": inj["last_modified"].isoformat() if inj["last_modified"] else None,
                        "nflverse_file": injury_file},
             "league_availability": league_availability.run_record(league, league_file, top_n, len(pool), n_pool_available),
+            **v4,
         }, sort_keys=True)}
     with con:
         ledger.insert_rows(con, "tr_runs", [run_row])

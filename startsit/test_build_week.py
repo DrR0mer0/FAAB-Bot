@@ -19,6 +19,7 @@ from pathlib import Path
 import build_week as bw
 import lineup_sim
 import projections
+import yahoo_status  # tracker/ (build_week puts it on sys.path)
 
 TZ = timezone.utc
 AS_OF = datetime(2026, 10, 22, 14, 0, tzinfo=TZ)          # Thursday 07:00 Pacific, before the Thursday game
@@ -420,6 +421,20 @@ class TestCli(BuildCase):
         self.assertEqual(rc, 2)
         self.assertIn("NOT BUILT", se.getvalue())
         self.assertFalse(out.exists())
+
+
+
+class TestYahooStatusAgreesWithThePoolRule(unittest.TestCase):
+    """startsit's Yahoo status rule (commit b69adaf) and the pool rule's (tracker/yahoo_status.py, v4) read every code alike."""
+
+    def test_same_codes_same_reading_except_doubtful(self):
+        self.assertEqual(set(bw.YAHOO_STATUS), yahoo_status.MAY_PLAY | yahoo_status.OUT)
+        may_play_here = {code for code, mapped in bw.YAHOO_STATUS.items() if bw.play_chance(mapped) > 0}
+        # The one intended difference: start/sit weighs a Doubtful player by his play chance (above 0), while the
+        # pool rule is yes/no and leaves Doubtful players out, so Yahoo D never overrules a long-term status there.
+        self.assertIn("D", may_play_here)
+        self.assertEqual(yahoo_status.MAY_PLAY, may_play_here - {"D"})
+        self.assertEqual(bw.OVERRIDABLE, set(yahoo_status.OVERRIDABLE))
 
 
 if __name__ == "__main__":

@@ -189,6 +189,7 @@ def analyze_week(con, season, week, predictions_dir, loaded_seasons, names):
 
     watch = {
         "SUPPRESSED: team-changed": {e["player_id"]: e for e in pred.get("team_changed_watch_list", [])},
+        "SUPPRESSED: mixed-team window": {e["player_id"]: e for e in pred.get("mixed_window_watch_list", [])},   # v4, week 8+
         "SUPPRESSED: new-competitor": {e["player_id"]: e for e in pred.get("new_competitor_watch_list", [])},
         "SUPPRESSED: unavailable": {e["player_id"]: e for e in pred.get("unavailable_watch_list", [])},
     }

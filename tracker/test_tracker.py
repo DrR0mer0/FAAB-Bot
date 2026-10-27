@@ -35,8 +35,9 @@ import scheduled_run
 import scoring
 import tracker
 import trends
-from score_week import (OFF_ROSTER_WARNING_TAG, UNAVAILABLE_STATUSES, load_roster_presence, load_scheduled_teams,  # noqa: E402
-                        off_roster_reason, render_markdown_report)
+import yahoo_status
+from score_week import (OFF_ROSTER_WARNING_TAG, UNAVAILABLE_STATUSES, classify_v4, load_roster_presence,  # noqa: E402
+                        load_scheduled_teams, off_roster_reason, render_markdown_report, window_team_check)
 
 CFG = scoring.load_config()
 RULES = CFG["scoring"]
@@ -1172,6 +1173,128 @@ class TestScoreWeekOffRoster(unittest.TestCase):
         self.assertEqual(md.replace("- Not on an NFL roster (released, retired or unsigned), not scored: 20\n", ""), plain)
 
 
+class TestScoreWeekPoolRuleV4(unittest.TestCase):
+    """score_week.py's pool rule v4 decisions (from 2026 week 8), on the week 7 cases that prompted them."""
+
+    def test_jacobs_week_7_exempt_on_the_weekly_roster_but_no_yahoo_status_is_ranked(self):
+        # nflverse kept him EXE in week 7 after his reinstatement; Yahoo showed no status. 5 games, all for GB.
+        self.assertEqual(classify_v4("EXE", "", ["GB", "GB", "GB"], "GB", 5), ("released", True))
+        self.assertEqual(classify_v4("EXE", "Q", ["GB", "GB", "GB"], "GB", 5), ("released", True))   # may play: in
+        # Yahoo saying nothing about him (unmatched, or no Yahoo source) leaves the long-term status standing, as in v3
+        self.assertEqual(classify_v4("EXE", None, ["GB", "GB", "GB"], "GB", 5), ("unavailable", False))
+
+    def test_espn_day_to_day_but_yahoo_exempt_stays_out(self):
+        # ESPN said DAY_TO_DAY through the weeks he really was exempt; ESPN is not an input here at all, Yahoo decides
+        self.assertEqual(classify_v4("EXE", "CEL", ["GB", "GB", "GB"], "GB", 5), ("unavailable", False))
+        for yahoo in ("O", "IR", "IR-R", "PUP-R", "NFI-R", "SUSP", "NA", "SOMETHING-NEW"):   # out, or unknown: no override
+            self.assertEqual(classify_v4("RES", yahoo, ["GB"] * 3, "GB", 5), ("unavailable", False), yahoo)
+        self.assertEqual(classify_v4("RSN", "", ["GB"] * 3, "GB", 5), ("unavailable", False))   # not overridable
+
+    def test_reserve_and_yahoo_doubtful_stays_out(self):
+        # the pool rule is yes/no and leaves Doubtful players out: Yahoo D never overrules (startsit differs on purpose)
+        self.assertEqual(classify_v4("RES", "D", ["GB", "GB", "GB"], "GB", 5), ("unavailable", False))
+        self.assertTrue(yahoo_status.known("D"))
+        self.assertIn("D", yahoo_status.OUT)
+        self.assertFalse(yahoo_status.overrides("CUT", ""))
+
+    def test_marvin_harrison_jr_week_7_ari_ari_hou_is_team_changed(self):
+        # traded to HOU, one game there: the recency release would have ranked him on two Arizona games
+        self.assertEqual(window_team_check(["ARI", "ARI", "HOU"], "HOU"), "mixed_window")
+        self.assertEqual(classify_v4("ACT", None, ["ARI", "ARI", "HOU"], "HOU", 5), ("mixed_window", False))
+
+    def test_all_three_window_games_on_the_current_team_is_released(self):
+        self.assertEqual(classify_v4("ACT", None, ["HOU", "HOU", "HOU"], "HOU", 5), ("released", False))
+        self.assertEqual(classify_v4("ACT", "", ["HOU", "HOU", "HOU"], "HOU", 3), ("released", False))
+        self.assertEqual(classify_v4("ACT", None, ["HOU", "HOU", "HOU"], "HOU", 2), (None, False))   # on to new-competitor
+        self.assertIsNone(window_team_check(["OAK", "OAK", "OAK"], "LV"))       # one franchise, normalized codes
+
+    def test_offseason_movers_with_few_games_and_players_traded_this_week(self):
+        # week 7: Dameon Pierce (production #1) and Audric Estime (#25), windows reaching into last season's team
+        self.assertEqual(classify_v4("ACT", None, ["KC", "PHI", "PHI"], "PHI", 2), ("mixed_window", False))
+        self.assertEqual(classify_v4("ACT", None, ["NO", "NO", "CLE"], "CLE", 1), ("mixed_window", False))
+        # most recent game for another team: the v3 test, now whatever the game count (Jared Wayne, HOU -> MIA)
+        self.assertEqual(classify_v4("ACT", None, ["HOU", "HOU", "HOU"], "MIA", 5), ("team_changed", False))
+        # a Yahoo override still goes through the team check
+        self.assertEqual(classify_v4("SUS", "", ["NYJ", "NYJ", "GB"], "GB", 4), ("mixed_window", True))
+
+    def test_without_a_roster_team_nothing_is_compared(self):
+        self.assertEqual(classify_v4("ACT", None, ["ARI", "ARI", "HOU"], None, 5), ("released", False))
+        self.assertEqual(classify_v4(None, None, ["ARI", "ARI", "HOU"], None, 1), (None, False))
+
+    def test_markdown_gains_lines_only_for_a_v4_output(self):
+        plain = render_markdown_report(PREDICTION_OUTPUT)          # an output without the v4 counts reads as before
+        v4 = dict(PREDICTION_OUTPUT, counts=dict(PREDICTION_OUTPUT["counts"], mixed_window_suppressed=31,
+                                                 yahoo_status_overrides=1))
+        md = render_markdown_report(v4)
+        lines = ["- Long-term roster status overruled by Yahoo's current status (scored): 1\n",
+                 "- Mixed-team trailing window suppressed: 31\n"]
+        for line in lines:
+            self.assertIn(line, md)
+        for line in lines:
+            md = md.replace(line, "")
+        self.assertEqual(md, plain)
+
+
+class TestYahooStatusSources(unittest.TestCase):
+    """yahoo_status.py: which Yahoo statuses a run may use (pool rule v4)."""
+
+    AS_OF = utc("2026-10-29T14:00:00")
+
+    def db(self, snapshots):
+        con = mem_db()
+        con.execute("CREATE TABLE lg_snapshots (snapshot_id INTEGER PRIMARY KEY, taken_at TEXT, resource TEXT, ok INTEGER)")
+        con.execute("CREATE TABLE lg_rosters (snapshot_id INTEGER, player_id TEXT, status TEXT)")
+        for sid, taken, ok, rows in snapshots:
+            con.execute("INSERT INTO lg_snapshots VALUES (?, ?, 'rosters', ?)", (sid, taken, ok))
+            con.executemany("INSERT INTO lg_rosters VALUES (?, ?, ?)", [(sid, p, s) for p, s in rows])
+        return con
+
+    def test_the_newest_good_snapshot_before_the_run_is_used(self):
+        con = self.db([(1, "2026-10-28T13:35:00+00:00", 1, [("a", "Q")]),
+                       (2, "2026-10-29T13:35:00+00:00", 1, [("a", ""), ("b", "IR"), ("c", None), (None, "Q")]),
+                       (3, "2026-10-29T13:50:00+00:00", 0, [("a", "O")]),             # failed
+                       (4, "2026-10-29T15:00:00+00:00", 1, [("a", "O")])])            # after the run
+        by, rec = yahoo_status.roster_statuses(con, self.AS_OF)
+        self.assertEqual(by, {"a": "", "b": "IR"})                                     # NULL status / no gsis id: unknown
+        self.assertEqual((rec["snapshot_id"], rec["used"], rec["n"]), (2, True, 2))
+
+    def test_a_stale_or_status_less_snapshot_says_nothing(self):
+        by, rec = yahoo_status.roster_statuses(self.db([(1, "2026-10-27T13:35:00+00:00", 1, [("a", "")])]), self.AS_OF)
+        self.assertEqual((by, rec["used"], rec["reason"]), ({}, False, "the newest roster snapshot is 48h old (limit 36h)"))
+        by, rec = yahoo_status.roster_statuses(self.db([(1, "2026-10-29T13:35:00+00:00", 1, [("a", None)])]), self.AS_OF)
+        self.assertEqual((by, rec["used"]), ({}, False))
+        self.assertIn("no player statuses", rec["reason"])
+        by, rec = yahoo_status.roster_statuses(mem_db(), self.AS_OF)                   # no league tables at all
+        self.assertEqual((by, rec["used"]), ({}, False))
+
+    def test_the_live_availability_fetch_wins_over_the_morning_snapshot(self):
+        con = self.db([(1, "2026-10-29T13:35:00+00:00", 1, [("dropped", "IR"), ("kept", "Q")])])
+        view = {"status": "ok", "by_player": {"dropped": {"player_status": None}, "fa": {"player_status": "NA"},
+                                              "odd": {"player_status": "XX"}}}
+        rec = yahoo_status.collect(con, self.AS_OF, view)
+        self.assertEqual(rec["status_by_player"], {"dropped": "", "fa": "NA", "kept": "Q", "odd": "XX"})
+        self.assertEqual((rec["available"], rec["unknown_codes"]), ({"status": "ok", "n": 3}, ["XX"]))
+        failed = yahoo_status.collect(con, self.AS_OF, {"status": "unavailable", "by_player": {}})
+        self.assertEqual(failed["status_by_player"], {"dropped": "IR", "kept": "Q"})
+
+    def test_every_known_code_is_either_may_play_or_out(self):
+        self.assertFalse(yahoo_status.MAY_PLAY & yahoo_status.OUT)
+        self.assertTrue(yahoo_status.known("") and yahoo_status.known("CEL") and not yahoo_status.known("XX"))
+
+    def test_an_older_availability_table_gains_the_status_column_and_stays_append_only(self):
+        old = sqlite3.connect(":memory:")
+        self.addCleanup(old.close)
+        old.execute("CREATE TABLE tr_league_availability (snapshot_id INTEGER NOT NULL, external_id TEXT NOT NULL, player_id TEXT, "
+                    "match_method TEXT, name TEXT, position TEXT, team TEXT, status TEXT NOT NULL, waiver_date TEXT, "
+                    "PRIMARY KEY (snapshot_id, external_id))")
+        old.execute("INSERT INTO tr_league_availability VALUES (1, 'x', NULL, NULL, 'n', 'RB', 'KC', 'FA', NULL)")
+        ledger.init_schema(old)
+        ledger.init_schema(old)                                                       # twice is harmless
+        self.assertEqual(old.execute("SELECT player_status FROM tr_league_availability").fetchall(), [(None,)])
+        with self.assertRaisesRegex(sqlite3.DatabaseError, "UPDATE on tr_league_availability is blocked"):
+            old.execute("UPDATE tr_league_availability SET player_status=''")
+
+
 class TestPredictionMarkdownFlags(unittest.TestCase):
     def test_flags_are_display_only(self):
         plain = render_markdown_report(PREDICTION_OUTPUT)
@@ -1207,6 +1330,8 @@ class TestLogInjuryPoolRule(TestLogInternationalWeek):
         out = Path(cmd[cmd.index("--json-out") + 1])
         out.parent.mkdir(parents=True, exist_ok=True)
         self.designations = injuries.read_designations(cmd[cmd.index("--injury-designations") + 1])
+        self.yahoo_passed = yahoo_status.read(cmd[cmd.index("--yahoo-status") + 1])
+        getattr(self, "order", []).append("score_week")
         if getattr(self, "honor_designations", False):        # what the real score_week.py does with them
             withheld = self.designations["excluded"]
             self.unranked = [dict(r, status=withheld[r["player_id"]]) for r in self.scored_pool if r["player_id"] in withheld]
@@ -1215,7 +1340,7 @@ class TestLogInjuryPoolRule(TestLogInternationalWeek):
         payload = json.dumps(dict(PREDICTION_OUTPUT, week=4, scored_pool=self.scored_pool, top=top,
                                   injury_watch_list=getattr(self, "unranked", []),
                                   no_game_watch_list=getattr(self, "unscored", []),
-                                  off_roster_watch_list=getattr(self, "unscored_off", [])))
+                                  off_roster_watch_list=getattr(self, "unscored_off", []), **getattr(self, "v4_lists", {})))
         for path in (out, out.with_name(out.stem + "_shadow.json")):
             path.write_text(payload, encoding="utf-8")
             path.with_suffix(".md").write_text("as score_week.py wrote it", encoding="utf-8")
@@ -1387,7 +1512,7 @@ class TestLogInjuryPoolRule(TestLogInternationalWeek):
         self.assertEqual(len(pool), 18)                                      # 24 after the cutoff, minus 4 off, minus Out/Doubtful
         self.assertFalse([r for r in self.rows("SELECT player_id FROM tr_predictions") if r["player_id"] in off])
         cfg = self.run_config()
-        self.assertEqual(cfg["pool_rule"], "exclude-no-game-off-roster-out-doubtful-v3")
+        self.assertEqual(cfg["pool_rule"], "exclude-no-game-off-roster-out-doubtful-v4")
         self.assertEqual(cfg["excluded_off_roster"], off)
         roster_bytes = (self.dir / "raw" / "roster_weekly_2026.csv").read_bytes()
         self.assertTrue(cfg["off_roster"]["applied"])
@@ -1460,6 +1585,95 @@ class TestLogInjuryPoolRule(TestLogInternationalWeek):
         pool = {r["player_id"] for r in self.rows("SELECT player_id FROM tr_pool")}
         self.assertNotIn("TEN-RB1", pool)          # nflverse decides: out, whatever Yahoo says
         self.assertIn("KC-RB0", pool)              # a practice-squad player Yahoo marks NA stays in
+
+    # ---- pool rule v4: Yahoo's status in score_week.py's availability gate, the team check (from 2026 week 8)
+
+    def add_roster_snapshot(self, rows, taken_at="2026-10-04T13:35:00+00:00"):
+        con = ledger.connect(self.db)
+        con.execute("CREATE TABLE IF NOT EXISTS lg_snapshots (snapshot_id INTEGER PRIMARY KEY, taken_at TEXT, resource TEXT, ok INTEGER)")
+        con.execute("CREATE TABLE IF NOT EXISTS lg_rosters (snapshot_id INTEGER, player_id TEXT, status TEXT)")
+        sid = con.execute("INSERT INTO lg_snapshots (taken_at, resource, ok) VALUES (?, 'rosters', 1)", (taken_at,)).lastrowid
+        con.executemany("INSERT INTO lg_rosters VALUES (?, ?, ?)", [(sid, p, s) for p, s in rows])
+        con.commit()
+        con.close()
+        return sid
+
+    def test_yahoo_statuses_are_collected_and_reach_score_week_before_it_runs(self):
+        self.write_weekly_roster([("LV-TE5", "LV", "TE", "ACT", "Dropped End", "703"), ("PIT-WR3", "PIT", "WR", "DEV", "Squad Wideout", "704")])
+        sid = self.add_roster_snapshot([("KC-RB0", "Q"), ("TEN-WR2", ""), ("LV-TE5", "IR"), ("BAL-RB1", None)])
+        self.order = []
+
+        def league(league_key):
+            self.order.append("yahoo")
+            rows = [dict(external_id="703", name="Dropped End", position="TE", team="LV", status="FA", waiver_date=None, player_status=None),
+                    dict(external_id="704", name="Squad Wideout", position="WR", team="PIT", status="W", waiver_date="2026-10-06",
+                         player_status="NA")]
+            return {"ok": True, "http_status": 200, "raw_bytes": b"{}", "rows": rows, "n_pages": 1, "error": None, "url": "u"}
+        self.league_fetch = league
+        rc, out = self.log_live(self.fresh, "--skip-ownership")
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.order, ["yahoo", "score_week"])                     # fetched once, before O.D.D.S. runs
+        self.assertEqual(self.yahoo_passed["status_by_player"],
+                         {"KC-RB0": "Q", "TEN-WR2": "", "LV-TE5": "", "PIT-WR3": "NA"})   # live wins; NULL = unknown
+        self.assertEqual((self.yahoo_passed["rostered"]["snapshot_id"], self.yahoo_passed["rostered"]["used"]), (sid, True))
+        self.assertEqual(self.yahoo_passed["available"], {"status": "ok", "n": 2})
+        self.assertIn("[YAHOO] statuses for 4 player(s): rostered from snapshot", out)
+        cfg = self.run_config()
+        self.assertEqual(cfg["pool_rule"], tracker.POOL_RULE)
+        self.assertEqual((cfg["yahoo_status"]["n_players"], cfg["yahoo_status"]["rule"]), (4, yahoo_status.VERSION))
+        self.assertNotIn("status_by_player", cfg["yahoo_status"])                   # the map stays out of the export
+        self.assertEqual(sorted(r["player_status"] for r in self.rows("SELECT player_status FROM tr_league_availability")), ["", "NA"])
+
+    def test_overruled_and_kept_out_long_term_statuses_are_recorded_with_espn_beside_them(self):
+        self.write_weekly_roster()
+        self.scored_pool = [r for r in self.scored_pool if r["player_id"] != "KC-WR2"]
+        self.add_espn_snapshot({"KC-RB0": "ACTIVE"})
+        con = ledger.connect(self.db)
+        con.execute("INSERT INTO tr_ownership (snapshot_id, source, external_id, player_id, percent_owned, injury_status) "
+                    "VALUES (1, 'espn', 'KC-WR2', 'KC-WR2', 5.0, 'DAY_TO_DAY')")
+        con.commit()
+        con.close()
+        self.v4_lists = {
+            "yahoo_status_override_list": [{"player_id": "KC-RB0", "name": "Reinstated Back", "pos": "RB", "team": "KC",
+                                            "weekly_roster_status": "EXE", "yahoo_status": "", "reason": "overruled"}],
+            "unavailable_watch_list": [
+                {"player_id": "KC-WR2", "name": "Exempt Receiver", "pos": "WR", "team": "KC", "status": "EXE", "yahoo_status": "CEL"},
+                {"player_id": "BAL-RB9", "name": "Hurt Back", "pos": "RB", "team": "BAL", "status": "RES", "yahoo_status": None},
+                {"player_id": "TEN-TE9", "name": "Nfi End", "pos": "TE", "team": "TEN", "status": "RSN", "yahoo_status": ""}],
+            "mixed_window_watch_list": [{"player_id": "LV-RB9", "name": "Moved Back", "pos": "RB", "old_team": "LV",
+                                         "new_team": "LV", "window_teams": ["KC", "LV", "LV"]}],
+            "team_changed_watch_list": [{"player_id": "BAL-WR9", "name": "Traded Receiver", "pos": "WR", "old_team": "KC",
+                                         "new_team": "BAL", "window_teams": ["KC", "KC", "KC"]}],
+            "new_competitor_watch_list": [{"player_id": "PIT-RB9", "name": "Crowded Back", "pos": "RB", "team": "PIT"}]}
+        rc, out = self.log_live(self.fresh)
+        self.assertEqual(rc, 0)
+        cfg = self.run_config()
+        self.assertEqual(cfg["yahoo_status"]["overrides"], [{"player_id": "KC-RB0", "name": "Reinstated Back", "weekly_roster": "EXE",
+                                                             "yahoo": "", "espn": "ACTIVE"}])
+        self.assertEqual(cfg["yahoo_status"]["kept_out"], {                                  # RSN is not overridable: not here
+            "BAL-RB9": {"name": "Hurt Back", "weekly_roster": "RES", "yahoo": None, "espn": None},
+            "KC-WR2": {"name": "Exempt Receiver", "weekly_roster": "EXE", "yahoo": "CEL", "espn": "DAY_TO_DAY"}})
+        self.assertEqual(cfg["excluded_unavailable"], {"BAL-RB9": "RES", "KC-WR2": "EXE", "TEN-TE9": "RSN"})
+        self.assertEqual(cfg["excluded_mixed_window"], {"LV-RB9": {"window_teams": ["KC", "LV", "LV"], "roster_team": "LV"}})
+        self.assertEqual(cfg["excluded_team_changed"], {"BAL-WR9": {"window_teams": ["KC", "KC", "KC"], "roster_team": "BAL"}})
+        self.assertEqual(cfg["excluded_new_competitor"], ["PIT-RB9"])
+        self.assertIn("[YAHOO] long-term status overruled: Reinstated Back -- weekly roster EXE, Yahoo no status, ESPN ACTIVE "
+                      "-- scored as available", out)
+        self.assertIn("[YAHOO] ESPN says DAY_TO_DAY for Exempt Receiver, kept out: weekly roster EXE, Yahoo CEL -- ESPN is a "
+                      "cross-check only", out)
+        self.assertIn("1 player(s) whose most recent game was for another team, 1 with a mixed-team trailing window", out)
+        pool = {r["player_id"] for r in self.rows("SELECT player_id FROM tr_pool")}
+        self.assertIn("KC-RB0", pool)
+        self.assertNotIn("KC-WR2", pool)
+
+    def test_without_any_yahoo_source_the_run_says_so_and_nothing_is_overruled(self):
+        self.write_weekly_roster()
+        rc, out = self.log_live(self.fresh, "--skip-ownership")
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.yahoo_passed["status_by_player"], {})
+        self.assertIn("rostered none (no league roster tables in this database); available players: league availability skipped", out)
+        cfg = self.run_config()
+        self.assertEqual((cfg["yahoo_status"]["overrides"], cfg["yahoo_status"]["available"]["status"]), ([], "skipped"))
 
     # ---- Out/Doubtful: decided once, applied by score_week.py too (from 2026-10-18)
 
