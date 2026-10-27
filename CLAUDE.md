@@ -130,6 +130,8 @@ Separately, a **recency-weighting modification** to 4 existing production featur
 
 One candidate has been **adopted**: Group 1, receiving opportunity (`trailing_target_share`, `trailing_air_yards_share`, `trailing_adot`; NULL for QB rows). The same per-position re-test confirmed a genuine, position-appropriate win — WR +0.10 precision@10, TE +0.033 — not a reallocation artifact, and it's now part of `PRODUCTION_FEATURE_COLS` (13 features total). The production model trained on 2010–2025 with this set is `odds_xgb_model_production.joblib`; the superseded 10-feature model is preserved as `odds_xgb_model_production_10feature.joblib` for comparison. `predictions/verification_log.json` carries an explicit `model_changes` marker at this boundary — the production filename didn't change, so `git_commit` (not the filename) is what distinguishes weeks scored before vs. after this promotion.
 
+Re-run 2026-10-27 after fixing a duplicate-column bug in the test script: WR +0.061, TE +0.044 precision@10 on 2024 (recorded: +0.10 / +0.033). Same direction; not bit-reproducible; 2024 isn't new evidence, so the adoption stands.
+
 `evaluation/` holds the record of all eleven tests; don't re-litigate a rejected feature or modification without a genuinely new held-out test.
 
 ## Data sources
