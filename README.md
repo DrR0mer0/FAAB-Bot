@@ -13,8 +13,9 @@ A weekly league recap layer (Yahoo Fantasy API, read-only) is built: daily leagu
 O.D.D.S. is a **ranking** tool, not a predictor of individual outcomes. Honest numbers from a strict out-of-time test (trained 2010–2024, evaluated once on 2025, using the 10-feature set that predated Group 1 below):
 
 - **Precision@10: ~28%** — of the model's ten highest-ranked candidates in a given week, roughly three actually spike
-- Base rate for a spike is ~4.3%, so this is a **~6–7x lift over random**
-- PR-AUC ~0.21
+- Base rate for a spike among QB/RB/WR/TE — the only positions it ranks — was ~12.7% in 2025, so this is a **~2.2x lift over random**
+- This page used to claim ~6–7x, measured against ~4.3%: the spike rate over every player-week in the data, two thirds of which are defenders, linemen and kickers who almost never spike, so that figure overstated the lift about 3x
+- PR-AUC ~0.21 — computed over all positions, including ~11.8k non-skill rows (two thirds of the 2025 test set) that are easy negatives, so it likely overstates PR-AUC for the QB/RB/WR/TE players the model actually ranks (not re-measured; that belongs with the next retrain)
 
 That's a useful weekly signal and nothing more. It will be wrong most of the time, by design — it's surfacing candidates worth a closer look, not making calls.
 
