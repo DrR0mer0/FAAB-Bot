@@ -29,13 +29,16 @@ sys.path.insert(0, str(REPO_ROOT / "model"))
 from features_lib import PRODUCTION_FEATURE_COLS, FeatureEngine, RECEIVING_OPPORTUNITY_FEATURES
 from metrics import POSITIONS, mean_precision_at_k, per_position_report
 
-# Current production feature set (features_lib.PRODUCTION_FEATURE_COLS --
-# what train_production_model.py actually trains on). Deliberately NOT
+# Baseline = the 10-feature production set this test was run against:
+# features_lib.PRODUCTION_FEATURE_COLS minus the Group 1 features, which
+# were promoted into it after this test. Deliberately NOT
 # features_lib.PERSISTED_FEATURE_COLS, which also carries the rejected
 # share_delta_vs_prior_season (see features_lib.py for why the two differ).
-BASE_FEATURE_COLS = PRODUCTION_FEATURE_COLS
+BASE_FEATURE_COLS = [c for c in PRODUCTION_FEATURE_COLS if c not in RECEIVING_OPPORTUNITY_FEATURES]
 CANDIDATE_FEATURES = RECEIVING_OPPORTUNITY_FEATURES
 ALL_COLS = BASE_FEATURE_COLS + CANDIDATE_FEATURES
+# A repeated name would make df[c] a DataFrame instead of a column.
+assert len(set(ALL_COLS)) == len(ALL_COLS), f"duplicate feature columns: {ALL_COLS}"
 
 TRAIN_SEASONS = [s for s in range(2010, 2024) if s != 2019]  # 2010-2023, no 2019
 TEST_SEASON = 2024
