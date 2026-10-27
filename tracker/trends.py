@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS tr_trend_outcomes (
   hit INTEGER,
   value REAL,
   detail TEXT,
+  inputs_fingerprint TEXT,
   trend_hash TEXT NOT NULL,
   computed_at TEXT NOT NULL,
   PRIMARY KEY (run_id, metric, player_id, trend_hash)
@@ -77,8 +78,43 @@ CREATE TABLE IF NOT EXISTS tr_trend_outcomes (
 
 def init_schema(con):
     con.executescript(DDL)
+    # the inputs fingerprint (from 2026-10-27, before the first real outcome was stored); ALTER keeps the triggers
+    if "inputs_fingerprint" not in ledger.table_columns(con, "tr_trend_outcomes"):
+        con.execute("ALTER TABLE tr_trend_outcomes ADD COLUMN inputs_fingerprint TEXT")
     ledger.create_append_only_triggers(con, "tr_trend_outcomes")
     con.commit()
+
+
+# What an outcome READ, so a later stat correction can be noticed (the storage half of the backlog item; the
+# compare-and-warn half is not built). Modelled on scoring.stats_fingerprint: a version prefix and a SHA-256 over
+# exactly the inputs, rounded, in a fixed order -- unaffected by row order, by weeks added later or by players the
+# outcome never looked at. NOT part of the trend hash: the definitions and their hash are untouched.
+INPUTS_FINGERPRINT_VERSION = "tf1"
+STATS_METRICS = ("payoff", "snap_growth", "target_growth")     # crowd / league_add read no stats: no fingerprint
+
+
+def inputs_fingerprint(items):
+    return f"{INPUTS_FINGERPRINT_VERSION}:" + hashlib.sha256(json.dumps(items, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _r(x):
+    return None if x is None else round(float(x), 4)
+
+
+def payoff_inputs(store, season_data, pid, season, week, pc):
+    """The baseline games (season, week, league points) and, for each of weeks W..W+3, his team, whether it had a game
+    and his league points -- everything a payoff outcome reads."""
+    base = [["base", s, w, _r(pts)] for s, w, pts, _ts in store.history_before(pid, season, week, pc["baseline_games"])]
+    weeks = [["week", w, season_data.team_of(pid, w), season_data.played(pid, w), _r(season_data.points(pid, w))]
+             for w in range(week, week + pc["weeks"])]
+    return base + weeks
+
+
+def role_inputs(season_data, pid, week, kind, role):
+    """For each week of W-3..W-1 and W..W+2: his team, whether it had a game and the share read (snap or target)."""
+    value = season_data.snap_share if kind == "snap" else season_data.target_share
+    return [[w, season_data.team_of(pid, w), season_data.played(pid, w), _r(value(pid, w))]
+            for w in range(week - role["before_weeks"], week + role["after_weeks"])]
 
 
 def trend_hash(cfg):
@@ -246,9 +282,15 @@ def run_outcomes(con, store, run, metric, cfg, season_data):
     out = []
 
     def row(p, eligible, hit=None, value=None, **detail):
+        fp = None
+        if metric == "payoff":
+            fp = inputs_fingerprint(payoff_inputs(store, season_data, p["player_id"], run["season"], w, t["payoff"]))
+        elif metric in ("snap_growth", "target_growth"):
+            fp = inputs_fingerprint(role_inputs(season_data, p["player_id"], w, "snap" if metric == "snap_growth" else "target",
+                                                t["role"]))
         out.append({"player_id": p["player_id"], "position": p["position"], "eligible": int(eligible),
                     "hit": None if hit is None else int(hit), "value": None if value is None else round(float(value), 4),
-                    "detail": json.dumps(detail, sort_keys=True) if detail else None})
+                    "detail": json.dumps(detail, sort_keys=True) if detail else None, "inputs_fingerprint": fp})
 
     if metric == "payoff":
         pc = t["payoff"]

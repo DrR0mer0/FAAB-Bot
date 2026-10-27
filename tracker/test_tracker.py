@@ -2592,6 +2592,48 @@ class TestTrends(unittest.TestCase):
         self.assertEqual(list(written), [("r4", "league_add")])
         self.assertFalse(path.exists())
 
+    def test_stats_outcomes_store_a_fingerprint_of_exactly_the_inputs_they_read(self):
+        before = trends.trend_hash(CFG)
+        self.compute()
+        rows = {(r["metric"], r["player_id"]): r["inputs_fingerprint"] for r in self.con.execute(
+            "SELECT metric, player_id, inputs_fingerprint FROM tr_trend_outcomes WHERE run_id='r4'")}
+        for metric in trends.METRICS:
+            fps = [fp for (m, _p), fp in rows.items() if m == metric]
+            if metric in trends.STATS_METRICS:
+                self.assertTrue(all(fp and fp.startswith("tf1:") for fp in fps), metric)   # ineligible rows too
+            else:
+                self.assertTrue(all(fp is None for fp in fps), metric)                     # crowd / league add read no stats
+        self.assertEqual(trends.trend_hash(CFG), before)                                     # the definitions' hash is untouched
+        # a correction to p30's week-5 points moves his payoff fingerprint only; nobody else's, and not his role inputs
+        stats = (self.raw / "stats_player_week_2026.csv").read_text(encoding="utf-8").splitlines()
+        edited = [ln.replace(",200,0.3", ",210,0.3", 1) if ln.startswith("p30,2026,5,") else ln for ln in stats]
+        corrected = Path(self.tmp.name) / "corrected"
+        corrected.mkdir()
+        (corrected / "stats_player_week_2026.csv").write_text("\n".join(edited) + "\n", encoding="utf-8")
+        store2 = scoring.StatsStore(corrected, RULES)
+        run = self.con.execute("SELECT * FROM tr_runs WHERE run_id='r4'").fetchone()
+        again = {(m, r["player_id"]): r["inputs_fingerprint"] for m in ("payoff", "target_growth")
+                 for r in trends.run_outcomes(self.con, store2, run, m, CFG, trends.Season(self.con, store2, 2026))}
+        changed = sorted(k for k, fp in again.items() if fp != rows[k])
+        self.assertEqual(changed, [("payoff", "p30")])
+        same = {k: fp for k, fp in again.items() if k != ("payoff", "p30")}
+        self.assertEqual(same, {k: rows[k] for k in same})                                   # deterministic for the rest
+
+    def test_an_older_trend_table_gains_the_fingerprint_column_and_stays_append_only(self):
+        old = sqlite3.connect(":memory:")
+        self.addCleanup(old.close)
+        old.execute("CREATE TABLE tr_trend_outcomes (run_id TEXT NOT NULL, metric TEXT NOT NULL, player_id TEXT NOT NULL, position TEXT, "
+                    "eligible INTEGER NOT NULL, hit INTEGER, value REAL, detail TEXT, trend_hash TEXT NOT NULL, computed_at TEXT NOT NULL, "
+                    "PRIMARY KEY (run_id, metric, player_id, trend_hash))")
+        ledger.create_append_only_triggers(old, "tr_trend_outcomes")
+        old.execute("INSERT INTO tr_trend_outcomes VALUES ('r', 'payoff', 'p', 'WR', 1, 0, 0.0, NULL, 'h', 't')")
+        trends.init_schema(old)
+        trends.init_schema(old)                                                              # twice is harmless
+        self.assertIn("inputs_fingerprint", ledger.table_columns(old, "tr_trend_outcomes"))
+        self.assertEqual(old.execute("SELECT inputs_fingerprint FROM tr_trend_outcomes").fetchall(), [(None,)])
+        with self.assertRaisesRegex(sqlite3.DatabaseError, "UPDATE on tr_trend_outcomes is blocked"):
+            old.execute("UPDATE tr_trend_outcomes SET hit=1")
+
     def test_stored_outcomes_cannot_be_updated(self):
         self.compute()
         with self.assertRaisesRegex(sqlite3.DatabaseError, "UPDATE on tr_trend_outcomes is blocked"):
