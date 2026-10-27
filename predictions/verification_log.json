@@ -67,6 +67,33 @@
         "source": "nflverse",
         "excluded": 0
       }
+    },
+    {
+      "changed_at": "2026-10-27T16:51:25.238831+00:00",
+      "first_week_applied": {
+        "season": 2026,
+        "week": 8
+      },
+      "score_week_git_commit": "571294dd2a51660cec867d2c3974b875b53d4950",
+      "note": "From 2026 week 8 (pool rule v4), two changes to model/score_week.py's suppressions. (a) Yahoo's current player status can overrule a long-term EXE / RES / PUP / SUS on nflverse's weekly roster: a player Yahoo says may play (no status, Q, GTD; never D) is scored (yahoo_status_override_list), subject to the Out/Doubtful rule. Found: nflverse kept Josh Jacobs on the exempt list in week 7 after his reinstatement. (b) A player whose trailing 3-game window holds a game for a team other than his current weekly-roster team is not scored, whatever his current-season game count (team_changed_watch_list if his most recent game was for another team, mixed_window_watch_list if an earlier one was). Before this, 3+ current-season games released a player traded mid-season onto his old team's usage (Marvin Harrison Jr., ARI, ARI, HOU, ranked #91 in week 7), and an offseason mover with 1-2 games for his new team was ranked on a window reaching back to the old one (Dameon Pierce, production's #1 in week 7; Audric Estime, #25). Week 7's first snapshot (predictions/2026_week07.json, the thu run of 2026-10-22) is frozen as logged under v3. Replayed under v4 on a scratch copy with that run's own inputs, its top 10 / top 25 would lose the players counted below (and gain the next-ranked ones); Jacobs would enter at production #226. Do not compare week 7's precision with later weeks' without accounting for that.",
+      "week_7_first_snapshot_players_v4_would_not_rank": {
+        "production": {
+          "top_10": 1,
+          "top_25": 2,
+          "names_top_25": [
+            "Dameon Pierce",
+            "Audric Estime"
+          ]
+        },
+        "shadow": {
+          "top_10": 2,
+          "top_25": 2,
+          "names_top_25": [
+            "Dameon Pierce",
+            "Pierre Strong"
+          ]
+        }
+      }
     }
   ],
   "weeks": [
