@@ -119,7 +119,8 @@ class BuildError(Exception):
 
 
 def connect_ro(path):
-    con = sqlite3.connect(f"file:{Path(path).as_posix()}?mode=ro", uri=True)
+    # a busy timeout like the writers' (ledger / league_data: 30 s), so a reader never gives up while a log job writes
+    con = sqlite3.connect(f"file:{Path(path).as_posix()}?mode=ro", uri=True, timeout=30)
     con.row_factory = sqlite3.Row
     return con
 
