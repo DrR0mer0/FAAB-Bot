@@ -3476,5 +3476,71 @@ class TestReportMath(unittest.TestCase):
         self.assertEqual(report.fmt_hits(None, 0), "-")
 
 
+class TestStartsitTasksInTheRunner(unittest.TestCase):
+    """scheduled_run.py's install / status / uninstall know the two start/sit tasks (registered by startsit/autorun.py)."""
+
+    def test_names_match_what_autorun_registers(self):
+        import sys
+        sys.path.insert(0, str(scheduled_run.REPO_ROOT / "startsit"))
+        import autorun
+        self.assertEqual(scheduled_run.STARTSIT_TASKS, tuple(t["task"] for t in autorun.TASKS.values()))
+        self.assertEqual([scheduled_run.startsit_task_name(t) for t in scheduled_run.STARTSIT_TASKS],
+                         [autorun.task_path(j) for j in autorun.TASKS])
+
+    def test_install_job_startsit_registers_only_the_start_sit_tasks(self):
+        calls = []
+        with mock.patch.object(scheduled_run.subprocess, "run",
+                               side_effect=lambda argv, **k: calls.append(argv) or mock.Mock(returncode=0, stdout="pc-user\n", stderr="")), \
+                mock.patch.object(scheduled_run, "install_startsit", return_value=0) as inst:
+            self.assertEqual(scheduled_run.main(["install", "--job", "startsit"]), 0)
+        inst.assert_called_once()
+        self.assertEqual(calls, [["whoami"]])                     # no schtasks /Create for the four fixed tasks
+
+    def test_status_and_uninstall_cover_them(self):
+        seen = []
+        fake = lambda argv, **k: seen.append(argv) or mock.Mock(returncode=1, stdout="", stderr="not found")
+        with mock.patch.object(scheduled_run.subprocess, "run", side_effect=fake), \
+                mock.patch.object(scheduled_run, "LOG_DIR", Path(tempfile.mkdtemp())), contextlib.redirect_stdout(io.StringIO()):
+            scheduled_run.main(["status"])
+            scheduled_run.main(["uninstall"])
+        names = [a[a.index("/TN") + 1] for a in seen if "/TN" in a]
+        for t in (r"\FAAB\startsit-plan", r"\FAAB\startsit-run"):
+            self.assertEqual(names.count(t), 2)                   # queried once, deleted once
+
+
+class TestDatabaseLocks(unittest.TestCase):
+    """A start/sit pre-lock run writes a league snapshot, and a log job doesn't wait for it: the tracker's connection
+    waits up to 30 s for a lock (Python's default is 5 s) rather than fail the run."""
+
+    def test_the_tracker_connection_has_a_30_second_busy_timeout(self):
+        with tempfile.TemporaryDirectory() as d:
+            con = ledger.connect(Path(d) / "t.db")
+            try:
+                self.assertEqual(con.execute("PRAGMA busy_timeout").fetchone()[0], 30000)
+            finally:
+                con.close()
+
+    def test_a_write_waits_for_another_writer_instead_of_failing(self):
+        with tempfile.TemporaryDirectory() as d:
+            db = Path(d) / "t.db"
+            con = ledger.connect(db)
+            other = sqlite3.connect(db, check_same_thread=False)
+            try:
+                con.execute("PRAGMA journal_mode=WAL")
+                con.execute("CREATE TABLE probe (x INTEGER)")
+                con.commit()
+                other.execute("BEGIN IMMEDIATE")                  # the other writer (a league snapshot) holds the lock ...
+                other.execute("INSERT INTO probe VALUES (1)")
+                release = threading.Timer(1.5, other.commit)       # ... for 1.5 s
+                release.start()
+                with con:
+                    con.execute("INSERT INTO probe VALUES (2)")    # waits, then goes through
+                release.join()
+                self.assertEqual(sorted(r[0] for r in con.execute("SELECT x FROM probe")), [1, 2])
+            finally:
+                other.close()
+                con.close()
+
+
 if __name__ == "__main__":
     unittest.main()

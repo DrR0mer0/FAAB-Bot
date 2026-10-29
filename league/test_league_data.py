@@ -962,5 +962,63 @@ class TestPrivacy(unittest.TestCase):
             self.assertIn(default.relative_to(league_data.REPO_ROOT).parts[0].split(".")[-1], ("league_data", "raw", "db"))
 
 
+class TestLocks(LeagueDataCase):
+    """A start/sit pre-lock run takes a snapshot while a tracker log job may be writing, and the log job doesn't wait
+    for it: the snapshot must hold the write lock only while it inserts, never during the Yahoo calls."""
+
+    def file_db(self):
+        db = self.dir / "file.db"
+        con = league_data.connect(db)
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("CREATE TABLE ref_players (player_id TEXT PRIMARY KEY, full_name TEXT, pos TEXT)")
+        con.commit()
+        return db, con
+
+    def test_no_write_lock_is_held_during_the_yahoo_calls(self):
+        db, con = self.file_db()
+        inner, probes = Yahoo(), []
+
+        class Probing:
+            def get(self_, url, timeout=None):
+                other = sqlite3.connect(db, timeout=0)        # fails at once if the snapshot holds the write lock
+                try:
+                    other.execute("BEGIN IMMEDIATE")
+                    other.rollback()
+                    probes.append(not con.in_transaction)
+                except sqlite3.OperationalError:
+                    probes.append(False)
+                finally:
+                    other.close()
+                return inner.get(url, timeout)
+
+        try:
+            self.assertEqual(con.execute("PRAGMA busy_timeout").fetchone()[0], 30000)
+            with mock.patch("sys.stderr", new_callable=io.StringIO):
+                summary = league_data.take_snapshot(con, KEY, self.dir / "raw", self.roster, now=NOW,
+                                                    fetcher=lambda k, **kw: league_data.fetch(k, session=Probing(), **kw))
+        finally:
+            con.close()
+        self.assertTrue(all(s["ok"] for s in summary.values()))
+        self.assertEqual(len(probes), len(inner.paths))
+        self.assertGreater(len(probes), 10)
+        self.assertTrue(all(probes))
+
+    def test_a_snapshot_waits_for_a_log_job_holding_the_lock(self):
+        db, con = self.file_db()
+        other = sqlite3.connect(db, check_same_thread=False)
+        try:
+            other.execute("BEGIN IMMEDIATE")                      # the log job is writing ...
+            release = threading.Timer(1.5, other.commit)          # ... for 1.5 s
+            release.start()
+            with mock.patch("sys.stderr", new_callable=io.StringIO):
+                summary = league_data.take_snapshot(con, KEY, self.dir / "raw", self.roster, now=NOW,
+                                                    fetcher=lambda k, **kw: league_data.fetch(k, session=Yahoo(), **kw))
+            release.join()
+        finally:
+            other.close()
+            con.close()
+        self.assertTrue(all(s["ok"] for s in summary.values()))
+
+
 if __name__ == "__main__":
     unittest.main()

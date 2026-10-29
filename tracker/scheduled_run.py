@@ -4,6 +4,7 @@ the commands that (un)register the tasks.
 
   python tracker/scheduled_run.py install        # register the four tasks below (re-run any time; it replaces them)
   python tracker/scheduled_run.py install --job league   # ...or just one of them
+  python tracker/scheduled_run.py install --job startsit # the start/sit tasks (startsit/autorun.py; not part of a plain install)
   python tracker/scheduled_run.py status
   python tracker/scheduled_run.py uninstall
   python tracker/scheduled_run.py run snapshot   # what a task runs; also fine by hand
@@ -16,6 +17,10 @@ the commands that (un)register the tasks.
   league     every day 06:35     league/league_data.py snapshot (the user's own Yahoo league: transactions, FAAB,
                                  rosters, scores), then league_data.py report. Separate from the tracker: no
                                  prediction run reads it, and its failure affects nothing else.
+  startsit   (from 2026 week 9; startsit/autorun.py, registered with --job startsit) two tasks whose triggers are
+             computed, not fixed: startsit-plan (daily 06:45) plans the week's preliminary and pre-lock start/sit
+             runs from the schedule and my roster, and registers them as one-shot triggers on startsit-run. Same
+             settings as the tasks above; see startsit/autorun.py and startsit/README.md.
 
 Every run writes its full output to tracker/logs/<timestamp>_<job>.log and one
 summary line to tracker/logs/scheduled_runs.log (both gitignored).
@@ -96,6 +101,9 @@ JOBS = {
                "description": "FAAB: daily snapshot of the Yahoo league (transactions, FAAB, rosters, scores) and its activity report"},
 }
 HEADLINE_TAGS = ("[LOGGED]", "[SKIP]", "[REFUSED]", "[OWNERSHIP]", "[LEAGUE DATA]")
+# Registered by startsit/autorun.py (install --job startsit), not from JOBS: their triggers are computed.
+STARTSIT_JOB = "startsit"
+STARTSIT_TASKS = ("startsit-plan", "startsit-run")
 
 
 def console_python():
@@ -328,9 +336,20 @@ def task_name(job):
     return f"\\{TASK_FOLDER}\\{JOBS[job]['task']}"
 
 
+def install_startsit(user, now):
+    """The plan task (daily 06:45), then one plan run, which registers the run task with the coming runs."""
+    sys.path.insert(0, str(REPO_ROOT / "startsit"))
+    import autorun
+    rc, msg = autorun.register(autorun.PLAN_JOB, autorun.plan_task_xml(user, now))
+    print(f"{autorun.task_path(autorun.PLAN_JOB)}: {msg}")
+    return rc or autorun.main(["plan", "--register"])
+
+
 def cmd_install(args):
     user = subprocess.run(["whoami"], capture_output=True, text=True, check=True).stdout.strip()
     now, rc = datetime.now(), 0
+    if args.job == STARTSIT_JOB:
+        return install_startsit(user, now)
     for job in ([args.job] if args.job else JOBS):
         override = args.snapshot_time if job == "snapshot" else args.log_time if "slot" in JOBS[job] else None
         xml = task_xml(job, user, now, override)
@@ -344,22 +363,29 @@ def cmd_install(args):
     return rc
 
 
+def startsit_task_name(task):
+    return f"\\{TASK_FOLDER}\\{task}"
+
+
 def cmd_uninstall(_args):
     rc = 0
     for job in JOBS:
         p = subprocess.run(["schtasks", "/Delete", "/TN", task_name(job), "/F"], capture_output=True, text=True)
         print(f"{task_name(job)}: {(p.stdout or p.stderr).strip()}")
         rc = rc or p.returncode
+    for task in STARTSIT_TASKS:      # registered only with --job startsit: absent is fine
+        p = subprocess.run(["schtasks", "/Delete", "/TN", startsit_task_name(task), "/F"], capture_output=True, text=True)
+        print(f"{startsit_task_name(task)}: {(p.stdout or p.stderr).strip()}")
     return rc
 
 
 def cmd_status(_args):
     keep = ("TaskName", "Next Run Time", "Status", "Last Run Time", "Last Result", "Task To Run", "Schedule Type",
             "Start Time", "Days")
-    for job in JOBS:
-        p = subprocess.run(["schtasks", "/Query", "/TN", task_name(job), "/V", "/FO", "LIST"], capture_output=True, text=True)
+    for name in [task_name(job) for job in JOBS] + [startsit_task_name(t) for t in STARTSIT_TASKS]:
+        p = subprocess.run(["schtasks", "/Query", "/TN", name, "/V", "/FO", "LIST"], capture_output=True, text=True)
         if p.returncode != 0:
-            print(f"{task_name(job)}: not registered ({p.stderr.strip()})")
+            print(f"{name}: not registered ({p.stderr.strip()})")
             continue
         print("\n".join(ln for ln in p.stdout.splitlines() if ln.split(":")[0].strip() in keep) + "\n")
     summary = LOG_DIR / SUMMARY_LOG
@@ -381,7 +407,8 @@ def main(argv=None):
     p = sub.add_parser("install", help="register (or replace) the scheduled tasks for the current user")
     p.add_argument("--snapshot-time", default=None, help="HH:MM local (default 06:30)")
     p.add_argument("--log-time", default=None, help="HH:MM local for both log jobs (default 07:00)")
-    p.add_argument("--job", choices=sorted(JOBS), default=None, help="register only this task and leave the others as they are")
+    p.add_argument("--job", choices=sorted(JOBS) + [STARTSIT_JOB], default=None,
+                   help="register only this task and leave the others as they are (startsit: the two start/sit tasks)")
     sub.add_parser("uninstall", help="remove the scheduled tasks")
     sub.add_parser("status", help="show the tasks and the last runs")
     p = sub.add_parser("popup")  # internal: the detached failure message box
