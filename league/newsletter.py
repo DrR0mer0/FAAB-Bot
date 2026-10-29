@@ -60,7 +60,7 @@ FLEX_LETTERS = {"Q": "QB", "W": "WR", "R": "RB", "T": "TE"}
 # fact fields whose values are names (a string or a list of strings): what check_text() treats as "a known name"
 NAME_KEYS = ("team", "manager", "player", "opponent", "winner", "team_a", "team_b", "next_team", "biggest_bid_team", "biggest_bid_added",
              "sit", "start", "added", "dropped", "old_name")
-PRINTED_TEXT_KEYS = NAME_KEYS + ("day",)      # strings a template prints verbatim, so digits inside them may appear in prose
+PRINTED_TEXT_KEYS = NAME_KEYS + ("day", "priority_as_of")      # strings a template prints verbatim, so digits inside them may appear in prose
 NUMBER = re.compile(r"(?<![\w.])\d+(?:\.\d+)?")
 
 
@@ -278,10 +278,13 @@ def build_facts(con, week, owner_team=None):
         for m in ld.bid_margins(activity, offers, t):
             facts.append(fact("bid_margin", f"team:{t}", week=week, team=name[t], added=m["added"], won_at=m["won_at"],
                               next_offer=m["next_offer"], next_team=name.get(m["next_team_id"]) if m["next_team_id"] else None,
-                              margin=m["margin"], losing_offers=m["n_offers"]))
+                              margin=m["margin"], losing_offers=m["n_offers"], by_priority=m["by_priority"]))
 
     # ---- owner only: who has been bidding, and what O.D.D.S. liked on this league's waiver wire
-    facts.append(fact("owner_team", "owner", team_id=owner_team, team=name[owner_team], manager=boss[owner_team]))
+    # waiver priority (owner only): Yahoo's order in the newest teams snapshot; it only breaks ties
+    as_of = f"{datetime.fromisoformat(snaps['teams'][1]):%Y-%m-%d %H:%M} UTC"
+    facts.append(fact("owner_team", "owner", team_id=owner_team, team=name[owner_team], manager=boss[owner_team],
+                      waiver_priority=teams[owner_team]["waiver_priority"], priority_as_of=as_of))
     first = max(min(weeks), week - ld.REPORT_WEEKS + 1)
     w_start = datetime.combine(weeks[first][0], datetime.min.time(), ld.LEAGUE_TZ)
     window = ld.team_activity(con, tx, w_start, end)
@@ -294,6 +297,7 @@ def build_facts(con, week, owner_team=None):
         facts.append(fact("bidder_profile", "owner", team=name[t], manager=boss[t], from_week=first, to_week=week, claims_won=won,
                           losing_bids=sum(1 for o in window_offers if o["losing_team_id"] == t), bids=bids.get(t, 0),
                           active=bids.get(t, 0) >= ld.ACTIVE_BIDDER_MIN, faab_remaining=teams[t]["faab_balance"],
+                          waiver_priority=teams[t]["waiver_priority"], priority_as_of=as_of,
                           basis="all bids" if window_offers else "winning claims only"))
     facts += odds_facts(con, season, week)
     return {"facts": facts}
@@ -502,7 +506,8 @@ def _team_sections(v, title):
         out += ["", "Winning bids this week:", ""]
         for m in margins:
             out.append(f"- {', '.join(m['added'])}: won at ${m['won_at']}"
-                       + (f", next offer ${m['next_offer']} ({m['next_team']}), margin ${m['margin']}" if m["next_offer"] is not None else
+                       + (f", next offer ${m['next_offer']} ({m['next_team']}), decided by waiver priority" if m.get("by_priority") else
+                          f", next offer ${m['next_offer']} ({m['next_team']}), margin ${m['margin']}" if m["next_offer"] is not None else
                           ", no losing offer entered (uncontested, or not typed in yet)"))
     return out
 
@@ -513,10 +518,17 @@ def _owner_sections(v):
     if profiles:
         p0 = profiles[0]
         out += [f"Bidding over weeks {p0['from_week']}-{p0['to_week']} ({p0['basis']}):", "",
-                "| Team | Manager | Claims won | Losing bids | Bids | Active bidder | FAAB left |", "|---|---|---:|---:|---:|---|---:|"]
+                "| Team | Manager | Claims won | Losing bids | Bids | Active bidder | FAAB left | Waiver priority |",
+                "|---|---|---:|---:|---:|---|---:|---:|"]
         for p in sorted(profiles, key=lambda p: -p["bids"]):
             out.append(f"| {p['team']} | {p['manager']} | {p['claims_won']} | {p['losing_bids']} | {p['bids']} | {'yes' if p['active'] else 'no'} | "
-                       f"{'?' if p['faab_remaining'] is None else '$' + str(p['faab_remaining'])} |")
+                       f"{'?' if p['faab_remaining'] is None else '$' + str(p['faab_remaining'])} | "
+                       f"{'?' if p.get('waiver_priority') is None else p['waiver_priority']} |")
+        me = _of(v, "owner_team")
+        if p0.get("priority_as_of"):
+            out += ["", f"Waiver priority = Yahoo's order as of {p0['priority_as_of']} (1 = first). It only breaks ties; the team that wins "
+                        "a tie drops to last, and other claims, paid or not, leave the order alone."
+                    + (f" Yours: {me[0]['waiver_priority']}." if me and me[0].get("waiver_priority") is not None else "")]
     for s in _of(v, "odds_available_summary"):
         out += ["", f"What O.D.D.S. ranked highest among players available in this league ({s['run_slot']} run): {s['spike_weeks']} of "
                     f"{s['listed']} had a spike week, {s['top_finishes']} a top finish.", ""]

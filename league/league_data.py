@@ -35,8 +35,17 @@ a CSV by hand (see LOSING BIDS below). Where none are entered, the report's
 $0 BIDS are interest, not price competition: they count toward the active-
 bidder flag, but the "paid bids" count, the "typical paid bid" (median) and
 the funded-active-bidder flag (active, at least one paid bid in the window,
-FAAB left >= FUNDED_MIN_FAAB) leave them out, and an award won at $0 over a
-$0 next offer is marked "decided by waiver priority".
+FAAB left >= FUNDED_MIN_FAAB) leave them out.
+TIES: an award whose winning bid equals the next offer entered -- at any
+amount, $0 over $0 or $5 over $5 -- was decided by waiver priority, and is
+marked so; one with no losing offer entered never is (a tie can't be seen).
+WAIVER PRIORITY (lg_teams.waiver_priority; the settings say waiver_type FR,
+uses_faab 1) only breaks ties. Checked 2026-10-29 against every daily teams
+snapshot since 2026-10-10: the one tie typed in (10-11, $0) went to the tied
+team with the better priority, which then dropped to last; none of the 16
+other awards up to the checked_through date (5 won on price, 11 uncontested,
+paid or $0) moved anyone. So a team drops to last only after an award that
+priority decided, not after any claim.
 Also current-only: FAAB balances (no history), though balance + winning bids
 reconciled to the $100 budget for all 12 teams on 2026-10-10.
 
@@ -1117,9 +1126,10 @@ def top_offers(offers):
 
 
 def by_priority(winning_amount, next_offer):
-    """An award won at $0 over a $0 next offer was decided by waiver priority,
-    not by price. Unknown (False) when no losing offer was entered."""
-    return winning_amount == 0 and next_offer == 0
+    """An award whose winning bid equals the next offer -- at any amount, $0
+    over $0 or $5 over $5 -- was decided by waiver priority, not by price.
+    Never (False) when no losing offer was entered: a tie can't be seen."""
+    return next_offer is not None and winning_amount is not None and winning_amount == next_offer
 
 
 def bid_margins(activity, offers, team_id):
@@ -1213,21 +1223,26 @@ def build_report(con, today=None, n_weeks=REPORT_WEEKS, team_id=None, funded_min
         "- **Paid bids** and **typical paid bid** (their median) count only bids above $0, winning and losing, on the same basis: "
         "a $0 bid is interest, not price competition.",
         f"- **Funded active bidder** = an active bidder with at least one paid bid in the window and at least ${funded_min:g} FAAB left.",
+        "- **Decided by waiver priority** = the winning bid equals the next offer entered, at any amount ($0 over $0, $5 over $5). "
+        "An award with no losing offer entered is never called one.",
+        f"- **Waiver priority** = Yahoo's order as of {stamp(snaps['teams'][1])} (1 = first). It only breaks ties; the team that wins "
+        "a tie drops to last, and other claims, paid or not, leave the order alone.",
         f"- Losing offers (bids.csv) checked through: "
         + (f"**{checked}** -- awards up to then with no rows were uncontested" if checked else
            "not set -- an award with no rows may be uncontested or not typed in yet (add a `# checked_through: YYYY-MM-DD` line)"),
         f"- Transaction ids in the window that Yahoo's list skips: {hidden} (probably failed waiver claims; Yahoo's API doesn't say whose)",
         "",
-        "| Team | Manager | FAAB left | Spent (season) | Claims won | Losing bids | Paid bids | Typical paid bid | Spent in window "
+        "| Team | Manager | FAAB left | Waiver priority | Spent (season) | Claims won | Losing bids | Paid bids | Typical paid bid | Spent in window "
         "| Free-agent adds | Drops | Trades | Active bidder | Funded active bidder |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
     ]
     for t in sorted(teams, key=lambda t: (-bids.get(t["team_id"], 0), t["team_id"])):
         evs = activity.get(t["team_id"], [])
         claims = [e for e in evs if e["waiver"]]
         lines.append(
             f"| {t['team_name']}{' (me)' if t['team_id'] == mine else ''} | {t['manager_nickname'] or ''} | "
-            f"{'?' if t['faab_balance'] is None else '$' + str(t['faab_balance'])} | ${season_spent.get(t['team_id'], 0)} | {len(claims)} | "
+            f"{'?' if t['faab_balance'] is None else '$' + str(t['faab_balance'])} | "
+            f"{'?' if t['waiver_priority'] is None else t['waiver_priority']} | ${season_spent.get(t['team_id'], 0)} | {len(claims)} | "
             f"{len(lost[t['team_id']]) if losing_known else 'n/a'} | {len(paid.get(t['team_id'], []))} | "
             f"{'$%g' % median(paid[t['team_id']]) if paid.get(t['team_id']) else '-'} | "
             f"${sum(e['faab_bid'] for e in claims)} | {sum(1 for e in evs if e['added'] and not e['waiver'] and e['type'] != 'trade')} | "
@@ -1241,7 +1256,8 @@ def build_report(con, today=None, n_weeks=REPORT_WEEKS, team_id=None, funded_min
         lines.append("No winning waiver claims in the window.")
     for m in won:
         if m["by_priority"]:
-            lines.append(f"- {day(m['when'])} -- {', '.join(m['added'])}: won at $0, next offer $0 ({name.get(m['next_team_id'], '?')})"
+            lines.append(f"- {day(m['when'])} -- {', '.join(m['added'])}: won at ${m['won_at']}, next offer ${m['next_offer']} "
+                         f"({name.get(m['next_team_id'], '?')})"
                          f"{priority}" + (f", {m['n_offers']} losing offers" if m["n_offers"] > 1 else "")
                          + ("" if m["check"] == "ok" else " -- CHECK: the typed winner doesn't match Yahoo's, see below"))
         elif m["next_offer"] is not None:

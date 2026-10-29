@@ -192,8 +192,8 @@ class TestFacts(NewsletterCase):
                           ("Team Name 4", "Other Claim", 3, "Team Name 1", 10)])
         self.assertTrue(all(b["audience"] == "league" and "typed by hand" in b["source"] for b in self.of("losing_bid")))
         m = self.one("bid_margin", team="Team Name 3")                             # a team's own margin is for that team
-        self.assertEqual((m["audience"], m["won_at"], m["next_offer"], m["next_team"], m["margin"], m["losing_offers"]),
-                         ("team:3", 27, 20, "Team Name 1", 7, 2))
+        self.assertEqual((m["audience"], m["won_at"], m["next_offer"], m["next_team"], m["margin"], m["losing_offers"], m["by_priority"]),
+                         ("team:3", 27, 20, "Team Name 1", 7, 2, False))
         self.assertEqual(self.one("bid_margin", team="Team Name 1")["audience"], "team:1")
 
     def test_owner_facts_bidding_profiles_and_what_odds_liked_on_the_wire(self):
@@ -281,6 +281,16 @@ class TestAudiences(NewsletterCase):
                     self.assertNotIn("## Owner only", text)
                     others = [t for t in (1, 2, 3, 4) if audience != f"team:{t}"]
                     self.assertFalse([t for t in others if f"TEAMONLY{t}N" in text or f"7{t}00" in text])    # ...nor another team's
+        # a tie decided by waiver priority is a team fact too: only that team (and the owner, for his own team) sees it
+        for f in data["facts"]:
+            if f["kind"] == "bid_margin" and f["audience"] == "team:3":
+                f["by_priority"] = True
+        self.assertIn("decided by waiver priority", newsletter.render_recap(data, "team:3"))
+        self.assertIn("decided by waiver priority", newsletter.render_recap(data, "owner"))
+        for audience in ("league", "team:1", "team:2", "team:4"):
+            with self.subTest(audience=audience):
+                self.assertNotIn("decided by waiver priority", newsletter.render_recap(data, audience))
+        self.assertNotIn("decided by waiver priority", newsletter.render_group_chat(data))
         self.assertIn("TEAMONLY4N", newsletter.render_recap(data, "team:4"))      # a team does get its own
         self.assertIn("7400", newsletter.render_recap(data, "team:4"))
         self.assertIn("9000", newsletter.render_recap(data, "owner"))
@@ -297,7 +307,15 @@ class TestAudiences(NewsletterCase):
         extra = owner[len(league.rstrip("\n")):]
         self.assertIn("## For this team only: Team Name 3", extra)
         self.assertIn("Big Claim (QB, KC): won at $27, next offer $20 (Team Name 1), margin $7", extra)
-        self.assertIn("| Team Name 1 | Nick1 | 1 | 2 | 3 | yes | $90 |", extra)
+        self.assertIn("| Team Name 1 | Nick1 | 1 | 2 | 3 | yes | $90 | 1 |", extra)        # waiver priority last
+        self.assertIn("Waiver priority = Yahoo's order as of 2026-10-10 13:35 UTC (1 = first). It only breaks ties", extra)
+        self.assertIn("Yours: 3.", extra)                                          # the owner's own team isn't in the table
+        self.assertEqual({(p["team"], p["waiver_priority"]) for p in self.of("bidder_profile")},
+                         {("Team Name 1", 1), ("Team Name 2", 2), ("Team Name 4", 4)})
+        self.assertEqual(self.one("owner_team")["waiver_priority"], 3)
+        for audience in ("league", "team:1", "team:2", "team:3", "team:4"):
+            self.assertNotIn("Waiver priority", newsletter.render_recap(self.data, audience))
+        self.assertNotIn("Waiver priority", newsletter.render_group_chat(self.data))
         self.assertIn("- No. 1: Secret Sleeper (WR, KC; free agent) -- 22.57 points, spike week", extra)
         self.assertIn("- No. 3: Quiet Stash (WR, KC; free agent) -- 0.00 points, did not play", extra)
         self.assertNotIn("Bench RB 4", extra)                                      # team 4's swap is team 4's business
@@ -307,6 +325,17 @@ class TestAudiences(NewsletterCase):
 
 
 class TestRenderingsAndCheck(NewsletterCase):
+    def test_a_tie_reads_decided_by_waiver_priority_not_margin_0(self):
+        data = copy.deepcopy(self.data)
+        m = next(f for f in data["facts"] if f["kind"] == "bid_margin" and f["audience"] == "team:3")
+        m.update(next_offer=27, margin=0, by_priority=True)              # as if Team Name 1 had offered $27 too
+        text = newsletter.render_recap(data, "team:3")
+        self.assertIn("- Big Claim (QB, KC): won at $27, next offer $27 (Team Name 1), decided by waiver priority", text)
+        self.assertNotIn("margin $0", text)
+        self.assertEqual(newsletter.check_text(text, data, "team:3"), [])
+        del m["by_priority"]                                              # a facts.json written before the field: margin as before
+        self.assertIn("next offer $27 (Team Name 1), margin $0", newsletter.render_recap(data, "team:3"))
+
     def test_league_recap_prints_the_facts(self):
         md = newsletter.render_recap(self.data, "league")
         self.assertIn("# Week 4 recap", md)
