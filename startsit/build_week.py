@@ -42,6 +42,12 @@ WHERE EACH FIELD COMES FROM
                       Josh Jacobs on the exempt list after his reinstatement;
                       Yahoo had tracked it (CEL on 10-15, nothing on 10-22) while
                       ESPN said DAY_TO_DAY throughout. CUT / RET stay as is.
+                      The other direction, for MY players, in every stage (from
+                      2026-10-28): if Yahoo's current status means he can't play
+                      (play chance 0: O, NA, IR, PUP, NFI, SUSP, CEL -- e.g. a
+                      game-day inactive), it wins over a healthier nflverse /
+                      injury-report reading, also as a STATUS CONFLICT (kind
+                      "yahoo out"). Opponent starters keep the usual reading.
   p10 / p50 / p90     a projection provider (startsit/projections.py). A player
                       of MINE with no p50 is DROPPED with a warning: the
                       simulator must never start or bench someone on an invented
@@ -237,7 +243,8 @@ def build_week(con, season, week, stage, team_id=None, provider=None, as_of=None
                 if long_term in OVERRIDABLE and yahoo is not None and play_chance(yahoo) > 0:
                     # Yahoo's current status says he may play: it wins over the weekly roster, never silently
                     status = designation if yahoo == "ACTIVE" else yahoo
-                    conflicts.append({"name": r["name"], "gsis_id": gsis, "nflverse_weekly_roster": long_term,
+                    conflicts.append({"name": r["name"], "gsis_id": gsis, "kind": "long-term overruled",
+                                      "nflverse_weekly_roster": long_term,
                                       "yahoo": raw_yahoo, "injury_report": inj["status"].get(gsis), "espn": espn_raw.get(gsis),
                                       "used": status or "available", "play_chance": play_chance(status)})
                 if espn is not None and (play_chance(espn) > 0) != (play_chance(status) > 0):
@@ -245,12 +252,25 @@ def build_week(con, season, week, stage, team_id=None, provider=None, as_of=None
                                       f"{'in' if play_chance(status) > 0 else 'out'} ({status or 'available'}) -- cross-check only")
             elif designation:
                 status = designation
+            if side == "mine" and yahoo is not None and play_chance(yahoo) == 0 and play_chance(status) > 0:
+                # Yahoo's current status says one of MY players can't play (O, NA, IR, ...; e.g. a game-day inactive):
+                # it wins over a healthier nflverse / injury-report reading, in every stage, and never silently (2026-10-28)
+                conflicts.append({"name": r["name"], "gsis_id": gsis, "kind": "yahoo out", "nflverse_weekly_roster": long_term,
+                                  "yahoo": raw_yahoo, "injury_report": inj["status"].get(gsis), "espn": espn_raw.get(gsis),
+                                  "was": status or "available", "used": yahoo, "play_chance": 0.0})
+                status = yahoo
             players[side].append({"id": r["external_id"], "name": r["name"], "pos": r["position"], "team": team, "opp": opp,
                                   "status": status, "gsis_id": gsis, "yahoo_slot": r.get("selected_position"),
                                   "_kickoff": kickoff, "_points": r.get("points")})
     for c in conflicts:
         yahoo_said = f"Yahoo shows {'no status' if c['yahoo'] == '' else c['yahoo']}"
         extra = "; ".join(f"{k} {c[k2]}" for k, k2 in (("injury report", "injury_report"), ("ESPN", "espn")) if c[k2])
+        if c["kind"] == "yahoo out":
+            nfl = c["nflverse_weekly_roster"]
+            warnings.append(f"STATUS CONFLICT: {c['name']} -- {yahoo_said}, but the file had him {c['was']} (nflverse's weekly "
+                            f"roster {nfl or 'no row'}" + (f"; {extra}" if extra else "") + f"). Using Yahoo: {c['used']} "
+                            f"(play chance 0.00) -- check him before relying on this lineup")
+            continue
         warnings.append(f"STATUS CONFLICT: {c['name']} -- nflverse's weekly roster says {c['nflverse_weekly_roster']}, but {yahoo_said}"
                         + (f" ({extra})" if extra else "") + f". Using Yahoo: {c['used']} (play chance {c['play_chance']:.2f}) -- "
                         f"check him before relying on this lineup")

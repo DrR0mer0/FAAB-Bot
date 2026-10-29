@@ -288,6 +288,41 @@ class TestStatusConflicts(BuildCase):
         self.assertTrue(any("unknown Yahoo status 'WEIRD'" in w for w in warnings))
 
 
+class TestYahooOutCodes(BuildCase):
+    """Yahoo's current status says one of my players can't play: it wins over a healthier reading (2026-10-28)."""
+
+    def with_yahoo(self, statuses, taken="2026-10-22T13:40:00+00:00"):
+        sid = self.snap("rosters", taken)
+        self.con.executemany("INSERT INTO lg_rosters (snapshot_id, week, team_id, external_id, player_id, name, position, team, "
+                             "selected_position, status) VALUES (?, 7, ?, ?, ?, ?, ?, ?, ?, ?)",
+                             [(sid, t, y, g, n, p, tm, slot, statuses.get(g, "")) for y, g, n, p, tm, slot, t in ROSTER])
+        self.con.commit()
+
+    def test_a_yahoo_out_code_wins_over_a_healthier_reading_for_my_players(self):
+        # Ira: nflverse RES -> IR already out, Yahoo agrees: no conflict. Reed: healthy everywhere, Yahoo O (a game-day
+        # inactive). Flex: Questionable on the report, Yahoo NA. Quinn: healthy, Yahoo IR. Oren (opponent): Doubtful, Yahoo O.
+        self.with_yahoo({"g-ir": "IR", "g-rb2": "O", "g-flex": "NA", "g-qb": "IR", "g-orb": "O"})
+        for stage, as_of in (("thursday", AS_OF), ("sunday", AS_OF)):
+            wf, warnings = self.build(stage, as_of=as_of)
+            mine = self.by_name(wf)
+            self.assertEqual((mine["Reed Mine"]["status"], mine["Flex Iffy"]["status"], mine["Quinn Mine"]["status"]),
+                             ("O", "O", "IR"), stage)
+            self.assertEqual(self.by_name(wf, "opponent", "starters")["Oren Rb"]["status"], "D")   # opponents: the usual reading
+            out = {c["name"]: c for c in wf["_meta"]["status_conflicts"] if c["kind"] == "yahoo out"}
+            self.assertEqual(set(out), {"Reed Mine", "Flex Iffy", "Quinn Mine"})
+            self.assertEqual((out["Flex Iffy"]["was"], out["Flex Iffy"]["used"], out["Flex Iffy"]["injury_report"]), ("Q", "O", "Questionable"))
+            self.assertEqual((out["Reed Mine"]["was"], out["Reed Mine"]["play_chance"]), ("available", 0.0))
+            self.assertTrue(any(w.startswith("STATUS CONFLICT: Reed Mine -- Yahoo shows O, but the file had him available "
+                                             "(nflverse's weekly roster ACT). Using Yahoo: O (play chance 0.00)") for w in warnings))
+            players = {p.name: p for p in lineup_sim.parse_week(wf)[2]}
+            self.assertEqual(players["Reed Mine"].play_prob, 0.0)
+        # Yahoo D is not an out code (play chance 0.30): nothing changes, as before
+        self.with_yahoo({"g-rb2": "D"}, taken="2026-10-22T13:45:00+00:00")
+        wf, _w = self.build()
+        self.assertNotIn("status", self.by_name(wf)["Reed Mine"])
+        self.assertEqual([c for c in wf["_meta"]["status_conflicts"] if c["kind"] == "yahoo out"], [])
+
+
 class TestBaseline(BuildCase):
     def provider(self):
         store = projections.scoring.StatsStore(self.raw, projections.scoring.load_config()["scoring"])
