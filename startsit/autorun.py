@@ -13,8 +13,10 @@ WHAT RUNS, AND WHEN (local time; computed, never typed in)
   pre-lock     for every kickoff time at which one of MY rostered players (starters or bench; not IR / IR+ / NA)
                plays, 60 minutes before kickoff -- after inactives (about 90 minutes before; Yahoo needs a while to show
                them) and before the lock:
-               a fresh league snapshot (current locks, lineup and Yahoo statuses), then build_week.py --stage
-               sunday --run as of now. Opponent-only kickoffs get no run.
+               a fresh league snapshot (current locks, lineup and Yahoo statuses), Yahoo's live points of my team and
+               my opponent for the week (two read-only calls; build_week.py --live-points scores a locked player
+               from them once his game is over), then build_week.py --stage sunday --run as of now. Opponent-only
+               kickoffs get no run.
   No run after the league's end_week (Yahoo settings; 17), and none in a week where my team has no matchup on
   Yahoo's scoreboard (a playoff bye, or eliminated -- a consolation game counts as eliminated). A week whose
   matchups aren't on record yet (Yahoo publishes a week's matchups in Tuesday's 06:35 snapshot) gets no run
@@ -78,6 +80,7 @@ for d in ("league", "tracker", "model", "data"):
 sys.path.insert(0, str(HERE))
 
 import build_week as bw  # noqa: E402
+import league_availability  # noqa: E402 -- the Yahoo session and league key (tracker/)
 import league_data as ld  # noqa: E402
 import lineup_sim  # noqa: E402
 import scheduled_run as sr  # noqa: E402 -- the runner's log, message box and step runner (read-only use)
@@ -367,6 +370,46 @@ def compare(week_file, report, yahoo_starters):
     return {"start": start, "bench": bench, "margin": margin, "text": f"{what} -- {how}"}
 
 
+# ------------------------------------------------------------------ Yahoo's live points
+
+LIVE_PATH = "team/{key}.t.{team}/roster;week={week}/players/stats;type=week;week={week}?format=json"
+LIVE_BUDGET_S = 90
+
+
+def fetch_live_points(week, team_ids, league_key=None, session=None, budget_s=LIVE_BUDGET_S):
+    """Yahoo's points so far this week for every player on these teams' rosters -- the same call league_data.py makes
+    for a completed week's final lineup, made for the week in progress. Read-only. -> {ok, points {yahoo id: points},
+    error, raw_bytes}. Never raises, and gives up after budget_s (the token refresh has no timeout of its own)."""
+    box = {}
+
+    def work():
+        out = {"ok": False, "points": {}, "error": None, "raw_bytes": None}
+        key = league_key or league_availability.configured_league_key()
+        try:
+            if not key:
+                raise RuntimeError("no league is configured (YAHOO_LEAGUE_KEY in league/.env)")
+            sess = session or league_availability.open_session()
+            pages = []
+            for team in team_ids:
+                resp = sess.get(ld.API + LIVE_PATH.format(key=key, team=team, week=week), timeout=30)
+                pages.append({"team_id": team, "http_status": resp.status_code, "body": resp.text})
+                if resp.status_code != 200:
+                    raise RuntimeError(f"HTTP {resp.status_code} for team {team}")
+            out["raw_bytes"] = json.dumps({"week": week, "pages": pages}, sort_keys=True).encode("utf-8")
+            rows = ld.parse_lineups([json.loads(pg["body"]) for pg in pages])
+            out["points"] = {r["external_id"]: r["points"] for r in rows if r["week"] == week}
+            out["ok"] = True
+        except (Exception, SystemExit) as e:  # noqa: BLE001 -- a missing view, not a failed run
+            out["error"] = f"{type(e).__name__}: {e}".replace(key or "<none>", "<league>")
+        box["out"] = out
+
+    import threading
+    t = threading.Thread(target=work, daemon=True)
+    t.start()
+    t.join(budget_s)
+    return box.get("out") or {"ok": False, "points": {}, "error": f"no answer from Yahoo within {budget_s}s", "raw_bytes": None}
+
+
 # ------------------------------------------------------------------ notifications
 
 TOAST_PS = r"""
@@ -606,7 +649,31 @@ def snapshot_age(con, now):
     return None if snap is None else now - datetime.fromisoformat(snap[1])
 
 
-def run_entry(entry, now, db, raw_dir, league_raw_dir, out_dir, run=sr.run_step, as_of=None, take_snapshot=None):
+def write_live_points(entry, now, db, out_dir, fetch=None):
+    """Fetch my team's and my opponent's live points for a pre-lock run and keep them beside its report.
+    -> (path or None, note for the log)."""
+    con = bw.connect_ro(db)
+    try:
+        me = ld.default_team(con)
+        opp = bw.opponent_of(con, entry["week"], me) if me is not None else None
+    finally:
+        con.close()
+    if me is None:
+        return None, "live points: no team of mine in the snapshot"
+    got = (fetch or fetch_live_points)(entry["week"], [t for t in (me, opp) if t is not None])
+    if not got["ok"]:
+        return None, f"live points unavailable ({got['error']}) -- locked players are scored from nflverse or projected"
+    stem = output_stem(entry, out_dir)
+    path = Path(f"{stem}_live.json")
+    path.write_text(json.dumps({"fetched_at": now.isoformat(timespec="seconds"), "week": entry["week"], "team_ids": [me, opp],
+                                "points": got["points"]}, indent=1), encoding="utf-8")
+    if got.get("raw_bytes"):
+        Path(f"{stem}_live_raw.json.gz").write_bytes(gzip.compress(got["raw_bytes"]))
+    return path, f"live points: {len(got['points'])} player(s) from Yahoo -> {path.name}"
+
+
+def run_entry(entry, now, db, raw_dir, league_raw_dir, out_dir, run=sr.run_step, as_of=None, take_snapshot=None,
+              live=None):
     """-> (rc, summary, detail text, alert or None). Steps: league snapshot (always for a pre-lock run; for the
     preliminary only if the newest is over an hour old), build_week.py --run, then the comparison."""
     py = sr.console_python()
@@ -626,9 +693,14 @@ def run_entry(entry, now, db, raw_dir, league_raw_dir, out_dir, run=sr.run_step,
             return code, f"[STARTSIT] the league snapshot failed (exit {code}) -- no report built", "".join(parts), None
     stem = output_stem(entry, out_dir)
     stem.parent.mkdir(parents=True, exist_ok=True)
+    live_file = None
+    if entry["kind"] == "prelock" and live is not False:
+        live_file, note = write_live_points(entry, now, db, out_dir, fetch=live)
+        parts.append(f"\n## {note}\n")
     argv = [py, str(HERE / "build_week.py"), "--season", str(entry["season"]), "--week", str(entry["week"]),
             "--stage", "thursday" if entry["kind"] == "preliminary" else "sunday", "--run", "--db", str(db),
-            "--raw-dir", str(raw_dir), "--out", f"{stem}.json"] + (["--as-of", as_of.isoformat()] if as_of else [])
+            "--raw-dir", str(raw_dir), "--out", f"{stem}.json"] + (["--as-of", as_of.isoformat()] if as_of else []) \
+        + (["--live-points", str(live_file)] if live_file else [])
     code, out = run(argv)
     parts.append(f"\n## build_week\n$ {' '.join(argv)}\n{out.rstrip()}\n[exit {code}]\n")
     if code != 0:
@@ -700,7 +772,8 @@ def cmd_run(args):
         detail = log_dir / f"{now_local:%Y%m%d_%H%M%S}_{RUN_JOB}.log"
         rc, summary, text, diff_alert = run_entry(entry, now, args.db, args.raw_dir, args.league_raw_dir, args.out_dir,
                                                   as_of=now if args.as_of else None,
-                                                  take_snapshot=False if args.no_snapshot else None)
+                                                  take_snapshot=False if args.no_snapshot else None,
+                                                  live=False if getattr(args, "no_live", False) else None)
         shown = toast(*diff_alert) if diff_alert else None
         detail.write_text(f"# {RUN_JOB} {entry['key']} started {now_local:%Y-%m-%d %H:%M:%S} (local)"
                           + (f" after waiting {waited:.0f} s for a tracker log job" if waited else "") + f"\n{text}"
@@ -848,6 +921,7 @@ def main(argv=None):
             p.add_argument("--no-snapshot", action="store_true", help="dry runs: build from the snapshot already in --db")
             p.add_argument("--no-notify", action="store_true", help="print the notification instead of showing it")
             p.add_argument("--no-register", action="store_true", help="never start the plan task")
+            p.add_argument("--no-live", action="store_true", help="don't fetch Yahoo's live points")
     args = ap.parse_args(argv)
     if args.cmd == "run":
         return cmd_run(args)

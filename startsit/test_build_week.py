@@ -434,6 +434,32 @@ class TestSundayLocks(BuildCase):
         self.assertNotIn("locked", buf)                                       # BUF plays Sunday afternoon
         self.assertTrue(any("kicked off" in n for n in wf["_meta"]["locks"]))
 
+    def test_yahoo_live_points_score_a_locked_player_once_his_game_is_over(self):
+        self.add_rosters(self.con, "2026-10-24T13:35:00+00:00")
+        self.write_stats(HISTORY, [dict(player_id="g-qb", season=2026, week=7, season_type="REG", position="QB", team="KC",
+                                        receiving_yards=255)])
+        live = {"fetched_at": "2026-10-25T14:00:00+00:00", "points": {"101": 27.34, "106": 4.1, "202": 11.0, "104": 9.9}}
+        with contextlib.redirect_stderr(io.StringIO()):
+            wf, _w = bw.build_week(self.ro, 2026, 7, "sunday", as_of=self.AFTER_THU, raw_dir=self.raw, injury_fetch=fetched(),
+                                   live_points=live)
+        mine, opp = self.by_name(wf), self.by_name(wf, "opponent", "starters")
+        self.assertEqual(mine["Quinn Mine"]["actual"], 27.34)                 # Yahoo's own scoring wins over nflverse's 25.5
+        self.assertEqual(mine["Tate Mine"]["actual"], 4.1)                    # no nflverse stats yet: Yahoo's live points
+        self.assertEqual(opp["Oren Rb"]["actual"], 11.0)                      # the opponent's locked starters too
+        self.assertNotIn("actual", mine["Wade Mine"])                         # not kicked off: live points never used
+        self.assertTrue(any("used as actual for 3 player(s)" in n for n in wf["_meta"]["locks"]))
+        lineup_sim.parse_week(wf)
+        # an hour after kickoff the game is still being played: projected, and listed
+        during = datetime(2026, 10, 23, 1, 15, tzinfo=TZ)
+        self.add_rosters(self.con, "2026-10-23T01:00:00+00:00")
+        with contextlib.redirect_stderr(io.StringIO()):
+            wf, _w = bw.build_week(self.ro, 2026, 7, "sunday", as_of=during, raw_dir=self.raw, injury_fetch=fetched(),
+                                   live_points=live)
+        mine = self.by_name(wf)
+        self.assertEqual((mine["Quinn Mine"]["actual"], mine["Tate Mine"].get("actual")), (25.5, None))   # nflverse, then nothing
+        self.assertTrue(any(n.startswith("game still being played, projected instead of scored:") and "Tate Mine" in n
+                            for n in wf["_meta"]["locks"]))
+
 
 class TestCli(BuildCase):
     def test_run_writes_the_week_file_and_the_report_beside_it(self):

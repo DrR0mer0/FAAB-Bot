@@ -61,8 +61,13 @@ WHERE EACH FIELD COMES FROM
   actual              newest roster snapshot, which must have been taken AFTER
                       that kickoff -- otherwise the build STOPS (a recommendation
                       that moves a locked player is worse than none). actual =
-                      Yahoo's points for a completed week (lg_lineups), else the
-                      league-scored nflverse stats once they are published.
+                      Yahoo's points for a completed week (lg_lineups), else
+                      Yahoo's live points (--live-points, fetched by the automatic
+                      pre-lock runs) once his game is over -- kicked off at least
+                      GAME_FINAL_AFTER (4 h) before -- else the league-scored
+                      nflverse stats once they are published. A locked player
+                      whose game is still being played keeps his projection
+                      (listed in _meta.locks).
   _meta               sources, ages and every flagged player (ignored by lineup_sim).
 """
 import argparse
@@ -70,7 +75,7 @@ import json
 import sqlite3
 import statistics
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -177,8 +182,11 @@ def team_names(con):
     return {r["team_id"]: r["team_name"] for r in con.execute("SELECT team_id, team_name FROM lg_teams WHERE snapshot_id=?", (snap[0],))} if snap else {}
 
 
+GAME_FINAL_AFTER = timedelta(hours=4)   # an NFL game is over well within this after kickoff (most take ~3h10m)
+
+
 def build_week(con, season, week, stage, team_id=None, provider=None, as_of=None, raw_dir=DEFAULT_RAW_DIR,
-               injury_fetch=injuries.fetch_nflverse, weekly_roster=None):
+               injury_fetch=injuries.fetch_nflverse, weekly_roster=None, live_points=None):
     """-> (week dict, warnings). Raises BuildError."""
     if stage not in STAGES:
         raise BuildError(f"--stage must be one of {STAGES}")
@@ -294,6 +302,8 @@ def build_week(con, season, week, stage, team_id=None, provider=None, as_of=None
                                  f"{taken:%a %m-%d %H:%M} UTC, before that -- the lock state of those players isn't on record. "
                                  f"Run `python league/league_data.py snapshot` and build again")
         week_stats = store.week_rows(season, week)
+        live = (live_points or {}).get("points") or {}
+        from_live, playing = [], []
         for side in players.values():
             for p in side:
                 if p["_kickoff"] and p["_kickoff"] <= as_of:
@@ -301,12 +311,23 @@ def build_week(con, season, week, stage, team_id=None, provider=None, as_of=None
                     p["started"] = (p["yahoo_slot"] or "BN") not in BENCH
                     if p["started"]:
                         p["locked_slot"] = p["yahoo_slot"]
+                    over = as_of - p["_kickoff"] >= GAME_FINAL_AFTER
                     if p["_points"] is not None:
                         p["actual"] = round(float(p["_points"]), 2)
+                    elif over and str(p["id"]) in live:
+                        p["actual"] = round(float(live[str(p["id"])]), 2)
+                        from_live.append(p["name"])
                     elif p["gsis_id"] in week_stats:
                         p["actual"] = round(week_stats[p["gsis_id"]]["points"], 2)
+                    elif not over:
+                        playing.append(p["name"])
         lock_notes.append(f"{len(started_games)} game(s) kicked off by {as_of:%a %m-%d %H:%M} UTC; lock state from the "
                           f"{source}")
+        if live_points is not None:
+            lock_notes.append(f"Yahoo live points (fetched {live_points.get('fetched_at')}) used as actual for "
+                              f"{len(from_live)} player(s) whose game is over" + (f": {', '.join(from_live)}" if from_live else ""))
+        if playing:
+            lock_notes.append(f"game still being played, projected instead of scored: {', '.join(playing)}")
     else:
         if any(p["_kickoff"] and p["_kickoff"] <= as_of for side in players.values() for p in side):
             warnings.append("some games have already kicked off: a thursday-stage file ignores that -- use --stage sunday")
@@ -416,6 +437,9 @@ def build_parser():
     ap.add_argument("--raw-dir", default=str(DEFAULT_RAW_DIR))
     ap.add_argument("--out", default=None, help="default: league_data/<season>_week<NN>_<stage>.json")
     ap.add_argument("--as-of", default=None, help="ISO instant to build as of (default now; testing / backtests)")
+    ap.add_argument("--live-points", default=None,
+                    help="--stage sunday: a JSON file {fetched_at, points: {yahoo player id: points}} of Yahoo's live points for "
+                         "this week (startsit/autorun.py writes it); used as actual for locked players whose game is over")
     ap.add_argument("--run", action="store_true", help="also run lineup_sim and save <out>_report.md / _report.json")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--sims", type=int, default=lineup_sim.DEFAULT_SIMS)
@@ -436,8 +460,9 @@ def main(argv=None, injury_fetch=injuries.fetch_nflverse):
                 print("[WEEK FILE] --projections csv needs --projections-file", file=sys.stderr)
                 return 2
             provider = projections.CsvProvider(args.projections_file, provider)
+        live = json.loads(Path(args.live_points).read_text(encoding="utf-8")) if args.live_points else None
         week_file, warnings = build_week(con, args.season, args.week, args.stage, args.team_id, provider, as_of, args.raw_dir,
-                                         injury_fetch)
+                                         injury_fetch, live_points=live)
     except BuildError as e:
         print(f"[WEEK FILE] NOT BUILT: {e}", file=sys.stderr)
         return 2

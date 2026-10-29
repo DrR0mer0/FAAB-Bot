@@ -265,6 +265,62 @@ class TestPreliminaryAlert(unittest.TestCase):
         self.assertIsNone(alert)
 
 
+class TestLivePoints(unittest.TestCase):
+    """Yahoo's live points for my team and my opponent, for a pre-lock run (read-only; never fatal)."""
+
+    @staticmethod
+    def payload(team, week, players):
+        cov = {"coverage_type": "week", "week": str(week)}
+        items = [{"player": [[{"player_key": f"470.p.{pid}"}, {"player_id": str(pid)}, {"name": {"full": f"Player {pid}"}},
+                              {"editorial_team_abbr": "Kc"}, {"display_position": "WR"}, {"primary_position": "WR"}],
+                             {"selected_position": [cov, {"position": "WR"}]}, {"player_points": {"0": cov, "total": f"{pts:.2f}"}}]}
+                 for pid, pts in players]
+        numbered = dict({str(i): x for i, x in enumerate(items)}, count=len(items))
+        return {"fantasy_content": {"team": [[{"team_key": f"470.l.1.t.{team}"}, {"team_id": str(team)}],
+                                             {"roster": dict(cov, **{"0": {"players": numbered}})}]}}
+
+    def session(self, bodies, status=200):
+        urls = []
+
+        def get(url, timeout):
+            urls.append(url)
+            team = int(url.split(".t.")[1].split("/")[0])
+            return mock.Mock(status_code=status, text=json.dumps(bodies[team]))
+        return mock.Mock(get=get), urls
+
+    def test_points_of_both_teams_for_the_week_in_progress(self):
+        sess, urls = self.session({9: self.payload(9, 8, [(101, 12.5), (102, 0.0)]), 4: self.payload(4, 8, [(201, 7.25)])})
+        got = ar.fetch_live_points(8, [9, 4], league_key="470.l.1", session=sess)
+        self.assertTrue(got["ok"])
+        self.assertEqual(got["points"], {"101": 12.5, "102": 0.0, "201": 7.25})
+        self.assertTrue(all("roster;week=8/players/stats;type=week;week=8" in u for u in urls))
+        self.assertEqual(len(urls), 2)
+
+    def test_a_failure_is_reported_never_raised_and_scrubbed_of_the_key(self):
+        sess, _ = self.session({9: {}}, status=401)
+        got = ar.fetch_live_points(8, [9], league_key="470.l.1", session=sess)
+        self.assertEqual((got["ok"], got["points"]), (False, {}))
+        self.assertIn("HTTP 401", got["error"])
+        self.assertNotIn("470.l.1", got["error"])
+
+    def test_the_build_gets_the_file_and_a_failed_fetch_only_costs_the_live_points(self):
+        e = {"key": "k", "kind": "prelock", "season": 2026, "week": 8, "lock_local": "2026-11-01T13:25", "run_at_local": "2026-11-01T12:25",
+             "games": ["NE@MIA"], "players": []}
+        argvs = []
+
+        def fake(argv):
+            argvs.append(argv)
+            return 2, "[WEEK FILE] NOT BUILT: stop here"
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(ar, "write_live_points", return_value=(Path(d) / "x_live.json", "live points: 2")):
+                ar.run_entry(e, utc("2026-11-01T20:25:00"), "db", "raw", "lraw", d, run=fake, take_snapshot=False)
+            self.assertIn("--live-points", argvs[-1])
+            with mock.patch.object(ar, "write_live_points", return_value=(None, "live points unavailable (x)")):
+                rc, _s, text, _a = ar.run_entry(e, utc("2026-11-01T20:25:00"), "db", "raw", "lraw", d, run=fake, take_snapshot=False)
+            self.assertNotIn("--live-points", argvs[-1])
+            self.assertIn("live points unavailable", text)
+
+
 class TestRunTask(unittest.TestCase):
     """What the run task does when it fires: due runs, MISSED, superseded, handled."""
 
