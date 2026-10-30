@@ -119,6 +119,24 @@ class TestLocks(unittest.TestCase):
         r = ls.run_week(w, n_sims=3000, seed=4)
         self.assertNotIn("mccaffrey", starters(r))
 
+    def test_the_report_shows_a_locked_players_final_score_not_zero(self):
+        w = load_example()
+        for p in w["my_team"]["players"]:
+            if p["id"] == "tate":                                   # played Thursday night in the lineup
+                p.update(locked=True, started=True, actual=2.5)
+                tate = p["name"]
+            if p["id"] == "mccaffrey":                              # played Thursday night on the bench
+                p.update(locked=True, started=False, actual=30.0)
+                cmc = p["name"]
+        r = ls.run_week(w, n_sims=3000, seed=4)
+        row = next(ln for ln in r["report_md"].splitlines() if ln.startswith("|") and tate in ln)
+        self.assertTrue(row.endswith(" (final: 2.5) | 2.5 | 2.5 | 2.5 |"), row)
+        self.assertNotIn("| 0.0 | 0.0 | 0.0 |", r["report_md"])
+        self.assertIn(f"{cmc} (final: 30.0)", r["report_md"].split("**Bench:**")[1].splitlines()[0])
+        # display only: the simulation still holds them at their actual score
+        meta, slots, mine, opp, _ = ls.parse_week(w)
+        self.assertEqual({p.id: p.actual for p in mine if p.actual is not None}, {"tate": 2.5, "mccaffrey": 30.0})
+
     def test_locked_slot_is_respected(self):
         w = load_example()
         for p in w["my_team"]["players"]:

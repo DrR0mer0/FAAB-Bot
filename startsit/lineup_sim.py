@@ -636,17 +636,18 @@ def render_markdown(d: dict, warnings: list[str]) -> str:
         if p is None:
             lines.append(f"| {slot.name} | _(empty - no eligible healthy player)_ | | | |")
             continue
-        tag = ""
+        tag, cells = "", (p.p10, p.p50, p.p90)
         if p.actual is not None:
-            tag = f" (final: {_fmt(p.actual)})"
+            # locked with a final score: the simulation holds him at it, so the row shows it, not his unused projection
+            tag, cells = f" (final: {_fmt(p.actual)})", (p.actual,) * 3
         elif p.play_prob < 1:
             tag = f" ({p.play_prob:.0%} to play)"
         team = f" {p.team}" if p.team else ""
-        lines.append(f"| {slot.name} | {p.name}, {p.pos}{team}{tag} | "
-                     f"{_fmt(p.p10)} | {_fmt(p.p50)} | {_fmt(p.p90)} |")
+        lines.append(f"| {slot.name} | {p.name}, {p.pos}{team}{tag} | " + " | ".join(_fmt(c) for c in cells) + " |")
     lines.append("")
     if d["bench"]:
-        lines.append("**Bench:** " + ", ".join(f"{p.name} ({_fmt(p.p50)})" for p in d["bench"]))
+        lines.append("**Bench:** " + ", ".join(f"{p.name} ({'final: ' + _fmt(p.actual) if p.actual is not None else _fmt(p.p50)})"
+                                               for p in d["bench"]))
     if d["unavailable"]:
         lines.append("**Out:** " + ", ".join(f"{p.name}{' (' + p.status + ')' if p.status else ''}"
                                               for p in d["unavailable"]))
