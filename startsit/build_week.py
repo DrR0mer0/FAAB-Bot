@@ -42,12 +42,15 @@ WHERE EACH FIELD COMES FROM
                       Josh Jacobs on the exempt list after his reinstatement;
                       Yahoo had tracked it (CEL on 10-15, nothing on 10-22) while
                       ESPN said DAY_TO_DAY throughout. CUT / RET stay as is.
-                      The other direction, for MY players, in every stage (from
-                      2026-10-28): if Yahoo's current status means he can't play
-                      (play chance 0: O, NA, IR, PUP, NFI, SUSP, CEL -- e.g. a
-                      game-day inactive), it wins over a healthier nflverse /
-                      injury-report reading, also as a STATUS CONFLICT (kind
-                      "yahoo out"). Opponent starters keep the usual reading.
+                      The other direction, in every stage (my players from
+                      2026-10-28, opponent starters from 2026-11-03): if Yahoo's
+                      current status means he can't play (play chance 0: O, NA,
+                      IR, PUP, NFI, SUSP, CEL -- e.g. a game-day inactive), it
+                      wins over a healthier nflverse / injury-report reading,
+                      also as a STATUS CONFLICT (kind "yahoo out"; `side` says
+                      whose player). An opponent starter out this way scores 0
+                      in the simulation until his manager replaces him; the
+                      file only knows the current starters.
   p10 / p50 / p90     a projection provider (startsit/projections.py; the
                       baseline reads the DB's snap counts, so a game with
                       offense snaps but no stats row counts as 0). A player
@@ -260,7 +263,7 @@ def build_week(con, season, week, stage, team_id=None, provider=None, as_of=None
                 if long_term in OVERRIDABLE and yahoo is not None and play_chance(yahoo) > 0:
                     # Yahoo's current status says he may play: it wins over the weekly roster, never silently
                     status = designation if yahoo == "ACTIVE" else yahoo
-                    conflicts.append({"name": r["name"], "gsis_id": gsis, "kind": "long-term overruled",
+                    conflicts.append({"name": r["name"], "gsis_id": gsis, "side": side, "kind": "long-term overruled",
                                       "nflverse_weekly_roster": long_term,
                                       "yahoo": raw_yahoo, "injury_report": inj["status"].get(gsis), "espn": espn_raw.get(gsis),
                                       "used": status or "available", "play_chance": play_chance(status)})
@@ -269,10 +272,11 @@ def build_week(con, season, week, stage, team_id=None, provider=None, as_of=None
                                       f"{'in' if play_chance(status) > 0 else 'out'} ({status or 'available'}) -- cross-check only")
             elif designation:
                 status = designation
-            if side == "mine" and yahoo is not None and play_chance(yahoo) == 0 and play_chance(status) > 0:
-                # Yahoo's current status says one of MY players can't play (O, NA, IR, ...; e.g. a game-day inactive):
-                # it wins over a healthier nflverse / injury-report reading, in every stage, and never silently (2026-10-28)
-                conflicts.append({"name": r["name"], "gsis_id": gsis, "kind": "yahoo out", "nflverse_weekly_roster": long_term,
+            if yahoo is not None and play_chance(yahoo) == 0 and play_chance(status) > 0:
+                # Yahoo's current status says the player can't play (O, NA, IR, ...; e.g. a game-day inactive): it wins over a
+                # healthier nflverse / injury-report reading, in every stage, and never silently (my players 2026-10-28,
+                # opponent starters 2026-11-03)
+                conflicts.append({"name": r["name"], "gsis_id": gsis, "side": side, "kind": "yahoo out", "nflverse_weekly_roster": long_term,
                                   "yahoo": raw_yahoo, "injury_report": inj["status"].get(gsis), "espn": espn_raw.get(gsis),
                                   "was": status or "available", "used": yahoo, "play_chance": 0.0})
                 status = yahoo
@@ -284,9 +288,11 @@ def build_week(con, season, week, stage, team_id=None, provider=None, as_of=None
         extra = "; ".join(f"{k} {c[k2]}" for k, k2 in (("injury report", "injury_report"), ("ESPN", "espn")) if c[k2])
         if c["kind"] == "yahoo out":
             nfl = c["nflverse_weekly_roster"]
-            warnings.append(f"STATUS CONFLICT: {c['name']} -- {yahoo_said}, but the file had him {c['was']} (nflverse's weekly "
-                            f"roster {nfl or 'no row'}" + (f"; {extra}" if extra else "") + f"). Using Yahoo: {c['used']} "
-                            f"(play chance 0.00) -- check him before relying on this lineup")
+            who, then = (("opponent starter ", "his manager may still replace him -- the file only has the current starters")
+                         if c["side"] == "opp" else ("", "check him before relying on this lineup"))
+            warnings.append(f"STATUS CONFLICT: {who}{c['name']} -- {yahoo_said}, but the file had him {c['was']} (nflverse's "
+                            f"weekly roster {nfl or 'no row'}" + (f"; {extra}" if extra else "") + f"). Using Yahoo: {c['used']} "
+                            f"(play chance 0.00) -- {then}")
             continue
         warnings.append(f"STATUS CONFLICT: {c['name']} -- nflverse's weekly roster says {c['nflverse_weekly_roster']}, but {yahoo_said}"
                         + (f" ({extra})" if extra else "") + f". Using Yahoo: {c['used']} (play chance {c['play_chance']:.2f}) -- "

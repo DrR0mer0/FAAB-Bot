@@ -289,7 +289,8 @@ class TestStatusConflicts(BuildCase):
 
 
 class TestYahooOutCodes(BuildCase):
-    """Yahoo's current status says one of my players can't play: it wins over a healthier reading (2026-10-28)."""
+    """Yahoo's current status says a player can't play: it wins over a healthier reading (my players 2026-10-28, opponent
+    starters 2026-11-03)."""
 
     def with_yahoo(self, statuses, taken="2026-10-22T13:40:00+00:00"):
         sid = self.snap("rosters", taken)
@@ -307,20 +308,43 @@ class TestYahooOutCodes(BuildCase):
             mine = self.by_name(wf)
             self.assertEqual((mine["Reed Mine"]["status"], mine["Flex Iffy"]["status"], mine["Quinn Mine"]["status"]),
                              ("O", "O", "IR"), stage)
-            self.assertEqual(self.by_name(wf, "opponent", "starters")["Oren Rb"]["status"], "D")   # opponents: the usual reading
             out = {c["name"]: c for c in wf["_meta"]["status_conflicts"] if c["kind"] == "yahoo out"}
-            self.assertEqual(set(out), {"Reed Mine", "Flex Iffy", "Quinn Mine"})
+            self.assertEqual(set(out), {"Reed Mine", "Flex Iffy", "Quinn Mine", "Oren Rb"})
+            self.assertEqual({n: c["side"] for n, c in out.items()},
+                             {"Reed Mine": "mine", "Flex Iffy": "mine", "Quinn Mine": "mine", "Oren Rb": "opp"})
             self.assertEqual((out["Flex Iffy"]["was"], out["Flex Iffy"]["used"], out["Flex Iffy"]["injury_report"]), ("Q", "O", "Questionable"))
             self.assertEqual((out["Reed Mine"]["was"], out["Reed Mine"]["play_chance"]), ("available", 0.0))
             self.assertTrue(any(w.startswith("STATUS CONFLICT: Reed Mine -- Yahoo shows O, but the file had him available "
                                              "(nflverse's weekly roster ACT). Using Yahoo: O (play chance 0.00)") for w in warnings))
             players = {p.name: p for p in lineup_sim.parse_week(wf)[2]}
             self.assertEqual(players["Reed Mine"].play_prob, 0.0)
-        # Yahoo D is not an out code (play chance 0.30): nothing changes, as before
-        self.with_yahoo({"g-rb2": "D"}, taken="2026-10-22T13:45:00+00:00")
+        # Yahoo D is not an out code (play chance 0.30): nothing changes, as before -- for either side
+        self.with_yahoo({"g-rb2": "D", "g-oqb": "D"}, taken="2026-10-22T13:45:00+00:00")
         wf, _w = self.build()
         self.assertNotIn("status", self.by_name(wf)["Reed Mine"])
+        self.assertNotIn("status", self.by_name(wf, "opponent", "starters")["Otto Qb"])
         self.assertEqual([c for c in wf["_meta"]["status_conflicts"] if c["kind"] == "yahoo out"], [])
+
+    def test_an_opponent_starter_yahoo_has_out_is_out_and_the_conflict_is_loud(self):
+        # Oren: Doubtful on the report, Yahoo O. Otto: healthy everywhere, Yahoo NA (a game-day inactive).
+        self.with_yahoo({"g-orb": "O", "g-oqb": "NA"})
+        for stage in ("thursday", "sunday"):
+            wf, warnings = self.build(stage)
+            opp = self.by_name(wf, "opponent", "starters")
+            self.assertEqual((opp["Oren Rb"]["status"], opp["Otto Qb"]["status"]), ("O", "O"), stage)
+            out = {c["name"]: c for c in wf["_meta"]["status_conflicts"] if c["kind"] == "yahoo out"}
+            self.assertEqual((out["Oren Rb"]["was"], out["Oren Rb"]["used"], out["Oren Rb"]["injury_report"]), ("D", "O", "Doubtful"))
+            self.assertEqual((out["Otto Qb"]["side"], out["Otto Qb"]["was"], out["Otto Qb"]["play_chance"]), ("opp", "available", 0.0))
+            self.assertIn("STATUS CONFLICT: opponent starter Otto Qb -- Yahoo shows NA, but the file had him available (nflverse's "
+                          "weekly roster ACT). Using Yahoo: O (play chance 0.00) -- his manager may still replace him -- the file "
+                          "only has the current starters", warnings)
+        # the simulation reflects it: with Otto (QB, 20 a game) out, the opponent's median drops by about his projection
+        with_out = lineup_sim.run_week(wf, n_sims=2000, seed=7)
+        self.with_yahoo({}, taken="2026-10-22T13:50:00+00:00")
+        wf_ok, _w = self.build("sunday")
+        self.assertEqual([c for c in wf_ok["_meta"]["status_conflicts"] if c["kind"] == "yahoo out"], [])
+        healthy = lineup_sim.run_week(wf_ok, n_sims=2000, seed=7)
+        self.assertGreater(healthy["opp_median"] - with_out["opp_median"], 15)
 
 
 class TestBaseline(BuildCase):
