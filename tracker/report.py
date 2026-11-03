@@ -159,6 +159,22 @@ def off_roster_notes(runs, audit_path=OFF_ROSTER_AUDIT):
     return notes
 
 
+SCORING_NOTES = Path(__file__).resolve().parent / "scoring_notes.json"
+
+
+def scoring_notes(season, weeks, path=SCORING_NOTES):
+    """Hand-written footnotes for scored weeks, from the committed tracker/scoring_notes.json, in week order. They ride
+    alongside the numbers and never change one: e.g. a player Yahoo scores differently from nflverse's weekly stats in a
+    way that would flip a hit (2026 week 8, a fumble lost after a lateral). A missing or unreadable file means none."""
+    try:
+        notes = json.loads(Path(path).read_text(encoding="utf-8"))["notes"]
+    except (OSError, ValueError, KeyError):
+        return []
+    weeks = set(weeks)
+    return [n["text"] for n in sorted(notes, key=lambda n: (n["week"], n.get("id", "")))
+            if n.get("season") == season and n.get("week") in weeks]
+
+
 def sleeper_pool_lines(con, runs, only_if_unknown=False):
     """One line per run saying how big its under-50% pool was and how many of
     those players had UNKNOWN ownership (no row in the roster-% snapshot the
@@ -378,7 +394,7 @@ def build_weekly_report(con, season, week, stats_notes=None):
         if not wrote:
             out += ["_No results for this section (no roster-% was available when the run was logged)._", ""]
     out += ["## Caveats", ""] + [f"- {c}" for c in KNOWN_CAVEATS + pool_rule_notes(runs) + no_game_notes(con, runs)
-                                 + off_roster_notes(runs) + ownership_notes(con, runs)] + [""]
+                                 + off_roster_notes(runs) + ownership_notes(con, runs) + scoring_notes(season, [week])] + [""]
     return "\n".join(out)
 
 
@@ -557,7 +573,8 @@ def build_season_report(con, season, report_cfg, stats_notes=None, trend=None):
     noted = used_runs + [r for r in sun_runs if r["run_id"] not in {u["run_id"] for u in used_runs}]
     out += crowd + ["", "## Caveats", ""] + [f"- {c}" for c in KNOWN_CAVEATS + pool_rule_notes(noted) + no_game_notes(con, noted)
                                                     + off_roster_notes(noted) + ownership_notes(con, noted)
-                                                    + sleeper_pool_lines(con, noted, only_if_unknown=True)] + [""]
+                                                    + sleeper_pool_lines(con, noted, only_if_unknown=True)
+                                                    + scoring_notes(season, {r["week"] for r in noted})] + [""]
     return "\n".join(out)
 
 

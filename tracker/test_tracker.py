@@ -3397,6 +3397,36 @@ class TestReportScoringWords(unittest.TestCase):
         self.assertEqual(set(scoring.OPTIONAL_RULES) - set(RULES), set())    # today's hit_config.json is version 2
 
 
+class TestScoringNotes(unittest.TestCase):
+    """Hand-written footnotes from tracker/scoring_notes.json ride alongside a week's numbers and never change them (2026-11-03)."""
+
+    NOTES = {"notes": [{"season": 2026, "week": 8, "id": "b", "text": "note 8b"}, {"season": 2026, "week": 6, "id": "a", "text": "note 6"},
+                       {"season": 2026, "week": 8, "id": "a", "text": "note 8a"}, {"season": 2025, "week": 8, "id": "x", "text": "old"}]}
+
+    def notes(self, weeks, data=NOTES, season=2026):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "notes.json"
+            if data is not None:
+                path.write_text(json.dumps(data), encoding="utf-8")
+            return report.scoring_notes(season, weeks, path)
+
+    def test_only_the_weeks_asked_for_in_week_order(self):
+        self.assertEqual(self.notes([8]), ["note 8a", "note 8b"])
+        self.assertEqual(self.notes({6, 8, 9}), ["note 6", "note 8a", "note 8b"])
+        self.assertEqual(self.notes([7]), [])
+        self.assertEqual(self.notes([8], season=2025), ["old"])
+        self.assertEqual(self.notes([8], data=None), [])                       # no file: no notes
+        self.assertEqual(self.notes([8], data={"x": 1}), [])                   # unreadable: no notes
+
+    def test_the_committed_file_carries_the_week_8_lateral_fumble_note(self):
+        texts = report.scoring_notes(2026, [8])
+        self.assertEqual(len(texts), 1)
+        self.assertIn("Jalen Coker", texts[0])
+        self.assertIn("Yahoo scores him 8.6", texts[0])
+        self.assertIn("Decision 17's week 8 count stays as logged (production 3, shadow 4", texts[0])
+        self.assertEqual(report.scoring_notes(2026, [7]), [])
+
+
 class TestOffRosterNotes(unittest.TestCase):
     AUDIT = {"runs": {
         "old-run": {"week": 4, "slot": "sun", "pool_size": 100, "roster_file_later_than_run": True,
