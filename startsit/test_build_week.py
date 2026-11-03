@@ -369,6 +369,92 @@ class TestBaseline(BuildCase):
         self.assertEqual(projections.weighted_quantile([1, 2, 3, 4], [0, 0, 0, 1], 0.1), 4)
 
 
+class TestZeroStatGames(BuildCase):
+    """A game with offense snaps but no stats row counts as 0 points; no snap row and no stats row = didn't play (2026-11-03)."""
+
+    COOPER = "00-0041511"
+    # Omar Cooper Jr., NYJ WR, 2026: league-scored points (receiving_yards / 10 here) and offense snaps per week. Weeks 2-5: no
+    # snap row, no stats row (didn't play). Week 8: 50 offense snaps (78%), no catch, so nflverse has no stats row.
+    POINTS = {1: 3.5, 6: 19.3, 7: 20.0}
+    SNAPS = {1: 5, 6: 51, 7: 38, 8: 50}
+
+    def setUp(self):
+        super().setUp()
+        bw.ld.ledger.init_schema(self.con)                                     # the tracker's tables: tr_snap_counts
+        rows = [(2026, w, self.COOPER, "Omar Cooper Jr.", "WR", "NYJ", n) for w, n in self.SNAPS.items()]
+        rows.append((2026, 3, self.COOPER, "Omar Cooper Jr.", "WR", "NYJ", 0))  # a row with 0 offense snaps is no game
+        self.con.executemany("INSERT INTO tr_snap_counts (season, week, player_id, name, position, team, offense_snaps) "
+                             "VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+        self.con.commit()
+        extra = [dict(player_id=self.COOPER, season=2026, week=w, season_type="REG", position="WR", team="NYJ",
+                      receiving_yards=round(p * 10)) for w, p in self.POINTS.items()]
+        # weeks 7 and 8 are published: someone else has a row in them
+        extra += [dict(player_id="g-wr1", season=2026, week=w, season_type="REG", position="WR", team="BUF", receiving_yards=120)
+                  for w in (7, 8)]
+        self.write_stats(HISTORY, extra)
+
+    def provider(self, snaps=True):
+        store = projections.scoring.StatsStore(self.raw, projections.scoring.load_config()["scoring"])
+        return projections.BaselineProvider(store, snaps=projections.SnapGames(self.ro) if snaps else None)
+
+    def cooper(self, week=9, snaps=True):
+        player = {"id": "c", "gsis_id": self.COOPER, "name": "Omar Cooper Jr.", "pos": "WR", "team": "NYJ"}
+        prov = self.provider(snaps)
+        return prov.games(self.COOPER, 2026, week), prov.project(2026, week, [player])
+
+    @staticmethod
+    def mean(pts):
+        wts = [0.5 ** ((len(pts) - 1 - i) / 3) for i in range(len(pts))]
+        return round(sum(p * w for p, w in zip(pts, wts)) / sum(wts), 2)
+
+    def test_omar_cooper_week_8_counts_as_a_zero_and_the_weeks_he_did_not_play_are_skipped(self):
+        games, proj = self.cooper()
+        self.assertEqual(games, [(2026, 1, 3.5, "NYJ"), (2026, 6, 19.3, "NYJ"), (2026, 7, 20.0, "NYJ"), (2026, 8, 0.0, "NYJ")])
+        self.assertEqual(proj.values["c"], {"p50": self.mean([3.5, 19.3, 20.0, 0.0])})          # 10.19
+        self.assertEqual(proj.flags["c"], ["1 game with offense snaps but no stats row counted as 0 (2026 week 8)"])
+        self.assertIn("a game with offense snaps but no stats row counts as 0 points (tr_snap_counts, snap counts through 2026 "
+                      "week 8)", proj.provenance)
+        # without snap counts: week 8 is skipped, as before -- the 15.48 the week 8 and 9 reports carried
+        games, proj = self.cooper(snaps=False)
+        self.assertEqual([g[1] for g in games], [1, 6, 7])
+        self.assertEqual(proj.values["c"], {"p50": 15.48})
+        self.assertNotIn("c", proj.flags)
+
+    def test_the_target_week_and_unpublished_weeks_are_never_read(self):
+        # projecting week 8 itself: his week-8 snaps are the target week, so not read
+        games, proj = self.cooper(week=8)
+        self.assertEqual([g[1] for g in games], [1, 6, 7])
+        self.assertEqual(proj.values["c"], {"p50": 15.48})
+        # a week-9 snap row while the stats file stops at week 8: no stats row there means nothing yet, so it is skipped
+        self.con.execute("INSERT INTO tr_snap_counts (season, week, player_id, team, offense_snaps) VALUES (2026, 9, ?, 'NYJ', 40)",
+                         (self.COOPER,))
+        self.con.commit()
+        games, _proj = self.cooper(week=10)
+        self.assertEqual([g[1] for g in games], [1, 6, 7, 8])
+
+    def test_the_builder_uses_snap_counts_by_default_and_a_db_without_them_changes_nothing(self):
+        # Tate: stats in weeks 2-6 only (6 points each), and 12 offense snaps in week 1 with no stats row
+        self.con.execute("INSERT INTO tr_snap_counts (season, week, player_id, team, offense_snaps) VALUES (2026, 1, 'g-te', 'KC', 12)")
+        self.con.commit()
+        wf, _w = self.build()
+        tate = self.by_name(wf)["Tate Mine"]
+        self.assertEqual(tate["p50"], self.mean([0.0, 6, 6, 6, 6, 6]))
+        self.assertIn("p10", tate)                                             # six games now: his own spread
+        self.assertEqual(wf["_meta"]["projections"]["flagged"]["Tate Mine"],
+                         ["1 game with offense snaps but no stats row counted as 0 (2026 week 1)"])
+        self.assertEqual(self.by_name(wf)["Wade Mine"]["p50"], 12.0)          # no snap rows: unchanged
+        # the plain BuildCase DB has no tr_snap_counts table: the baseline is unchanged and says so
+        plain = BuildCase("setUp")
+        plain.setUp()
+        try:
+            wf, _w = plain.build()
+            self.assertNotIn("p10", plain.by_name(wf)["Tate Mine"])
+            self.assertIn("no snap counts in the DB (tr_snap_counts): a game with no stats row is skipped",
+                          wf["_meta"]["projections"]["provenance"])
+        finally:
+            plain.tearDown()
+
+
 class TestCsvOverride(BuildCase):
     def test_a_row_overrides_the_baseline_for_that_player_only(self):
         path = self.dir / "proj.csv"

@@ -48,7 +48,9 @@ WHERE EACH FIELD COMES FROM
                       game-day inactive), it wins over a healthier nflverse /
                       injury-report reading, also as a STATUS CONFLICT (kind
                       "yahoo out"). Opponent starters keep the usual reading.
-  p10 / p50 / p90     a projection provider (startsit/projections.py). A player
+  p10 / p50 / p90     a projection provider (startsit/projections.py; the
+                      baseline reads the DB's snap counts, so a game with
+                      offense snaps but no stats row counts as 0). A player
                       of MINE with no p50 is DROPPED with a warning: the
                       simulator must never start or bench someone on an invented
                       number -- decide him by hand, or give him a csv row. An
@@ -185,6 +187,12 @@ def team_names(con):
 GAME_FINAL_AFTER = timedelta(hours=4)   # an NFL game is over well within this after kickoff (most take ~3h10m)
 
 
+def baseline_provider(con, store):
+    """The default provider: the baseline over the league scoring, with the DB's snap counts for zero-stat games."""
+    return projections.BaselineProvider(store, scoring_label=f", scoring hash {scoring.config_hash(scoring.load_config())[:10]}",
+                                        snaps=projections.SnapGames(con))
+
+
 def build_week(con, season, week, stage, team_id=None, provider=None, as_of=None, raw_dir=DEFAULT_RAW_DIR,
                injury_fetch=injuries.fetch_nflverse, weekly_roster=None, live_points=None):
     """-> (week dict, warnings). Raises BuildError."""
@@ -210,7 +218,7 @@ def build_week(con, season, week, stage, team_id=None, provider=None, as_of=None
         warnings.append(f"no nflverse weekly roster at {weekly_roster}: teams are Yahoo's and long-term statuses are unknown")
     inj = injuries.resolve_designations(con, season, week, as_of, fetch=injury_fetch)
     store = scoring.StatsStore(raw_dir, scoring.load_config()["scoring"])
-    provider = provider or projections.BaselineProvider(store, scoring_label=f", scoring hash {scoring.config_hash(scoring.load_config())[:10]}")
+    provider = provider or baseline_provider(con, store)
 
     opp_id = opponent_of(con, week, team_id)
     names = team_names(con)
@@ -453,8 +461,7 @@ def main(argv=None, injury_fetch=injuries.fetch_nflverse):
         as_of = as_of.replace(tzinfo=timezone.utc)
     con = connect_ro(args.db)
     try:
-        store = scoring.StatsStore(args.raw_dir, scoring.load_config()["scoring"])
-        provider = projections.BaselineProvider(store, scoring_label=f", scoring hash {scoring.config_hash(scoring.load_config())[:10]}")
+        provider = baseline_provider(con, scoring.StatsStore(args.raw_dir, scoring.load_config()["scoring"]))
         if args.projections == "csv":
             if not args.projections_file:
                 print("[WEEK FILE] --projections csv needs --projections-file", file=sys.stderr)

@@ -28,6 +28,16 @@ PROVIDERS
             The p50 is a weighted mean, not a median: fantasy points are
             right-skewed, so it sits a little above the median lineup_sim
             treats p50 as.
+            ZERO-STAT GAMES (from 2026-11-03): nflverse's weekly stats have no
+            row for a player who played without recording a stat, so a
+            stats-only history skips that game and overstates a low-usage
+            player (Omar Cooper Jr., 2026 week 8: 50 offense snaps, no catch,
+            0 points on Yahoo). Given snap counts (SnapGames: tr_snap_counts,
+            from `tracker.py fetch-snaps`), a game with offense snaps but no
+            stats row counts as 0 points, provided that week's stats are
+            published and the season is one the stats history reaches. No
+            snap row and no stats row = he didn't play: skipped, as before.
+            Each such game in the window is listed in the player's flags.
   csv       CsvProvider: a hand-supplied file (id or name, p50, optional
             p10/p90, optional play_prob) layered over the baseline: a row
             overrides the baseline for that player only. A row may give only
@@ -37,6 +47,7 @@ PROVIDERS
 """
 import csv
 import io
+import sqlite3
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -75,28 +86,83 @@ def weighted_quantile(values, weights, q):
     return pairs[-1][0]
 
 
+class SnapGames:
+    """Offense snap counts per game from tr_snap_counts (`tracker.py fetch-snaps`: nflverse's snap_counts, regular season,
+    PFR ids crosswalked to gsis). A DB without the table reads as no snap data (`available` False)."""
+
+    def __init__(self, con):
+        self.con = con
+        try:
+            row = con.execute("SELECT MAX(season), MAX(week) FROM tr_snap_counts "
+                              "WHERE season = (SELECT MAX(season) FROM tr_snap_counts)").fetchone()
+            self.available, self.newest = True, (tuple(row) if row and row[0] is not None else None)
+        except sqlite3.OperationalError:
+            self.available, self.newest = False, None
+
+    def games(self, gsis_id):
+        """[(season, week, team, offense_snaps)] oldest first, offense snaps > 0 only."""
+        if not self.available or not gsis_id:
+            return []
+        return [tuple(r) for r in self.con.execute(
+            "SELECT season, week, team, offense_snaps FROM tr_snap_counts WHERE player_id=? AND offense_snaps > 0 "
+            "ORDER BY season, week", (gsis_id,))]
+
+
 class BaselineProvider:
     name = "baseline"
 
     def __init__(self, store, n_games=N_GAMES, half_life=HALF_LIFE_GAMES, min_spread_games=MIN_SPREAD_GAMES,
-                 thin_games=THIN_GAMES, scoring_label=""):
+                 thin_games=THIN_GAMES, scoring_label="", snaps=None):
         self.store, self.n_games, self.half_life = store, n_games, half_life
         self.min_spread_games, self.thin_games, self.scoring_label = min_spread_games, thin_games, scoring_label
+        self.snaps = snaps                        # SnapGames, or None: a game with no stats row is skipped
 
     def provenance(self, season, week):
-        return (f"baseline: exponentially weighted mean (half-life {self.half_life} games) of the player's last <= {self.n_games} "
+        text = (f"baseline: exponentially weighted mean (half-life {self.half_life} games) of the player's last <= {self.n_games} "
                 f"league-scored games strictly before {season} week {week}{self.scoring_label}; p10/p90 = his weighted empirical "
                 f"10th/90th percentiles with >= {self.min_spread_games} games, otherwise lineup_sim's DEFAULT_SPREADS")
+        if self.snaps is None:
+            return text
+        if not self.snaps.available:
+            return text + "; no snap counts in the DB (tr_snap_counts): a game with no stats row is skipped"
+        newest = f", snap counts through {self.snaps.newest[0]} week {self.snaps.newest[1]}" if self.snaps.newest else ""
+        return text + f"; a game with offense snaps but no stats row counts as 0 points (tr_snap_counts{newest})"
 
-    def games(self, gsis_id, season, week):
-        """[(season, week, points, team)] oldest first -- strictly before (season, week)."""
+    def _stats_seasons(self, season):
+        """The seasons history_before can reach from `season`: consecutive stats files on disk, walking back."""
+        out, s = set(), season
+        while self.store.season_data(s) is not None:
+            out.add(s)
+            s -= 1
+        return out
+
+    def _games(self, gsis_id, season, week):
+        """(games, zero): games = [(season, week, points, team)] oldest first, strictly before (season, week), at most
+        n_games; zero = the (season, week) of those that are snap-count games with no stats row, scored 0."""
         out = []
         for s, w, pts, _ts in self.store.history_before(gsis_id, season, week, self.n_games):
             if (s, w) >= (season, week):          # belt and braces: history_before already stops before the week
                 continue
             row = (self.store.season_data(s) or {}).get(w, {}).get(gsis_id, {})
             out.append((s, w, pts, norm_team(row.get("team"))))
-        return out
+        if self.snaps is None:
+            return out, set()
+        # his newest n_games stats games are enough: a stats game that makes the merged newest n_games is one of them
+        have, reach, zero = {(s, w) for s, w, _p, _t in out}, self._stats_seasons(season), []
+        for s, w, team, _n in self.snaps.games(gsis_id):
+            if (s, w) >= (season, week) or (s, w) in have or s not in reach:
+                continue
+            if w not in (self.store.season_data(s) or {}):    # that week's stats aren't published: "no row" means nothing yet
+                continue
+            zero.append((s, w, 0.0, norm_team(team)))
+        merged = sorted(out + zero)[-self.n_games:]
+        zero_keys = {(s, w) for s, w, _p, _t in zero}
+        return merged, {(s, w) for s, w, _p, _t in merged if (s, w) in zero_keys}
+
+    def games(self, gsis_id, season, week):
+        """[(season, week, points, team)] oldest first -- strictly before (season, week); with snap counts, a game with
+        offense snaps but no stats row is in it at 0 points."""
+        return self._games(gsis_id, season, week)[0]
 
     def project(self, season, week, players):
         values, flags = {}, {}
@@ -105,7 +171,7 @@ class BaselineProvider:
             if not p.get("gsis_id"):
                 values[pid], flags[pid] = None, ["no gsis id (Yahoo player not matched to nflverse)"]
                 continue
-            games = self.games(p["gsis_id"], season, week)
+            games, zero = self._games(p["gsis_id"], season, week)
             if not games:
                 values[pid], flags[pid] = None, ["no league-scored games before this week (rookie or no NFL history)"]
                 continue
@@ -125,6 +191,9 @@ class BaselineProvider:
                 f.append(f"new team (recent games for {last_team}, now {p['team']})")
             if games[-1][0] < season:
                 f.append(f"no {season} games yet (last game {games[-1][0]} week {games[-1][1]})")
+            if zero:
+                f.append(f"{len(zero)} game{'s' if len(zero) != 1 else ''} with offense snaps but no stats row counted as 0 "
+                         f"({', '.join(f'{s} week {w}' for s, w in sorted(zero))})")
             if f:
                 flags[pid] = f
         return Projections(values, self.provenance(season, week), flags)
