@@ -5,6 +5,8 @@
 - Cumulative PRODUCTION across 8 verified week(s): P@10 14/80 = 0.1750, P@25 39/200 = 0.1950
 - Cumulative head-to-head (precision@10, 6 week(s) with both): production 13/60 = 0.2167, shadow 19/60 = 0.3167
 
+> **Scoring note (added 2026-11-03; nothing below is changed).** The official record is nflverse's: Jalen Coker (WR, CAR, production #8) scored 10.6 in the DB labels, a spike (baseline 5.63, threshold 10.00). Yahoo scores him 8.6: on CAR's last play he caught a lateral and fumbled, GB recovered, and the league docks 2 for a fumble lost. nflverse's play-by-play charges him with the fumble and its weekly `fumbles_lost_total` counts it, but the receiving, rushing and sack fumble columns the loader sums don't. At 8.6 he is not a spike, and this week would read: QB/RB/WR/TE base rate 36/296 (0.1216), all positions 36/946; production precision@10 2/10 (1.6x), @25 7/25 (2.3x), WR 2/10; shadow unchanged at 4/10 (3.3x) and 5/25 (1.6x); cumulative production precision@10 13/80 and @25 38/200, head-to-head production 12/60 vs shadow 19/60. Decision 17 is applied as written, from `verification_log.json` as logged (week 8: production 3, shadow 4); this note rides alongside. If nflverse corrects the stats, check-stats flags the week and the normal re-score applies.
+
 ## PRODUCTION: `odds_xgb_model_production.joblib` (commit `7f21e5c966e0d82d049181e3965d661425e01643`)
 
 - Precision@10 (pooled): 3/10 = 0.3000  (2.4x QB/RB/WR/TE base rate)
