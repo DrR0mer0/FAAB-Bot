@@ -298,6 +298,7 @@ def run_record(view, raw_file, top_n, n_pool, n_pool_available):
 
 
 SECTION_TITLE = "## Available in my league"
+STARTER_BACK_MARK = " *(starter back)*"     # the same marker as score_week.py's main table
 
 
 def render_section(view, ranked, top_n, taken_at):
@@ -323,5 +324,9 @@ def render_section(view, ranked, top_n, taken_at):
     for r in mine[:top_n]:
         a = avail[r["player_id"]]
         status = STATUS_LABEL[a["status"]] + (f" ({a['waiver_date']})" if a["status"] == "W" and a["waiver_date"] else "")
-        lines.append(f"| {r['rank']} | {r['name']} | {r['pos']} | {r['team']} | {r['score']:.4f} | {status} |")
+        name = r["name"] + (STARTER_BACK_MARK if r.get("starter_back") else "")
+        lines.append(f"| {r['rank']} | {name} | {r['pos']} | {r['team']} | {r['score']:.4f} | {status} |")
+    back = [r for r in mine[:top_n] if r.get("starter_back")]
+    if back:   # display only, from the prediction JSON (model/starter_back.py)
+        lines += ["", "_Starter back:_"] + [f"- {r['name']} (#{r['rank']}): {f['text']}" for r in back for f in r["starter_back"]]
     return "\n".join(lines) + "\n"

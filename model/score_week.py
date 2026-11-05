@@ -205,6 +205,7 @@ sys.path.insert(0, str(REPO_ROOT / "data"))
 sys.path.insert(0, str(REPO_ROOT / "tracker"))
 from team_crosswalk import norm_team  # noqa: E402 -- shared crosswalk; see data/team_crosswalk.py
 import injuries  # noqa: E402 -- the Out/Doubtful rule, shared with the tracker's pool rule
+import starter_back  # noqa: E402 -- the display-only "starter back" flag (model/starter_back.py)
 import yahoo_status  # noqa: E402 -- Yahoo's status against a long-term roster status (pool rule v4), shared likewise
 
 # See the module docstring's TIMEZONE NOTE for how this was determined.
@@ -419,7 +420,11 @@ def render_markdown_report(output, status_flags=None, flag_note=None):
     printed above the table. Scores, ranks, row order and the JSON are
     untouched, and with neither argument the output is exactly what it was
     before they existed. tracker/tracker.py's `log` passes the week's injury
-    designations here; nothing in this script fetches or decides them."""
+    designations here; nothing in this script fetches or decides them.
+
+    A record's `starter_back` list (model/starter_back.py, from 2026-11-04)
+    is display only too: a STARTER_BACK_MARK beside the name and a section
+    after the table, in plain words. A file without it reads as before."""
     counts = output["counts"]
     model = output.get("model") or {}
     lines = [
@@ -465,8 +470,9 @@ def render_markdown_report(output, status_flags=None, flag_note=None):
     ]
     for r in output["top"]:
         flag = (status_flags or {}).get(r["player_id"])
-        name = f"{r['name']} **({flag})**" if flag else r["name"]
+        name = (f"{r['name']} **({flag})**" if flag else r["name"]) + (STARTER_BACK_MARK if r.get("starter_back") else "")
         lines.append(f"| {r['rank']} | {name} | {r['pos']} | {r['team']} | {r['score']:.4f} |")
+    lines += starter_back_section(output["top"])
     withheld = output.get("injury_watch_list") or []
     if withheld:
         rule = output.get("injury_rule") or {}
@@ -476,6 +482,46 @@ def render_markdown_report(output, status_flags=None, flag_note=None):
                   f"_Designated on {src} when this was generated; Questionable players are ranked as usual._", ""]
         lines += [f"- {r['name']} ({r['pos']}, {r['team']}): {r['status']}" for r in withheld]
     return "\n".join(lines) + "\n"
+
+
+def starter_back_available(x, team, week, roster_team_of, weekly_status_of, roster_latest, roster_teams_in_week, yahoo_of,
+                           injury_out):
+    """Condition (c) of the starter-back flag: is teammate x available to play for `team` this week? The sources this
+    script already resolved: on an NFL roster (off_roster_reason), not on a long-term list unless Yahoo's status
+    overrules it (pool rule v4), not on the practice squad (DEV), not Out/Doubtful, and his weekly-roster team is
+    `team` (a traded player is not). Without a weekly roster file nothing can be confirmed: False."""
+    status, yahoo = weekly_status_of.get(x), yahoo_of.get(x)
+    if not roster_team_of and not roster_latest:
+        return False
+    if roster_latest and off_roster_reason(x, roster_latest, roster_teams_in_week, week):
+        return False
+    if status in UNAVAILABLE_STATUSES and not yahoo_status.overrides(status, yahoo):
+        return False
+    if status == "DEV" or x in injury_out:
+        return False
+    t = roster_team_of.get(x)
+    if t is None and yahoo_status.overrides(status, yahoo) and x in roster_latest:
+        t = roster_latest[x][2]
+    return t is not None and norm_team(t) == team
+
+
+STARTER_BACK_MARK = " *(starter back)*"
+STARTER_BACK_TITLE = "## Starter back (display only)"
+
+
+def starter_back_section(records):
+    """The markdown lines explaining every `starter_back` flag among `records` (dicts with name, rank, starter_back);
+    [] when none is flagged."""
+    flagged = [r for r in records if r.get("starter_back")]
+    if not flagged:
+        return []
+    out = ["", STARTER_BACK_TITLE, "",
+           "_A same-position teammate who out-snapped him before his trailing window missed game(s) in it and is "
+           "available this week (model/starter_back.py). It informs, it doesn't decide: scores, ranks and the tracker's "
+           "pool are unchanged._", ""]
+    for r in flagged:
+        out += [f"- {r['name']} (#{r['rank']}): {f['text']}" for f in r["starter_back"]]
+    return out
 
 
 def load_current_roster(path, season, week):
@@ -660,12 +706,15 @@ def write_output(model_path, model_commit, model_meta, args, names, ranked, stab
                   team_changed_records, new_competitor_records, unavailable_records,
                   already_played_records, no_game_records, off_roster_records, injury_records, injury_rule,
                   n_via_production_only, n_via_draft_only, n_via_both, json_out_path,
-                  mixed_window_records, yahoo_override_records, yahoo_summary):
+                  mixed_window_records, yahoo_override_records, yahoo_summary, starter_back_of=None):
+    starter_back_of = starter_back_of or {}
+
     def player_record(pid, feat, score=None):
         return {
             "player_id": pid, "name": names.get(pid, pid),
             "pos": feat["_pos"], "team": feat["_team"],
             "score": float(score) if score is not None else None,
+            "starter_back": starter_back_of.get(pid, []),
         }
 
     ranked_records = []
@@ -720,6 +769,8 @@ def write_output(model_path, model_commit, model_meta, args, names, ranked, stab
         "new_competitor_watch_list": new_competitor_records,
         "yahoo_status_override_list": yahoo_override_records,
         "yahoo_status": yahoo_summary,
+        "starter_back_rule": {"lead_min": starter_back.LEAD_MIN, "pre_window_games": starter_back.PRE_WINDOW_GAMES,
+                              "display_only": True, "n_flagged": sum(1 for v in starter_back_of.values() if v)},
     }
 
     json_out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1011,6 +1062,30 @@ def main():
     injury_list = [(pid, feat, injury_out[pid]) for pid, feat in stable if pid in injury_out]
     stable = [(pid, feat) for pid, feat in stable if pid not in injury_out]
 
+    # "Starter back" (model/starter_back.py): DISPLAY ONLY, computed after the pool is final and read by nothing that
+    # scores, ranks or picks. A teammate counts as available this week on the same sources as above: his weekly-roster
+    # team and status (Yahoo may overrule a long-term status, v4), on a roster, not Out/Doubtful. Practice-squad (DEV)
+    # players are not available. Without a weekly roster file nothing can be confirmed, so nobody is flagged.
+    snap_index = starter_back.SnapIndex.from_db(con, min_season=args.season - 2)
+
+    def teammate_available(x, team):
+        return starter_back_available(x, team, args.week, roster_team_of, weekly_status_of, roster_latest,
+                                      roster_teams_in_week, yahoo_of, injury_out)
+
+    starter_back_of = {}
+    for pid, feat in stable:
+        team = norm_team(roster_team_of.get(pid) or feat["_team"])
+        flags = starter_back.starter_back(pid, feat["_pos"], team, engine.trailing_window(pid, args.season, args.week),
+                                          (args.season, args.week), snap_index, lambda x, team=team: teammate_available(x, team))
+        for f in flags:
+            f["teammate"] = names.get(f["teammate_id"], f["teammate_id"])
+            f["text"] = starter_back.describe(f, names.get(pid, pid), f["teammate"], args.season)
+        if flags:
+            starter_back_of[pid] = flags
+    if starter_back_of:
+        print(f"[INFO] starter back (display only): {len(starter_back_of)} scored player(s) flagged -- "
+              + "; ".join(f"{names.get(p, p)}: {f['text']}" for p, fl in list(starter_back_of.items())[:8] for f in fl[:1]))
+
     print(f"[INFO] {len(stable)} stable candidates scored ({n_released_by_recency} of those released from "
           f"offseason suppression this week, having reached {MIN_PRIOR_GAMES}+ current-season games); "
           f"{len(no_game_list)} with no game this week (bye, excluded); "
@@ -1172,7 +1247,7 @@ def main():
                          team_changed_records, new_competitor_records, unavailable_records,
                          already_played_records, no_game_records, off_roster_records, injury_records, injury_rule,
                          n_via_production_only, n_via_draft_only, n_via_both, json_out_path,
-                         mixed_window_records, yahoo_override_records, yahoo_status.summary(yahoo_rec))
+                         mixed_window_records, yahoo_override_records, yahoo_status.summary(yahoo_rec), starter_back_of)
 
     json_out_path = Path(args.json_out) if args.json_out else None
     run_pass(args.model, "PRODUCTION", json_out_path, baseline_production_path)
