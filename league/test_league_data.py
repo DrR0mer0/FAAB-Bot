@@ -466,6 +466,31 @@ class TestFailures(LeagueDataCase):
         self.assertNotIn(KEY, self.stderr)
         self.assertEqual(self.rows("SELECT COUNT(*), SUM(ok) FROM lg_snapshots"), [(6, 0)])
 
+    def test_summary_line_carries_an_error_every_resource_shares(self):
+        """What scheduled_runs.log and the failure message box show (the last [LEAGUE DATA] line)."""
+        def failing_session():
+            raise RuntimeError(f"Yahoo token refresh failed: HTTP 503,\n  body '<html>' for {KEY}")
+        with mock.patch("sys.stderr"):
+            out = league_data.take_snapshot(self.con, KEY, self.dir / "raw", self.roster, now=NOW,
+                                            fetcher=lambda k, **kw: league_data.fetch(k, open_session=failing_session, **kw))
+        line = league_data.summary_line(out)
+        self.assertTrue(line.startswith("[LEAGUE DATA] teams FAILED: 0 rows; transactions FAILED: 0 rows;"), line)
+        self.assertTrue(line.endswith("lineups FAILED: 0 rows -- every resource failed with: "
+                                      "RuntimeError: Yahoo token refresh failed: HTTP 503, body '<html>' for <league>"), line)
+        self.assertNotIn("\n", line)
+        self.assertNotIn(KEY, line)
+
+        def res(ok, error, n=0):
+            return {"ok": ok, "error": error, "n_rows": n, "snapshot_id": None}
+        plain = "[LEAGUE DATA] " + "; ".join(f"{r} FAILED: 0 rows" for r in league_data.RESOURCES)
+        mixed = {r: res(False, f"RuntimeError: HTTP 500 on {r}") for r in league_data.RESOURCES}
+        self.assertEqual(league_data.summary_line(mixed), plain)                     # different errors: banners only
+        one_ok = dict({r: res(False, "TimeoutError: ran out of time") for r in league_data.RESOURCES}, teams=res(True, None, 12))
+        self.assertNotIn("every resource", league_data.summary_line(one_ok))        # not every resource failed
+        all_ok = {r: res(True, None, 5) for r in league_data.RESOURCES}
+        self.assertEqual(league_data.summary_line(all_ok),
+                         "[LEAGUE DATA] " + "; ".join(f"{r} ok: 5 rows" for r in league_data.RESOURCES))   # unchanged
+
     def test_no_credentials_or_no_league_key_is_a_recorded_failure(self):
         def no_credentials():
             raise SystemExit("[ERROR] YAHOO_CLIENT_ID / YAHOO_CLIENT_SECRET not set")

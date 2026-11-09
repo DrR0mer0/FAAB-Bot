@@ -1363,8 +1363,21 @@ def cmd_snapshot(args):
     finally:
         con.close()
     failed = [r for r in RESOURCES if not summary[r]["ok"]]
-    print("[LEAGUE DATA] " + "; ".join(f"{r} {'ok' if summary[r]['ok'] else 'FAILED'}: {summary[r]['n_rows']} rows" for r in RESOURCES))
+    print(summary_line(summary))
     return 1 if failed else 0
+
+
+def summary_line(summary):
+    """The snapshot's one-line result, which tracker/scheduled_run.py puts in scheduled_runs.log and the failure
+    message box. When every resource failed with the same error (the session could not be opened, e.g. a failed token
+    refresh), that error is appended on the same line, whitespace collapsed; otherwise the per-resource errors are
+    only in the banners above it and in lg_snapshots."""
+    line = "[LEAGUE DATA] " + "; ".join(f"{r} {'ok' if summary[r]['ok'] else 'FAILED'}: {summary[r]['n_rows']} rows"
+                                        for r in RESOURCES)
+    errors = {summary[r]["error"] for r in RESOURCES}
+    if not any(summary[r]["ok"] for r in RESOURCES) and len(errors) == 1 and None not in errors:
+        line += " -- every resource failed with: " + " ".join(errors.pop().split())
+    return line
 
 
 def cmd_report(args):
