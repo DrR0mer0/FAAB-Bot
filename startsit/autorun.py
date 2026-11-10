@@ -5,6 +5,7 @@
   python startsit/autorun.py plan             # ...without --register: only show them (--write: also write plan.json)
   python startsit/autorun.py table            # every remaining week's run times for the current roster
   python startsit/autorun.py run              # do whichever planned run is due now (what the run task calls)
+  python startsit/autorun.py now              # a report on demand: the current week as of now (cmd_now)
 
 WHAT RUNS, AND WHEN (local time; computed, never typed in)
   preliminary  the morning of each week's first game day (Thursday most weeks; Wednesday in week 12) at 06:50,
@@ -39,8 +40,12 @@ HOW IT IS SCHEDULED -- two Task Scheduler tasks (registered by `scheduled_run.py
 OUTPUT -- league_data/startsit/ (gitignored: it names the league's teams), never overwritten by another run:
   <season>_week<NN>_preliminary.json (+ _report.md / _report.json)
   <season>_week<NN>_prelock_<kickoff local YYYYMMDD_HHMM>.json (+ _report.md / _report.json)
+  <season>_week<NN>_ondemand_<local YYYYMMDD_HHMMSS>.json (+ _report.md / _report.json) -- `now`
   plan.json (the current plan) and games.csv (the downloaded schedule). The --stage thursday / sunday commands
   of build_week.py are unchanged and still write league_data/<season>_week<NN>_<stage>.json.
+  Each report says what it is under its title (report_label, passed as build_week.py --label): "Preliminary (...)",
+  "Pre-lock: <day> <date>, <kickoff> kickoff (<games>)", "Final call: ..." for the week's last pre-lock run in the plan
+  (the last kickoff with one of my players), or "On demand (...)".
 
 ALERTS -- only when there's something to act on. After a pre-lock run, if the recommended starters differ from
 my current Yahoo lineup in the fresh snapshot, a non-blocking Windows notification says what to swap and how
@@ -287,6 +292,9 @@ def compute_plan(games, my_teams, matchups, end_week, now, source, horizon=HORIZ
 def output_stem(entry, out_dir=OUT_DIR):
     if entry["kind"] == "preliminary":
         return Path(out_dir) / f"{entry['season']}_week{entry['week']:02d}_preliminary"
+    if entry["kind"] == "ondemand":
+        when = datetime.fromisoformat(entry["run_at_local"])
+        return Path(out_dir) / f"{entry['season']}_week{entry['week']:02d}_ondemand_{when:%Y%m%d_%H%M%S}"
     lock_local = datetime.fromisoformat(entry["lock_local"])
     return Path(out_dir) / f"{entry['season']}_week{entry['week']:02d}_prelock_{lock_local:%Y%m%d_%H%M}"
 
@@ -522,9 +530,37 @@ def write_plan(path, plan):
 
 def describe(entry):
     when = datetime.fromisoformat(entry["run_at_local"])
-    lock = datetime.fromisoformat(entry["lock_local"])
-    what = "preliminary" if entry["kind"] == "preliminary" else f"pre-lock {lock:%H:%M} ({', '.join(entry['games'])})"
+    if entry["kind"] in ("preliminary", "ondemand"):
+        what = "preliminary" if entry["kind"] == "preliminary" else "on demand"
+    else:
+        what = f"pre-lock {datetime.fromisoformat(entry['lock_local']):%H:%M} ({', '.join(entry['games'])})"
     return f"{when:%a %m-%d %H:%M} w{entry['week']:02d} {what}"
+
+
+def is_final(entry, entries):
+    """Is this the week's last pre-lock run in the plan (the last kickoff with one of my players)?"""
+    if entry["kind"] != "prelock":
+        return False
+    lock = datetime.fromisoformat(entry["lock"])
+    return not any(e["kind"] == "prelock" and e["season"] == entry["season"] and e["week"] == entry["week"]
+                   and datetime.fromisoformat(e["lock"]) > lock for e in entries)
+
+
+def report_label(entry, final=False):
+    """What the report says it is, under its title (build_week.py --label). Found 2026-11-10: every pre-lock report
+    was built with --stage sunday and read "Final call (Sunday, post-inactives)", a Thursday one included."""
+    when = datetime.fromisoformat(entry["run_at_local"])
+    if entry["kind"] == "preliminary":
+        return (f"Preliminary ({when:%a %m-%d %H:%M}): an early look -- a pre-lock run follows "
+                f"{LEAD.seconds // 60} minutes before each kickoff with one of my players")
+    if entry["kind"] == "ondemand":
+        return f"On demand ({when:%a %m-%d %H:%M}), as of then -- not one of the planned runs"
+    lock = datetime.fromisoformat(entry["lock_local"])
+    games = ", ".join(entry.get("games") or [])
+    if final:
+        return (f"Final call: {lock:%a %m-%d}, {lock:%H:%M} kickoff ({games}), after inactives -- the week's last kickoff "
+                f"with one of my players")
+    return f"Pre-lock: {lock:%a %m-%d}, {lock:%H:%M} kickoff ({games}), after inactives"
 
 
 # ------------------------------------------------------------------ task registration
@@ -673,18 +709,20 @@ def write_live_points(entry, now, db, out_dir, fetch=None):
 
 
 def run_entry(entry, now, db, raw_dir, league_raw_dir, out_dir, run=sr.run_step, as_of=None, take_snapshot=None,
-              live=None):
-    """-> (rc, summary, detail text, alert or None). Steps: league snapshot (always for a pre-lock run; for the
-    preliminary only if the newest is over an hour old), build_week.py --run, then the comparison."""
+              live=None, final=False):
+    """-> (rc, summary, detail text, alert or None). Steps: league snapshot (always for a pre-lock or on-demand run;
+    for the preliminary only if the newest is over an hour old), build_week.py --run, then the comparison.
+    final: this is the week's last pre-lock run (is_final) -- only its report says "Final call"."""
     py = sr.console_python()
     parts = []
+    lockish = entry["kind"] in ("prelock", "ondemand")      # built like a pre-lock: as of now, with live points
     if take_snapshot is None:
         con = bw.connect_ro(db)
         try:
             age = snapshot_age(con, now)
         finally:
             con.close()
-        take_snapshot = entry["kind"] == "prelock" or age is None or age > SNAPSHOT_FRESH
+        take_snapshot = lockish or age is None or age > SNAPSHOT_FRESH
     if take_snapshot:
         argv = [py, str(REPO_ROOT / "league" / "league_data.py"), "snapshot", "--db", str(db), "--raw-dir", str(league_raw_dir)]
         code, out = run(argv)
@@ -694,13 +732,13 @@ def run_entry(entry, now, db, raw_dir, league_raw_dir, out_dir, run=sr.run_step,
     stem = output_stem(entry, out_dir)
     stem.parent.mkdir(parents=True, exist_ok=True)
     live_file = None
-    if entry["kind"] == "prelock" and live is not False:
+    if lockish and live is not False:
         live_file, note = write_live_points(entry, now, db, out_dir, fetch=live)
         parts.append(f"\n## {note}\n")
     argv = [py, str(HERE / "build_week.py"), "--season", str(entry["season"]), "--week", str(entry["week"]),
             "--stage", "thursday" if entry["kind"] == "preliminary" else "sunday", "--run", "--db", str(db),
-            "--raw-dir", str(raw_dir), "--out", f"{stem}.json"] + (["--as-of", as_of.isoformat()] if as_of else []) \
-        + (["--live-points", str(live_file)] if live_file else [])
+            "--raw-dir", str(raw_dir), "--out", f"{stem}.json", "--label", report_label(entry, final)] \
+        + (["--as-of", as_of.isoformat()] if as_of else []) + (["--live-points", str(live_file)] if live_file else [])
     code, out = run(argv)
     parts.append(f"\n## build_week\n$ {' '.join(argv)}\n{out.rstrip()}\n[exit {code}]\n")
     if code != 0:
@@ -716,7 +754,6 @@ def run_entry(entry, now, db, raw_dir, league_raw_dir, out_dir, run=sr.run_step,
     win = report.get("win_prob")
     head = describe(entry) + (f", win prob {win:.0%}" if win is not None else "")
     out = cant_play(week_file)
-    lock = datetime.fromisoformat(entry["lock_local"])
     if out:
         parts.append(f"\n## starting on Yahoo but can't play\n{', '.join(out)}\n")
     if entry["kind"] == "preliminary":
@@ -730,7 +767,11 @@ def run_entry(entry, now, db, raw_dir, league_raw_dir, out_dir, run=sr.run_step,
         return 0, f"[STARTSIT] {head}: recommended lineup matches Yahoo's -- {stem.name}_report.md", "".join(parts), None
     parts.append(f"\n## differs from the Yahoo lineup\n{diff['text']}\n")
     text = diff["text"] + (f". Can't play: {', '.join(out)}" if out else "")
-    alert = (f"Start/sit week {entry['week']}: change before {lock:%a %H:%M}", f"{text}. Report: {stem.name}_report.md")
+    if entry["kind"] == "ondemand":
+        title = f"Start/sit week {entry['week']} (on demand): your lineup differs"
+    else:
+        title = f"Start/sit week {entry['week']}: change before {datetime.fromisoformat(entry['lock_local']):%a %H:%M}"
+    alert = (title, f"{text}. Report: {stem.name}_report.md")
     return 0, f"[STARTSIT] {head}: DIFFERS from Yahoo -- {text} -- {stem.name}_report.md", "".join(parts), alert
 
 
@@ -773,7 +814,8 @@ def cmd_run(args):
         rc, summary, text, diff_alert = run_entry(entry, now, args.db, args.raw_dir, args.league_raw_dir, args.out_dir,
                                                   as_of=now if args.as_of else None,
                                                   take_snapshot=False if args.no_snapshot else None,
-                                                  live=False if getattr(args, "no_live", False) else None)
+                                                  live=False if getattr(args, "no_live", False) else None,
+                                                  final=is_final(entry, (plan or {}).get("entries", [])))
         shown = toast(*diff_alert) if diff_alert else None
         detail.write_text(f"# {RUN_JOB} {entry['key']} started {now_local:%Y-%m-%d %H:%M:%S} (local)"
                           + (f" after waiting {waited:.0f} s for a tracker log job" if waited else "") + f"\n{text}"
@@ -792,6 +834,60 @@ def cmd_run(args):
     for n in filter(None, notes):
         print(n)
     return rc_all
+
+
+NOW_WAIT = PLAN_WAIT   # how long `now` waits for a running tracker log job before giving up (it never runs alongside)
+
+
+def cmd_now(args):
+    """`autorun.py now`: a start/sit report on demand, for the current league week, as of now. Built like a pre-lock run
+    (fresh league snapshot, Yahoo's live points, build_week.py --stage sunday --run, compared with the Yahoo lineup),
+    written to league_data/startsit/<season>_week<NN>_ondemand_<local timestamp>.json (+ _report.md / _report.json),
+    printed, and a notification only when the recommendation differs from the Yahoo lineup. It waits while a tracker
+    log job runs and gives up rather than run alongside it. Not a planned run: no scheduled_runs.log line, and the
+    plan is left alone."""
+    # the report names the league's teams, and a console code page (cp1252) can't show every character they use
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+    now = datetime.fromisoformat(args.as_of) if args.as_of else utcnow()
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    clear, waited = wait_for_log_jobs(utcnow() + NOW_WAIT)
+    if not clear:
+        print(f"[STARTSIT NOW] not run: a tracker log job was still running after {waited / 60:.0f} minutes and the log "
+              f"job comes first -- try again once it has finished")
+        return 3
+    if waited >= 1:
+        print(f"[STARTSIT NOW] waited {waited:.0f} s for a tracker log job")
+        if not args.as_of:
+            now = utcnow()
+    now_local = to_local(now)
+    con = bw.connect_ro(args.db)
+    try:
+        week = args.week or ld.current_week(con, now.astimezone(ld.LEAGUE_TZ).date())
+    finally:
+        con.close()
+    if week is None:
+        print("[STARTSIT NOW] not run: no league scoreboard snapshot to tell the current week (pass --week)")
+        return 2
+    season = args.season or (now_local.year if now_local.month >= 3 else now_local.year - 1)
+    entry = {"key": f"{season}w{week:02d}-ondemand-{now:%Y%m%dT%H%M%SZ}", "kind": "ondemand", "season": season,
+             "week": week, "run_at": now.isoformat(), "run_at_local": now_local.isoformat(timespec="seconds"),
+             "lock": None, "lock_local": None, "games": [], "players": []}
+    rc, summary, text, diff_alert = run_entry(entry, now, args.db, args.raw_dir, args.league_raw_dir, args.out_dir,
+                                              as_of=now if args.as_of else None,
+                                              take_snapshot=False if args.no_snapshot else True,
+                                              live=False if args.no_live else None)
+    print(text.strip())
+    report = Path(f"{output_stem(entry, args.out_dir)}_report.md")
+    if rc == 0 and report.exists():
+        print("\n" + report.read_text(encoding="utf-8").rstrip())
+    print("\n" + summary)
+    if diff_alert:
+        shown = notify(*diff_alert) if not args.no_notify else "printed"
+        print(f"[STARTSIT NOW] notification: {shown}" + (f" -- {diff_alert[0]}: {diff_alert[1]}" if args.no_notify else ""))
+    return rc
 
 
 def replan_if_needed(args, plan, now):
@@ -900,7 +996,7 @@ def _handled_today(log_dir, now_local):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("plan", "table", "run"):
+    for name in ("plan", "table", "run", "now"):
         p = sub.add_parser(name)
         p.add_argument("--db", default=str(bw.DEFAULT_DB))
         p.add_argument("--raw-dir", default=str(bw.DEFAULT_RAW_DIR))
@@ -917,14 +1013,20 @@ def main(argv=None):
         if name == "plan":
             p.add_argument("--register", action="store_true", help="register the run task (what the daily task does)")
             p.add_argument("--write", action="store_true", help="write the plan file without registering anything (dry runs)")
-        if name == "run":
+        if name in ("run", "now"):
             p.add_argument("--no-snapshot", action="store_true", help="dry runs: build from the snapshot already in --db")
             p.add_argument("--no-notify", action="store_true", help="print the notification instead of showing it")
-            p.add_argument("--no-register", action="store_true", help="never start the plan task")
             p.add_argument("--no-live", action="store_true", help="don't fetch Yahoo's live points")
+        if name == "run":
+            p.add_argument("--no-register", action="store_true", help="never start the plan task")
+        if name == "now":
+            p.add_argument("--season", type=int, default=None)
+            p.add_argument("--week", type=int, default=None, help="default: the current league week (Yahoo's scoreboard)")
     args = ap.parse_args(argv)
     if args.cmd == "run":
         return cmd_run(args)
+    if args.cmd == "now":
+        return cmd_now(args)
     args.table = args.cmd == "table"
     if args.table:
         args.register = False

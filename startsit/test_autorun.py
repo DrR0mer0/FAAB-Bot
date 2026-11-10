@@ -450,6 +450,160 @@ class TestRunTask(unittest.TestCase):
         self.assertEqual(ar.carry_over(old, {"entries": []}, lock + timedelta(days=9), set())["entries"], [])
 
 
+class TestReportLabels(unittest.TestCase):
+    """Each report says what it is (found 2026-11-10: a Thursday pre-lock report read "Final call (Sunday, post-inactives)").
+    Week 9 of the real schedule, made-up roster: TNF, the Sunday slate, MNF."""
+
+    MY = {"BAL": ["Thursday Back"], "CAR": ["Sunday Receiver"], "MIN": ["Monday End"]}
+
+    def entries(self):
+        return plan(self.MY, 9)[0]
+
+    def test_preliminary_pre_lock_with_day_and_kickoff_and_the_weeks_last_one_as_final(self):
+        es = self.entries()
+        self.assertEqual([e["kind"] for e in es], ["preliminary", "prelock", "prelock", "prelock"])
+        finals = [ar.is_final(e, es) for e in es]
+        self.assertEqual(finals, [False, False, False, True])
+        labels = [ar.report_label(e, f) for e, f in zip(es, finals)]
+        self.assertEqual(labels[0], "Preliminary (Thu 11-05 06:50): an early look -- a pre-lock run follows 60 minutes "
+                                    "before each kickoff with one of my players")
+        self.assertEqual(labels[1], "Pre-lock: Thu 11-05, 17:15 kickoff (JAX@BAL), after inactives")
+        self.assertEqual(labels[2], "Pre-lock: Sun 11-08, 10:00 kickoff (DEN@CAR), after inactives")
+        self.assertEqual(labels[3], "Final call: Mon 11-09, 17:15 kickoff (BUF@MIN), after inactives -- the week's last "
+                                    "kickoff with one of my players")
+        self.assertFalse(any("Final" in lab for lab in labels[:3]))
+        # a plan holding only the Thursday run (the rest not planned yet) can't call it final... once Sunday is in, never
+        self.assertTrue(ar.is_final(es[1], es[:2]))
+        self.assertFalse(ar.is_final(es[1], es))
+        # another week's later run doesn't count
+        other = dict(es[3], week=10, lock="2026-11-20T01:15:00+00:00")
+        self.assertTrue(ar.is_final(es[3], es + [other]))
+
+    def test_the_label_reaches_build_week_and_only_the_last_pre_lock_run_is_final(self):
+        es = self.entries()
+        argvs = []
+
+        def fake(argv):
+            argvs.append(argv)
+            return 2, "[WEEK FILE] NOT BUILT: stop here"
+        with tempfile.TemporaryDirectory() as d:
+            ar.run_entry(es[1], utc("2026-11-06T00:15:00"), "db", "raw", "lraw", d, run=fake, take_snapshot=False, live=False)
+            ar.run_entry(es[3], utc("2026-11-10T00:15:00"), "db", "raw", "lraw", d, run=fake, take_snapshot=False, live=False,
+                         final=True)
+        self.assertEqual(argvs[0][argvs[0].index("--label") + 1], "Pre-lock: Thu 11-05, 17:15 kickoff (JAX@BAL), after inactives")
+        self.assertTrue(argvs[1][argvs[1].index("--label") + 1].startswith("Final call: Mon 11-09, 17:15 kickoff (BUF@MIN)"))
+        # the run task works out which one is final from the plan
+        with tempfile.TemporaryDirectory() as d:
+            ar.write_plan(Path(d) / "plan.json", {"entries": es})
+            seen = {}
+            args = argparse.Namespace(as_of=es[3]["run_at"], log_dir=d, plan_file=str(Path(d) / "plan.json"), no_popup=True,
+                                      no_notify=True, no_snapshot=True, no_register=True, db="x.db", raw_dir="r",
+                                      league_raw_dir="l", out_dir=d)
+            with mock.patch.object(ar, "run_entry", side_effect=lambda e, *a, **k: seen.update({e["key"]: k["final"]})
+                                   or (0, "[STARTSIT] ok", "t", None)), \
+                    mock.patch.object(ar, "log_job_running", return_value=False), mock.patch("builtins.print"):
+                ar.cmd_run(args)
+            self.assertEqual(seen, {es[3]["key"]: True})
+
+    def test_lineup_sim_prints_the_week_files_label_and_keeps_the_stage_wording_for_a_hand_built_file(self):
+        hand = dict(EXAMPLE, stage="sunday")
+        hand.pop("label", None)
+        self.assertIn("_Final call (Sunday, post-inactives)_", lineup_sim.run_week(hand, n_sims=200, seed=1)["report_md"])
+        labelled = dict(hand, label="Pre-lock: Thu 11-05, 17:15 kickoff (JAX@BAL), after inactives")
+        result = lineup_sim.run_week(labelled, n_sims=200, seed=1)
+        self.assertIn("_Pre-lock: Thu 11-05, 17:15 kickoff (JAX@BAL), after inactives_", result["report_md"])
+        self.assertNotIn("Final call", result["report_md"])
+        self.assertEqual(result["label"], labelled["label"])
+
+
+class TestOnDemand(unittest.TestCase):
+    """`autorun.py now`: the current week as of now, like a pre-lock run, printed; a notification only on a difference."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def args(self, **kw):
+        base = dict(as_of="2026-11-10T16:15:30+00:00", db="x.db", raw_dir="r", league_raw_dir="l", out_dir=str(self.dir),
+                    plan_file=str(self.dir / "plan.json"), log_dir=str(self.dir), scheduled=False, no_popup=True,
+                    no_snapshot=False, no_notify=False, no_live=False, season=None, week=None)
+        return argparse.Namespace(**{**base, **kw})
+
+    def now(self, args, result=(0, "[STARTSIT] Tue 11-10 08:15 w10 on demand: recommended lineup matches Yahoo's", "text", None),
+            busy=lambda: False, week=10):
+        calls, shown, printed = [], [], []
+
+        def fake_run_entry(e, now, *a, **k):
+            calls.append((e, k))
+            return result
+        clock = [utc("2026-11-10T16:15:30")]
+
+        def sleep(s):
+            clock[0] += timedelta(seconds=s)
+        with mock.patch.object(ar, "run_entry", side_effect=fake_run_entry), \
+                mock.patch.object(ar, "notify", side_effect=lambda t, x: shown.append((t, x)) or "toast"), \
+                mock.patch.object(ar, "log_job_running", side_effect=busy), \
+                mock.patch.object(ar, "utcnow", side_effect=lambda: clock[0]), mock.patch.object(ar.time, "sleep", side_effect=sleep), \
+                mock.patch.object(ar.bw, "connect_ro", return_value=mock.Mock()), \
+                mock.patch.object(ar.ld, "current_week", return_value=week), \
+                mock.patch.object(ar, "to_local", side_effect=lambda dt, tz=None: dt.astimezone(PT)), \
+                mock.patch("builtins.print", side_effect=lambda *x, **k: printed.append(" ".join(map(str, x)))):
+            rc = ar.cmd_now(args)
+        return rc, calls, shown, "\n".join(printed)
+
+    def test_the_current_week_as_of_now_like_a_pre_lock_run_and_printed(self):
+        rc, calls, shown, out = self.now(self.args())
+        self.assertEqual(rc, 0)
+        (e, k), = calls
+        self.assertEqual((e["kind"], e["season"], e["week"]), ("ondemand", 2026, 10))
+        self.assertEqual(ar.output_stem(e, self.dir).name, "2026_week10_ondemand_20261110_081530")   # local time
+        self.assertEqual((k["take_snapshot"], k["live"]), (True, None))      # a fresh snapshot and live points
+        self.assertEqual(ar.report_label(e), "On demand (Tue 11-10 08:15), as of then -- not one of the planned runs")
+        self.assertEqual(ar.describe(e), "Tue 11-10 08:15 w10 on demand")
+        self.assertIn("recommended lineup matches Yahoo's", out)
+        self.assertEqual(shown, [])                                           # no difference: no notification
+        self.assertFalse((self.dir / sr.SUMMARY_LOG).exists())                # not a planned run: no log line
+
+    def test_a_difference_notifies(self):
+        alert = ("Start/sit week 10 (on demand): your lineup differs", "Start A over B -- lean. Report: x_report.md")
+        rc, _c, shown, _o = self.now(self.args(), result=(0, "[STARTSIT] DIFFERS", "text", alert))
+        self.assertEqual((rc, shown), (0, [alert]))
+
+    def test_it_never_runs_while_a_log_job_runs(self):
+        rc, calls, shown, out = self.now(self.args(), busy=lambda: True)
+        self.assertEqual((rc, calls, shown), (3, [], []))
+        self.assertIn("a tracker log job was still running", out)
+        busy = iter([True, True, False])
+        rc, calls, _s, _o = self.now(self.args(), busy=lambda: next(busy))     # finished while it waited: then it runs
+        self.assertEqual((rc, len(calls)), (0, 1))
+
+    def test_no_scoreboard_no_week_unless_given(self):
+        rc, calls, _s, out = self.now(self.args(), week=None)
+        self.assertEqual((rc, calls), (2, []))
+        rc, calls, _s, _o = self.now(self.args(week=11), week=None)
+        self.assertEqual(calls[0][0]["week"], 11)
+
+    def test_run_entry_on_demand_builds_like_a_pre_lock_run_with_its_own_label_and_alert_title(self):
+        e = {"key": "k", "kind": "ondemand", "season": 2026, "week": 10, "run_at": "2026-11-10T16:15:30+00:00",
+             "run_at_local": "2026-11-10T08:15:30-08:00", "lock": None, "lock_local": None, "games": [], "players": []}
+        argvs = []
+
+        def fake(argv):
+            argvs.append(argv)
+            return 2, "[WEEK FILE] NOT BUILT: stop here"
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(ar, "write_live_points", return_value=(Path(d) / "x_live.json", "live points: 2")):
+                ar.run_entry(e, utc("2026-11-10T16:15:30"), "db", "raw", "lraw", d, run=fake, take_snapshot=False)
+        argv = argvs[-1]
+        self.assertEqual(argv[argv.index("--stage") + 1], "sunday")
+        self.assertIn("--live-points", argv)
+        self.assertTrue(argv[argv.index("--label") + 1].startswith("On demand (Tue 11-10 08:15)"))
+        self.assertTrue(argv[argv.index("--out") + 1].endswith("2026_week10_ondemand_20261110_081530.json"))
+
+
 class TestTaskDefinitions(unittest.TestCase):
     def test_one_one_shot_trigger_per_future_run_and_the_other_tasks_settings(self):
         lock = utc("2026-11-06T01:15:00")

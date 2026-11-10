@@ -454,6 +454,9 @@ def build_parser():
     ap.add_argument("--live-points", default=None,
                     help="--stage sunday: a JSON file {fetched_at, points: {yahoo player id: points}} of Yahoo's live points for "
                          "this week (startsit/autorun.py writes it); used as actual for locked players whose game is over")
+    ap.add_argument("--label", default=None,
+                    help="what the report says it is, under its title (startsit/autorun.py passes one for every run it "
+                         "makes); default: the stage's wording")
     ap.add_argument("--run", action="store_true", help="also run lineup_sim and save <out>_report.md / _report.json")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--sims", type=int, default=lineup_sim.DEFAULT_SIMS)
@@ -481,6 +484,8 @@ def main(argv=None, injury_fetch=injuries.fetch_nflverse):
         return 2
     finally:
         con.close()
+    if args.label:
+        week_file["label"] = args.label
     out = Path(args.out) if args.out else default_out(args.season, args.week, args.stage)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(week_file, indent=1, ensure_ascii=False), encoding="utf-8")

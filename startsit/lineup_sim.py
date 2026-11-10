@@ -321,6 +321,7 @@ def parse_week(week: dict):
         "week": week.get("week"),
         "season": week.get("season"),
         "stage": str(week.get("stage") or "").strip().lower() or None,
+        "label": str(week.get("label") or "").strip() or None,
         "my_team_name": my.get("name") or "My team",
         "opponent_name": opp.get("name") or "Opponent",
     }
@@ -598,10 +599,18 @@ def decide(meta, slots, my_players, opp_players, n_sims=DEFAULT_SIMS, seed=None,
 # Output
 # --------------------------------------------------------------------------- #
 
+# What a report says it is. A week file's own `label` (startsit/autorun.py sets it for every planned and on-demand run:
+# preliminary, pre-lock with day and kickoff, the week's last pre-lock as the final call) wins; these are for a week
+# file built by hand with only a stage. Found 2026-11-10: every automatic pre-lock run is built with stage "sunday", so
+# a Thursday pre-lock report read "Final call (Sunday, post-inactives)".
 STAGE_LABELS = {
     "thursday": "Preliminary lean (Thursday) - re-run Sunday after inactives",
     "sunday": "Final call (Sunday, post-inactives)",
 }
+
+
+def report_label(meta: dict) -> str | None:
+    return meta.get("label") or (STAGE_LABELS.get(meta["stage"], meta["stage"]) if meta.get("stage") else None)
 
 
 def _fmt(x: float) -> str:
@@ -614,8 +623,8 @@ def render_markdown(d: dict, warnings: list[str]) -> str:
     if meta.get("week") is not None:
         title = f"Week {meta['week']} start/sit"
     lines = [f"# {title}: {meta['my_team_name']} vs {meta['opponent_name']}"]
-    if meta.get("stage"):
-        lines.append(f"_{STAGE_LABELS.get(meta['stage'], meta['stage'])}_")
+    if report_label(meta):
+        lines.append(f"_{report_label(meta)}_")
     lines.append("")
 
     if d["p_win"] is not None:
@@ -698,6 +707,7 @@ def to_json(d: dict, warnings: list[str]) -> dict:
         "schema_version": SCHEMA_VERSION,
         "week": d["meta"].get("week"),
         "stage": d["meta"].get("stage"),
+        "label": report_label(d["meta"]),
         "win_prob": d["p_win"],
         "my_median": d["my_median"],
         "opp_median": d["opp_median"],
