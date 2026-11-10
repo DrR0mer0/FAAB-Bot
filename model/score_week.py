@@ -81,6 +81,24 @@ broken: the check is NOT applied and a [ROSTER WARNING] is printed (the
 tracker's `log` refuses on it). Practice-squad (DEV) players stay in -- an
 open question, not a decision. EXE (exempt list) joins the availability gate.
 
+Pool rule v5 (from 2026 week 10; tracker/yahoo_status.py roster_conflict,
+with the statuses and teams `log` passes in --yahoo-status): Yahoo against a
+weekly roster that hasn't caught up. (a) nflverse says ACT and Yahoo says NA
+("Inactive: Coach's Decision or Not on Roster"): not on a roster, listed in
+off_roster_watch_list with source "yahoo". At log time no game still to come
+has announced its inactives, and NA on an ACT player there meant a release
+(Kendre Miller, waived between Saturday and Sunday of week 9 and ranked
+production #4 that Sunday; Cody White, week 9 thu). NA on a practice-squad
+(DEV) player is routine and changes nothing. (b) Yahoo has him on a team the
+weekly roster never had him on this season: Yahoo is ahead (a trade or
+signing), so that team is his roster team for the team check and he is
+team-change suppressed -- a traded player is never called off-roster (Jacoby
+Brissett, ARI -> BAL in week 9). If Yahoo's team is one the roster file
+already had him on, nflverse is the newer source and nothing changes. Applied
+after the kickoff guard; every conflict is listed in yahoo_roster_conflicts.
+A run by hand without --yahoo-status applies neither; a statuses file without
+Yahoo's teams (before 2026-11-10) applies only (a).
+
 Out/Doubtful check (from 2026-10-18): a player designated Out or Doubtful
 on the week's NFL injury report at run time is not ranked and is listed in
 injury_watch_list -- the tracker's pool rule, applied to the ranking too.
@@ -247,6 +265,9 @@ UNAVAILABLE_REASON = ("known long-term unavailable (reserve/IR, PUP, non-footbal
 # by PHI in week 5, was ranked in the week 6 pool on his stats-history team.
 OFF_ROSTER_STATUSES = {"CUT", "RET"}
 OFF_ROSTER_REASON = "not on an NFL roster per the weekly roster (released, retired, or unsigned) -- not scored"
+# Pool rule v5 (a), tracker/yahoo_status.py roster_conflict: the weekly roster still says ACT, Yahoo says NA
+YAHOO_OFF_ROSTER_REASON = ("not on an NFL roster per Yahoo (NA) although the weekly roster still says ACT -- not scored "
+                           "(pool rule v5)")
 # A file that would put more of the candidates than this off a roster is broken (2026-10-15: 20 of 372 pool
 # players, ~5%), and the check is skipped with a [ROSTER WARNING] rather than gutting the pool.
 OFF_ROSTER_MAX_SHARE = 0.25
@@ -448,6 +469,8 @@ def render_markdown_report(output, status_flags=None, flag_note=None):
         lines.append(f"- No game this week (bye), not scored: {counts['no_game']}")
     if counts.get("off_roster"):
         lines.append(f"- Not on an NFL roster (released, retired or unsigned), not scored: {counts['off_roster']}")
+    if counts.get("yahoo_off_roster"):
+        lines.append(f"  - of them, per Yahoo (NA) while the weekly roster still says active: {counts['yahoo_off_roster']}")
     if counts.get("injury_out_doubtful"):
         lines.append(f"- Out/Doubtful on the injury report, not ranked: {counts['injury_out_doubtful']}")
     if counts.get("already_played") is not None:
@@ -457,6 +480,8 @@ def render_markdown_report(output, status_flags=None, flag_note=None):
         f"- Team-changed suppressed: {counts['team_changed_suppressed']}",
         *([f"- Mixed-team trailing window suppressed: {counts['mixed_window_suppressed']}"]
           if counts.get("mixed_window_suppressed") is not None else []),
+        *([f"  - of the team-changed, on a new team per Yahoo that the weekly roster doesn't show yet: "
+           f"{counts['yahoo_team_changed']}"] if counts.get("yahoo_team_changed") else []),
         f"- New-competitor suppressed: {counts['new_competitor_suppressed']} "
         f"({counts['new_competitor_via_production_only']} via production, "
         f"{counts['new_competitor_via_draft_only']} via draft, {counts['new_competitor_via_both']} via both)",
@@ -601,6 +626,26 @@ def load_roster_presence(path, season, week):
     return latest, teams_in_week
 
 
+def load_roster_season_teams(path, season, week):
+    """(teams_of, known_teams) for pool rule v5 (yahoo_status.roster_conflict): every team on each gsis_id's weekly
+    rows this season at or before `week`, and every team code in those rows."""
+    teams_of, known = {}, set()
+    with open(path, encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            if r.get("season") != str(season):
+                continue
+            try:
+                w = int(r.get("week") or 0)
+            except ValueError:
+                continue
+            if w <= 0 or w > week or not r.get("team"):
+                continue
+            known.add(r["team"])
+            if r.get("gsis_id"):
+                teams_of.setdefault(r["gsis_id"], set()).add(r["team"])
+    return teams_of, known
+
+
 def off_roster_reason(pid, latest, teams_in_week, week):
     """Why a player is not on an NFL roster for `week`, or None if he is (or
     the file can't say). See OFF_ROSTER_STATUSES. Shared with the tracker's
@@ -706,7 +751,8 @@ def write_output(model_path, model_commit, model_meta, args, names, ranked, stab
                   team_changed_records, new_competitor_records, unavailable_records,
                   already_played_records, no_game_records, off_roster_records, injury_records, injury_rule,
                   n_via_production_only, n_via_draft_only, n_via_both, json_out_path,
-                  mixed_window_records, yahoo_override_records, yahoo_summary, starter_back_of=None):
+                  mixed_window_records, yahoo_override_records, yahoo_summary, starter_back_of=None,
+                  yahoo_roster_records=(), yahoo_roster_rule=None):
     starter_back_of = starter_back_of or {}
 
     def player_record(pid, feat, score=None):
@@ -751,6 +797,8 @@ def write_output(model_path, model_commit, model_meta, args, names, ranked, stab
             "team_changed_suppressed": len(team_changed_records),
             "mixed_window_suppressed": len(mixed_window_records),
             "yahoo_status_overrides": len(yahoo_override_records),
+            "yahoo_off_roster": sum(1 for r in yahoo_roster_records if r["outcome"] == "off_roster"),
+            "yahoo_team_changed": sum(1 for r in yahoo_roster_records if r["outcome"] in ("team_changed", "mixed_window")),
             "new_competitor_suppressed": len(new_competitor_records),
             "new_competitor_via_production_only": n_via_production_only,
             "new_competitor_via_draft_only": n_via_draft_only,
@@ -769,6 +817,8 @@ def write_output(model_path, model_commit, model_meta, args, names, ranked, stab
         "new_competitor_watch_list": new_competitor_records,
         "yahoo_status_override_list": yahoo_override_records,
         "yahoo_status": yahoo_summary,
+        "yahoo_roster_conflicts": list(yahoo_roster_records),
+        "yahoo_roster_rule": yahoo_roster_rule,
         "starter_back_rule": {"lead_min": starter_back.LEAD_MIN, "pre_window_games": starter_back.PRE_WINDOW_GAMES,
                               "display_only": True, "n_flagged": sum(1 for v in starter_back_of.values() if v)},
     }
@@ -825,12 +875,14 @@ def main():
     weekly_roster_path = args.weekly_roster or str(REPO_ROOT / "nflverse_raw" / f"roster_weekly_{args.season}.csv")
     roster_team_of, team_pos_roster, draft_pick_of, weekly_status_of = {}, {}, {}, {}
     roster_latest, roster_teams_in_week = {}, set()
+    season_teams_of, roster_known_teams = {}, set()
     if os.path.exists(weekly_roster_path):
         check_roster_staleness(weekly_roster_path, args.season, args.week)
         roster_team_of, team_pos_roster, draft_pick_of, weekly_status_of = load_current_roster(
             weekly_roster_path, args.season, args.week
         )
         roster_latest, roster_teams_in_week = load_roster_presence(weekly_roster_path, args.season, args.week)
+        season_teams_of, roster_known_teams = load_roster_season_teams(weekly_roster_path, args.season, args.week)
         n_flagged_unavailable = sum(1 for s in weekly_status_of.values() if s in UNAVAILABLE_STATUSES)
         print(f"[INFO] cross-referencing against {weekly_roster_path}: {len(roster_team_of)} players with a "
               f"confirmed current team, {len(draft_pick_of)} rookies with known {args.season}-draft pick numbers, "
@@ -939,6 +991,9 @@ def main():
     else:
         yahoo_rec = yahoo_status.skipped("not provided (score_week.py run by hand): long-term roster statuses stand")
     yahoo_of = yahoo_rec["status_by_player"]
+    # Pool rule v5's team check needs Yahoo's editorial teams; a statuses file from before 2026-11-10 has none, and then
+    # only its status check (ACT + Yahoo NA) applies.
+    yahoo_team_of = yahoo_rec.get("team_by_player") or {}
     print(f"[INFO] Yahoo statuses: {len(yahoo_of)} player(s) (rostered: "
           + (f"snapshot {yahoo_rec['rostered']['snapshot_id']} taken {yahoo_rec['rostered']['taken_at']}"
              if yahoo_rec["rostered"].get("used") else yahoo_rec["rostered"].get("reason"))
@@ -948,6 +1003,7 @@ def main():
 
     stable, team_changed_list, new_competitor_list, unavailable_list, already_played_list = [], [], [], [], []
     mixed_window_list, yahoo_override_list = [], []
+    yahoo_roster_list = []   # pool rule v5: (pid, feat, outcome, team, why)
     no_game_list = []
     off_roster_list = []
     injury_list = []
@@ -992,6 +1048,17 @@ def main():
                 already_played_list.append((pid, feat, kickoff_dt, opponent))
                 continue
 
+        # Pool rule v5 (yahoo_status.roster_conflict): Yahoo against an ACT row nflverse hasn't caught up on. After the
+        # kickoff guard, so a game-day inactive of a game already under way keeps "already played". (a) ACT + Yahoo NA:
+        # off a roster, like the nflverse check above. (b) Yahoo has him on a team nflverse never had this season: his
+        # roster team for the team check below is Yahoo's, so he is team-change suppressed, never called off-roster.
+        conflict = (yahoo_status.roster_conflict(roster_latest.get(pid), season_teams_of.get(pid, ()), yahoo_of.get(pid),
+                                                 yahoo_team_of.get(pid), roster_known_teams, norm_team)
+                    if roster_latest else None)
+        if conflict and conflict[0] == "off_roster":
+            yahoo_roster_list.append((pid, feat) + conflict)
+            off_roster_list.append((pid, feat, conflict[2]))
+            continue
 
         # Availability gate next, unconditionally -- ahead of even the
         # recency-release below. A player on reserve who happens to have
@@ -1011,8 +1078,12 @@ def main():
         roster_team = roster_team_of.get(pid)
         if roster_team is None and yahoo_status.overrides(roster_status, yahoo) and pid in roster_latest:
             roster_team = roster_latest[pid][2]   # exempt / suspended / PUP: not "confirmed", but still on that team
+        if conflict and conflict[0] == "team_changed":
+            roster_team = conflict[1]             # v5 (b): Yahoo is ahead of nflverse on his team
         window_teams = [h[2] for h in engine.trailing_window(pid, args.season, args.week)]
         outcome, overruled = classify_v4(roster_status, yahoo, window_teams, roster_team, feat["games_played_this_season"])
+        if conflict:   # v5 (b): recorded with what the team check made of it (team_changed, or unavailable first)
+            yahoo_roster_list.append((pid, feat, outcome or "ranked", conflict[1], conflict[2]))
         if outcome == "unavailable":
             unavailable_list.append((pid, feat, roster_status, yahoo))
             continue
@@ -1097,6 +1168,8 @@ def main():
           f"{len(mixed_window_list)} with a mixed-team trailing window (score suppressed); "
           f"{len(yahoo_override_list)} long-term roster status(es) overruled by Yahoo; "
           f"{len(new_competitor_list)} with a meaningful new same-position competitor this offseason (score suppressed)")
+    for pid, _feat, outcome, team, why in yahoo_roster_list:
+        print(f"[INFO]   pool rule v5: {names.get(pid, pid)} -- {why} -> {outcome}")
     print(f"[INFO]   of those {len(new_competitor_list)}: {n_via_production_only} via prior-production threshold only, "
           f"{n_via_draft_only} via draft-capital only, {n_via_both} via both")
 
@@ -1174,11 +1247,24 @@ def main():
          "status": status, "reason": INJURY_REASON}
         for pid, feat, status in sorted(injury_list, key=lambda x: (x[2], names.get(x[0], x[0])))
     ]
+    yahoo_off = {pid for pid, _feat, outcome, _team, _why in yahoo_roster_list if outcome == "off_roster"}
     off_roster_records = [
         {"player_id": pid, "name": names.get(pid, pid), "pos": feat["_pos"], "team": feat["_team"],
-         "roster": why, "reason": OFF_ROSTER_REASON}
+         "roster": why, "source": "yahoo" if pid in yahoo_off else "nflverse",
+         "reason": YAHOO_OFF_ROSTER_REASON if pid in yahoo_off else OFF_ROSTER_REASON}
         for pid, feat, why in off_roster_list
     ]
+    # Pool rule v5: every conflict it acted on, with both sources' word (the tracker adds ESPN's beside it)
+    yahoo_roster_records = [
+        {"player_id": pid, "name": names.get(pid, pid), "pos": feat["_pos"],
+         "nflverse": "{1} {2} (week {0})".format(*roster_latest[pid]), "yahoo_status": yahoo_of.get(pid),
+         "yahoo_team": yahoo_team_of.get(pid), "outcome": outcome, "team": team, "why": why}
+        for pid, feat, outcome, team, why in sorted(yahoo_roster_list, key=lambda w: names.get(w[0], w[0]))]
+    yahoo_roster_rule = {"rule": yahoo_status.ROSTER_RULE, "status_check": bool(roster_latest),
+                         "team_check": bool(roster_latest and yahoo_team_of),
+                         "reason": None if roster_latest and yahoo_team_of else
+                         ("no weekly roster rows" if not roster_latest else
+                          "no Yahoo teams in the statuses file (a run by hand, or a file from before 2026-11-10)")}
 
     unavailable_records = []
     for pid, feat, status, yahoo in unavailable_list:
@@ -1247,7 +1333,8 @@ def main():
                          team_changed_records, new_competitor_records, unavailable_records,
                          already_played_records, no_game_records, off_roster_records, injury_records, injury_rule,
                          n_via_production_only, n_via_draft_only, n_via_both, json_out_path,
-                         mixed_window_records, yahoo_override_records, yahoo_status.summary(yahoo_rec), starter_back_of)
+                         mixed_window_records, yahoo_override_records, yahoo_status.summary(yahoo_rec), starter_back_of,
+                         yahoo_roster_records, yahoo_roster_rule)
 
     json_out_path = Path(args.json_out) if args.json_out else None
     run_pass(args.model, "PRODUCTION", json_out_path, baseline_production_path)

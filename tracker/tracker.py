@@ -94,7 +94,13 @@ SLOT_RULE = "main-slate-v2"  # recorded with every run; v1 closed `sun` at the e
 #                                    (b) a player whose trailing 3-game window holds a game for a team other than his
 #                                    weekly-roster team is team-change suppressed, however many games he has this season
 #                                    (week 7: Marvin Harrison Jr. ARI, ARI, HOU; Dameon Pierce KC, PHI, PHI ranked #1).
-POOL_RULE = "exclude-no-game-off-roster-out-doubtful-v4"
+#   exclude-no-game-off-roster-out-doubtful-v5  (from 2026 week 10 at the earliest) Yahoo against an ACT row of the
+#                                    weekly roster (yahoo_status.roster_conflict): (a) ACT + Yahoo NA is off a roster
+#                                    (Kendre Miller, waived during week 9, still ACT there, ranked #4 that Sunday);
+#                                    (b) a Yahoo team the roster file never had him on this season is his team for the
+#                                    team check -- team-change suppressed, never off-roster (Jacoby Brissett ARI -> BAL).
+#                                    Recorded with the run under yahoo_roster, ESPN's word beside each.
+POOL_RULE = "exclude-no-game-off-roster-out-doubtful-v5"
 # Who is in the sleeper ("u50") pool, recorded with every run. v1 (2026 week 4 only, no key in run_config_json):
 # strictly under the threshold, and a pool player with no row in the roster-% snapshot was silently dropped.
 # v2: such a player stays IN, with percent_owned NULL as the "ownership unknown" flag -- he is not assumed to be
@@ -214,17 +220,23 @@ def split_pool_no_game(pool_src, playing_teams, roster_team_of):
     return kept, no_game
 
 
-def split_pool_off_roster(pool_src, latest, teams_in_week, week):
+def split_pool_off_roster(pool_src, latest, teams_in_week, week, yahoo_of=None):
     """(kept, off {player_id: reason}). A player who is not on an NFL roster
     (score_week.off_roster_reason: released, retired, unsigned, or dropped
-    without a CUT row) cannot score, so he is not in the pool for any model,
-    baseline or dart draw. score_week.py leaves such players out itself
-    (off_roster_watch_list), so this normally finds nobody; it is the tracker's
-    own guarantee. With no weekly roster rows for the season (`latest` empty)
-    nothing can be said and nobody is dropped -- the caller records that."""
+    without a CUT row; from pool rule v5 also an ACT row Yahoo marks NA, when
+    `yahoo_of` -- {gsis: Yahoo status} -- is given) cannot score, so he is not
+    in the pool for any model, baseline or dart draw. score_week.py leaves such
+    players out itself (off_roster_watch_list), so this normally finds nobody;
+    it is the tracker's own guarantee. With no weekly roster rows for the
+    season (`latest` empty) nothing can be said and nobody is dropped -- the
+    caller records that."""
     kept, off = [], {}
     for r in pool_src:
-        why = off_roster_reason(r["player_id"], latest, teams_in_week, week) if latest else None
+        pid = r["player_id"]
+        why = off_roster_reason(pid, latest, teams_in_week, week) if latest else None
+        if not why and latest and yahoo_of:
+            conflict = yahoo_status.roster_conflict(latest.get(pid), (), yahoo_of.get(pid), None, ())
+            why = conflict[2] if conflict and conflict[0] == "off_roster" else None
         if why:
             off[r["player_id"]] = why
         else:
@@ -530,7 +542,10 @@ def availability_record(prod, yahoo, espn_raw):
       excluded_unavailable    {player_id: weekly-roster status} -- the availability gate
       excluded_team_changed   {player_id: {window_teams, roster_team}} -- most recent game for another team
       excluded_mixed_window   {player_id: {window_teams, roster_team}} -- an earlier window game for another team
-      excluded_new_competitor [player_id] -- unchanged rule, recorded for completeness"""
+      excluded_new_competitor [player_id] -- unchanged rule, recorded for completeness
+    and, from pool rule v5:
+      yahoo_roster            yahoo_status.roster_conflict's rule and which checks applied, and every conflict it acted
+                              on (off_roster, or the team check's outcome on Yahoo's team) with ESPN's status beside it"""
     def team(rows):
         return {r["player_id"]: {"window_teams": r.get("window_teams"), "roster_team": r["new_team"]} for r in rows or []}
 
@@ -547,6 +562,9 @@ def availability_record(prod, yahoo, espn_raw):
         "excluded_team_changed": dict(sorted(team(prod.get("team_changed_watch_list")).items())),
         "excluded_mixed_window": dict(sorted(team(prod.get("mixed_window_watch_list")).items())),
         "excluded_new_competitor": sorted(r["player_id"] for r in prod.get("new_competitor_watch_list") or []),
+        "yahoo_roster": {**(prod.get("yahoo_roster_rule") or {"rule": None, "reason": "not in score_week.py's output"}),
+                         "conflicts": [dict(r, espn=espn_raw.get(r["player_id"]))
+                                       for r in prod.get("yahoo_roster_conflicts") or []]},
     }
 
 
@@ -677,7 +695,7 @@ def cmd_log(args, con):
     # Pool rule, part 2: nobody who is not on an NFL roster, for every model alike (score_week.off_roster_reason).
     latest, teams_in_week = load_roster_presence(str(weekly_roster), season, week) if weekly_roster.exists() else ({}, set())
     n_before = len(pool_src)
-    pool_src, off = split_pool_off_roster(pool_src, latest, teams_in_week, week)
+    pool_src, off = split_pool_off_roster(pool_src, latest, teams_in_week, week, yahoo["status_by_player"])
     if len(off) > OFF_ROSTER_MAX_SHARE * max(n_before, 1):
         for p in written:
             p.unlink(missing_ok=True)
@@ -742,6 +760,12 @@ def cmd_log(args, con):
         if d["espn"] in ESPN_MAY_PLAY:
             print(f"[YAHOO] ESPN says {d['espn']} for {d['name']}, kept out: weekly roster {d['weekly_roster']}, Yahoo "
                   f"{'no status' if d['yahoo'] == '' else d['yahoo'] or 'says nothing'} -- ESPN is a cross-check only")
+    for d in v4["yahoo_roster"]["conflicts"]:
+        print(f"[YAHOO] pool rule v5: {d['name']} -- weekly roster {d['nflverse']}, Yahoo "
+              f"{d['yahoo_status'] or 'no status'} {d['yahoo_team'] or ''}".rstrip()
+              + (f", ESPN {d['espn']}" if d["espn"] else "")
+              + (" -- not on a roster, not scored" if d["outcome"] == "off_roster" else
+                 f" -- on {d['team']} per Yahoo, team check: {d['outcome']}"))
     if v4["excluded_mixed_window"] or v4["excluded_team_changed"]:
         print(f"[INFO] team check: {len(v4['excluded_team_changed'])} player(s) whose most recent game was for another team, "
               f"{len(v4['excluded_mixed_window'])} with a mixed-team trailing window -- not scored")
