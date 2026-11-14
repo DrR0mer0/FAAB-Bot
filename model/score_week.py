@@ -224,6 +224,7 @@ sys.path.insert(0, str(REPO_ROOT / "tracker"))
 from team_crosswalk import norm_team  # noqa: E402 -- shared crosswalk; see data/team_crosswalk.py
 import injuries  # noqa: E402 -- the Out/Doubtful rule, shared with the tracker's pool rule
 import starter_back  # noqa: E402 -- the display-only "starter back" flag (model/starter_back.py)
+import thin_window  # noqa: E402 -- the display-only "thin window" flag (model/thin_window.py)
 import yahoo_status  # noqa: E402 -- Yahoo's status against a long-term roster status (pool rule v4), shared likewise
 
 # See the module docstring's TIMEZONE NOTE for how this was determined.
@@ -445,7 +446,10 @@ def render_markdown_report(output, status_flags=None, flag_note=None):
 
     A record's `starter_back` list (model/starter_back.py, from 2026-11-04)
     is display only too: a STARTER_BACK_MARK beside the name and a section
-    after the table, in plain words. A file without it reads as before."""
+    after the table, in plain words. So are a record's `thin_window` and
+    `practice` entries (from 2026-11-12: a THIN_WINDOW_MARK and its section,
+    the practice report) and the injury rule's `game_status` summary line.
+    A file without them reads as before."""
     counts = output["counts"]
     model = output.get("model") or {}
     lines = [
@@ -473,6 +477,7 @@ def render_markdown_report(output, status_flags=None, flag_note=None):
         lines.append(f"  - of them, per Yahoo (NA) while the weekly roster still says active: {counts['yahoo_off_roster']}")
     if counts.get("injury_out_doubtful"):
         lines.append(f"- Out/Doubtful on the injury report, not ranked: {counts['injury_out_doubtful']}")
+    lines += game_status_line(output)
     if counts.get("already_played") is not None:
         lines.append(f"- Already played as of this run (not re-scored, rank/score carried forward where available): "
                       f"{counts['already_played']}")
@@ -495,9 +500,15 @@ def render_markdown_report(output, status_flags=None, flag_note=None):
     ]
     for r in output["top"]:
         flag = (status_flags or {}).get(r["player_id"])
-        name = (f"{r['name']} **({flag})**" if flag else r["name"]) + (STARTER_BACK_MARK if r.get("starter_back") else "")
+        name = ((f"{r['name']} **({flag})**" if flag else r["name"]) + (STARTER_BACK_MARK if r.get("starter_back") else "")
+                + (THIN_WINDOW_MARK if r.get("thin_window") else ""))
         lines.append(f"| {r['rank']} | {name} | {r['pos']} | {r['team']} | {r['score']:.4f} |")
     lines += starter_back_section(output["top"])
+    notes = (output.get("starter_back_rule") or {}).get("data_notes") or []
+    if notes:   # shown even when nothing is flagged: some comparison games could not be judged
+        lines += ["", "_Starter back, data this run lacked: " + "; ".join(notes) + "._"]
+    lines += thin_window_section(output["top"])
+    lines += practice_section(output["top"])
     withheld = output.get("injury_watch_list") or []
     if withheld:
         rule = output.get("injury_rule") or {}
@@ -507,6 +518,33 @@ def render_markdown_report(output, status_flags=None, flag_note=None):
                   f"_Designated on {src} when this was generated; Questionable players are ranked as usual._", ""]
         lines += [f"- {r['name']} ({r['pos']}, {r['team']}): {r['status']}" for r in withheld]
     return "\n".join(lines) + "\n"
+
+
+def starter_back_presence(con, season, weekly_roster_path, injury_rule, raw_dir=None, fetch=None):
+    """(Presence, notes) for the starter-back flag's 0% fallback (rule v1.1): this run's weekly roster and the season's
+    injury designations so far, and nflverse's weekly roster and injury report for the two seasons before (a window can
+    start last season, its comparison games one before) from nflverse_raw/. A missing prior-season file is downloaded
+    the same way the 2021-2025 files were (starter_back.ensure_season_files); one that can't be raises
+    MissingPresenceData naming it -- never a quiet drop of that season's flags. notes: what was downloaded, and any
+    current-season source the run didn't have (then that season's inactive / active-without-snaps games are left out,
+    as undeterminable, and the note says so)."""
+    raw_dir = Path(raw_dir) if raw_dir else REPO_ROOT / "nflverse_raw"
+    past = (season - 2, season - 1)
+    notes = [f"downloaded {p.name} into {raw_dir}" for p in starter_back.ensure_season_files(raw_dir, past, fetch=fetch)]
+    presence = starter_back.Presence().add_db(con, season - 2)
+    if weekly_roster_path and os.path.exists(weekly_roster_path):
+        presence.add_roster_csv(weekly_roster_path, season=season)
+    else:
+        notes.append(f"no {season} weekly roster -- this season's comparison games can't be judged and are left out")
+    if injury_rule.get("season_designations") is not None:
+        presence.add_designations(season, injury_rule["season_designations"])
+    else:
+        notes.append(f"no {season} injury designations (injury source: {injury_rule.get('source')}) -- this season's "
+                     f"inactive and active-without-snaps games are left out as undeterminable")
+    for s in past:
+        presence.add_roster_csv(raw_dir / f"roster_weekly_{s}.csv", season=s)
+        presence.add_injury_csv(raw_dir / f"injuries_{s}.csv", season=s)
+    return presence, notes
 
 
 def starter_back_available(x, team, week, roster_team_of, weekly_status_of, roster_latest, roster_teams_in_week, yahoo_of,
@@ -532,6 +570,61 @@ def starter_back_available(x, team, week, roster_team_of, weekly_status_of, rost
 
 STARTER_BACK_MARK = " *(starter back)*"
 STARTER_BACK_TITLE = "## Starter back (display only)"
+THIN_WINDOW_MARK = " *(thin window)*"
+THIN_WINDOW_TITLE = "## Thin window (display only)"
+PRACTICE_TITLE = "## Practice report (display only)"
+# the share of teams on the week's report that already have game statuses, below which a run reads as midweek
+GAME_STATUS_MIDWEEK_SHARE = 0.5
+
+
+def thin_window_section(records):
+    """The markdown lines for every `thin_window` flag among `records`; [] when none is flagged."""
+    flagged = [r for r in records if r.get("thin_window")]
+    if not flagged:
+        return []
+    return (["", THIN_WINDOW_TITLE, "",
+             f"_He played fewer than {thin_window.THIN_WINDOW_MIN_GAMES} of his team's last "
+             f"{thin_window.THIN_WINDOW_TEAM_GAMES} games, so the 3 games his score is built on reach further back "
+             "(model/thin_window.py). Display only: scores and ranks are unchanged._", ""]
+            + [f"- {r['name']} (#{r['rank']}): {r['thin_window']['text']}" for r in flagged])
+
+
+def practice_section(records):
+    """The practice report for ranked players with no game status yet (Out/Doubtful/Questionable usually come out on
+    Friday): their latest practice participation on the NFL injury report, DNP and Limited in bold; [] when none."""
+    listed = [r for r in records if r.get("practice") and not r["practice"].get("game_status")]
+    if not listed:
+        return []
+    out = ["", PRACTICE_TITLE, "",
+           "_Latest practice participation on the NFL injury report (nflverse) when this was generated, for ranked "
+           "players with no game status yet. **DNP** (did not participate) and **Limited** are highlighted. Display only: "
+           "scores and ranks are unchanged._", ""]
+    for r in listed:
+        p = r["practice"]
+        why = f" ({p['injury']})" if p.get("injury") else ""
+        if p["status"] in ("DNP", "Limited"):
+            out.append(f"- **{r['name']} (#{r['rank']}): {p['status']}**{why}")
+        else:
+            out.append(f"- {r['name']} (#{r['rank']}): {p['status']}{why}")
+    return out
+
+
+def game_status_line(output):
+    """One summary line: were game-status designations out when this was generated? (Tells a Thursday-morning run,
+    which mostly can't see them, from a Sunday one.) [] for a file from before 2026-11-12."""
+    rule = output.get("injury_rule") or {}
+    if "game_status" not in rule:
+        return []
+    gs = rule["game_status"]
+    if not gs:
+        return [f"- Game-status designations at generation time: not read (injury source: {rule.get('source')})"]
+    k, m = len(gs["teams_with_status"]), len(gs["teams_on_report"])
+    teams = f" ({', '.join(gs['teams_with_status'])})" if 0 < k <= 6 else ""
+    head = (f"- Game-status designations (Out/Doubtful/Questionable) at generation time: {gs['n_with_status']} player(s) "
+            f"on {k} of the {m} teams on this week's report{teams}")
+    if k < GAME_STATUS_MIDWEEK_SHARE * m:
+        return [head + " -- a midweek run: most teams publish game statuses on Friday (practice report below)"]
+    return [head + " -- the week's game statuses were out"]
 
 
 def starter_back_section(records):
@@ -542,8 +635,9 @@ def starter_back_section(records):
         return []
     out = ["", STARTER_BACK_TITLE, "",
            "_A same-position teammate who out-snapped him before his trailing window missed game(s) in it and is "
-           "available this week (model/starter_back.py). It informs, it doesn't decide: scores, ranks and the tracker's "
-           "pool are unchanged._", ""]
+           "available this week (model/starter_back.py). A game he sat out himself counts as 0% only if he was on the "
+           "team's practice squad, a healthy inactive or a healthy backup that week. It informs, it doesn't decide: "
+           "scores, ranks and the tracker's pool are unchanged._", ""]
     for r in flagged:
         out += [f"- {r['name']} (#{r['rank']}): {f['text']}" for f in r["starter_back"]]
     return out
@@ -752,16 +846,25 @@ def write_output(model_path, model_commit, model_meta, args, names, ranked, stab
                   already_played_records, no_game_records, off_roster_records, injury_records, injury_rule,
                   n_via_production_only, n_via_draft_only, n_via_both, json_out_path,
                   mixed_window_records, yahoo_override_records, yahoo_summary, starter_back_of=None,
-                  yahoo_roster_records=(), yahoo_roster_rule=None):
+                  yahoo_roster_records=(), yahoo_roster_rule=None, thin_window_of=None, practice_of=None,
+                  starter_back_notes=()):
     starter_back_of = starter_back_of or {}
+    thin_window_of = thin_window_of or {}
+    practice_of = practice_of or {}
 
     def player_record(pid, feat, score=None):
-        return {
+        rec = {
             "player_id": pid, "name": names.get(pid, pid),
             "pos": feat["_pos"], "team": feat["_team"],
             "score": float(score) if score is not None else None,
             "starter_back": starter_back_of.get(pid, []),
         }
+        # display only, and only when there is something to show (model/thin_window.py; the practice report)
+        if thin_window_of.get(pid):
+            rec["thin_window"] = thin_window_of[pid]
+        if practice_of.get(pid):
+            rec["practice"] = practice_of[pid]
+        return rec
 
     ranked_records = []
     for rank, ((pid, feat), score) in enumerate(ranked, start=1):
@@ -810,7 +913,7 @@ def write_output(model_path, model_commit, model_meta, args, names, ranked, stab
         "no_game_watch_list": no_game_records,
         "off_roster_watch_list": off_roster_records,
         "injury_watch_list": injury_records,
-        "injury_rule": {k: v for k, v in injury_rule.items() if k != "excluded"},
+        "injury_rule": {k: v for k, v in injury_rule.items() if k not in ("excluded", "practice", "season_designations")},
         "already_played_watch_list": already_played_records,
         "team_changed_watch_list": team_changed_records,
         "mixed_window_watch_list": mixed_window_records,
@@ -819,8 +922,13 @@ def write_output(model_path, model_commit, model_meta, args, names, ranked, stab
         "yahoo_status": yahoo_summary,
         "yahoo_roster_conflicts": list(yahoo_roster_records),
         "yahoo_roster_rule": yahoo_roster_rule,
-        "starter_back_rule": {"lead_min": starter_back.LEAD_MIN, "pre_window_games": starter_back.PRE_WINDOW_GAMES,
-                              "display_only": True, "n_flagged": sum(1 for v in starter_back_of.values() if v)},
+        "starter_back_rule": {"rule": "starter-back-v1.1", "lead_min": starter_back.LEAD_MIN,
+                              "pre_window_games": starter_back.PRE_WINDOW_GAMES,
+                              "display_only": True, "n_flagged": sum(1 for v in starter_back_of.values() if v),
+                              **({"data_notes": list(starter_back_notes)} if starter_back_notes else {})},
+        "thin_window_rule": {"team_games": thin_window.THIN_WINDOW_TEAM_GAMES,
+                             "min_games": thin_window.THIN_WINDOW_MIN_GAMES, "display_only": True,
+                             "n_flagged": sum(1 for v in thin_window_of.values() if v)},
     }
 
     json_out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1138,6 +1246,13 @@ def main():
     # team and status (Yahoo may overrule a long-term status, v4), on a roster, not Out/Doubtful. Practice-squad (DEV)
     # players are not available. Without a weekly roster file nothing can be confirmed, so nobody is flagged.
     snap_index = starter_back.SnapIndex.from_db(con, min_season=args.season - 2)
+    try:
+        presence, presence_notes = starter_back_presence(con, args.season, weekly_roster_path, injury_rule)
+    except starter_back.MissingPresenceData as e:
+        print(f"[STARTER BACK DATA] {e}", file=sys.stderr)
+        sys.exit(3)
+    for note in presence_notes:
+        print(f"[INFO] starter back: {note}")
 
     def teammate_available(x, team):
         return starter_back_available(x, team, args.week, roster_team_of, weekly_status_of, roster_latest,
@@ -1147,7 +1262,8 @@ def main():
     for pid, feat in stable:
         team = norm_team(roster_team_of.get(pid) or feat["_team"])
         flags = starter_back.starter_back(pid, feat["_pos"], team, engine.trailing_window(pid, args.season, args.week),
-                                          (args.season, args.week), snap_index, lambda x, team=team: teammate_available(x, team))
+                                          (args.season, args.week), snap_index, lambda x, team=team: teammate_available(x, team),
+                                          presence)
         for f in flags:
             f["teammate"] = names.get(f["teammate_id"], f["teammate_id"])
             f["text"] = starter_back.describe(f, names.get(pid, pid), f["teammate"], args.season)
@@ -1156,6 +1272,21 @@ def main():
     if starter_back_of:
         print(f"[INFO] starter back (display only): {len(starter_back_of)} scored player(s) flagged -- "
               + "; ".join(f"{names.get(p, p)}: {f['text']}" for p, fl in list(starter_back_of.items())[:8] for f in fl[:1]))
+
+    # "Thin window" (model/thin_window.py) and the practice report: DISPLAY ONLY too, computed after the pool is final.
+    games_of_team = thin_window.team_games(con, args.season, args.week)
+    thin_window_of = {}
+    for pid, feat in stable:
+        team = norm_team(roster_team_of.get(pid) or feat["_team"])
+        played = ({(s, w) for s, w, t, *_ in engine.player_history.get(pid, []) if norm_team(t) == team}
+                  | {g for g, (t, _pct) in snap_index.player.get(pid, {}).items() if norm_team(t) == team})
+        flag = thin_window.thin_window(team, games_of_team.get(team, []), played,
+                                       engine.trailing_window(pid, args.season, args.week), args.season)
+        if flag:
+            thin_window_of[pid] = flag
+    if thin_window_of:
+        print(f"[INFO] thin window (display only): {len(thin_window_of)} scored player(s) flagged")
+    practice_of = {pid: p for pid, feat in stable if (p := (injury_rule.get("practice") or {}).get(pid))}
 
     print(f"[INFO] {len(stable)} stable candidates scored ({n_released_by_recency} of those released from "
           f"offseason suppression this week, having reached {MIN_PRIOR_GAMES}+ current-season games); "
@@ -1334,7 +1465,8 @@ def main():
                          already_played_records, no_game_records, off_roster_records, injury_records, injury_rule,
                          n_via_production_only, n_via_draft_only, n_via_both, json_out_path,
                          mixed_window_records, yahoo_override_records, yahoo_status.summary(yahoo_rec), starter_back_of,
-                         yahoo_roster_records, yahoo_roster_rule)
+                         yahoo_roster_records, yahoo_roster_rule, thin_window_of, practice_of,
+                         [n for n in presence_notes if not n.startswith("downloaded ")])
 
     json_out_path = Path(args.json_out) if args.json_out else None
     run_pass(args.model, "PRODUCTION", json_out_path, baseline_production_path)

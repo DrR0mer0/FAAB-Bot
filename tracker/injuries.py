@@ -97,6 +97,51 @@ def parse_week(raw_bytes, season, week):
     return status, n
 
 
+# Practice participation on the same report (column practice_status), shortened for display. Read 2026-11-12 from the
+# week 10 file: these three values only; anything else is shown as nflverse wrote it.
+PRACTICE_LABELS = {"Did Not Participate In Practice": "DNP", "Limited Participation in Practice": "Limited",
+                   "Full Participation in Practice": "Full"}
+
+
+def parse_practice(raw_bytes, season, week):
+    """(practice, game_status) for the regular-season report of (season, week). DISPLAY ONLY.
+    practice:    {gsis_id: {"status": DNP | Limited | Full, "injury": practice_primary_injury, "game_status": the
+                 player's report_status ('' = none yet)}} for every player with a practice status. The file holds one
+                 row per player-week, overwritten as the week goes on, so this is his latest practice day at fetch time.
+    game_status: which teams already have game-status designations (report_status) -- Thursday-game teams only on a
+                 Thursday morning, nearly everyone by Sunday."""
+    practice, on_report, with_status, n_status = {}, set(), set(), 0
+    for r in csv.DictReader(io.StringIO(raw_bytes.decode("utf-8-sig"))):
+        if r.get("season") != str(season) or r.get("week") != str(week) or r.get("game_type") not in (None, "", "REG"):
+            continue
+        team = (r.get("team") or "").strip()
+        on_report.add(team)
+        st = (r.get("report_status") or "").strip()
+        if st:
+            with_status.add(team)
+            n_status += 1
+        ps = (r.get("practice_status") or "").strip()
+        if ps and r.get("gsis_id"):
+            practice[r["gsis_id"]] = {"status": PRACTICE_LABELS.get(ps, ps),
+                                      "injury": (r.get("practice_primary_injury") or "").strip(), "game_status": st}
+    return practice, {"teams_on_report": sorted(on_report), "teams_with_status": sorted(with_status),
+                      "n_with_status": n_status}
+
+
+def season_designations(raw_bytes, season):
+    """{week (str): {gsis_id: report_status}} for every regular-season week of `season` in the file, players with a game
+    status only. DISPLAY ONLY: the starter-back flag's 0% fallback (model/starter_back.py, rule v1.1) tells an injured
+    inactive from a healthy one with it."""
+    out = {}
+    for r in csv.DictReader(io.StringIO(raw_bytes.decode("utf-8-sig"))):
+        if r.get("season") != str(season) or r.get("game_type") not in (None, "", "REG"):
+            continue
+        st = (r.get("report_status") or "").strip()
+        if st and r.get("gsis_id"):
+            out.setdefault(str(int(r["week"])), {})[r["gsis_id"]] = st
+    return out
+
+
 def espn_designations(espn_status):
     """{gsis_id: ESPN injuryStatus} -> the same statuses in the report's own vocabulary."""
     return {pid: ESPN_TO_REPORT[s] for pid, s in (espn_status or {}).items() if s in ESPN_TO_REPORT}
@@ -137,6 +182,14 @@ def resolve(season, week, as_of, max_age_hours, espn_status, fetch=fetch_nflvers
                                  f"{max_age_hours}h) -- the nightly update is missing")
     if out["reason"] is None:
         out["status"] = out["nflverse"]
+        try:   # display only (score_week.py's practice report); a problem here never touches the rule above
+            out["practice"], out["game_status"] = parse_practice(got["raw_bytes"], season, week)
+        except Exception:  # noqa: BLE001
+            out["practice"], out["game_status"] = {}, None
+        try:   # display only (the starter-back flag's 0% fallback)
+            out["season_designations"] = season_designations(got["raw_bytes"], season)
+        except Exception:  # noqa: BLE001
+            out["season_designations"] = None
     elif out["espn"] is not None:
         out["source"], out["status"] = "espn-fallback", out["espn"]
         _banner(f"{out['reason']}. Falling back to ESPN's injuryStatus from the pinned roster-% snapshot for the pool rule.")
@@ -176,12 +229,16 @@ def designations_record(inj, exclude, provided_by):
     lm = inj.get("last_modified")
     return {"source": inj["source"], "reason": inj.get("reason"), "exclude": list(exclude),
             "excluded": excluded_ids(inj.get("status"), exclude), "nflverse_sha256": inj.get("sha256"),
-            "nflverse_last_modified": lm.isoformat() if hasattr(lm, "isoformat") else lm, "provided_by": provided_by}
+            "nflverse_last_modified": lm.isoformat() if hasattr(lm, "isoformat") else lm, "provided_by": provided_by,
+            # display only (parse_practice): only from the nflverse file the rule itself used
+            "practice": inj.get("practice") or {}, "game_status": inj.get("game_status"),
+            "season_designations": inj.get("season_designations")}
 
 
 def skipped_record(reason, exclude, provided_by):
     return {"source": "skipped", "reason": reason, "exclude": list(exclude), "excluded": {}, "nflverse_sha256": None,
-            "nflverse_last_modified": None, "provided_by": provided_by}
+            "nflverse_last_modified": None, "provided_by": provided_by, "practice": {}, "game_status": None,
+            "season_designations": None}
 
 
 def write_designations(path, record):

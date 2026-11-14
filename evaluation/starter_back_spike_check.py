@@ -10,8 +10,11 @@ feeds a score, rank or pick.
 
     python evaluation/starter_back_spike_check.py [--db PATH]
 
-Result on 2026-11-04 (LEAD_MIN 0.30, PRE_WINDOW_GAMES 4): flagged 6.5% (138 of 2,132) vs unflagged 14.4%, lower at
-every position.
+Result on 2026-11-04 under rule v1 (LEAD_MIN 0.30, PRE_WINDOW_GAMES 4): 2,132 player-weeks flagged; they spiked 6.5%
+(138 of 2,132) against 14.4% for unflagged player-weeks, lower at every position. Rule v1.1 (2026-11-12; the 0% fallback counts only depth-chart absences, judged from
+nflverse's 2021-2025 weekly rosters and injury reports in nflverse_raw/): 1,699 player-weeks flagged; they spiked 4.8%
+(82 of 1,699) against 14.4% for unflagged player-weeks, lower at every position (RB 5.4% vs 14.8%); 306 of the flagged
+player-weeks rest only on the fallback; no comparison game left undetermined.
 """
 import argparse
 import math
@@ -36,6 +39,17 @@ def main():
     con = sqlite3.connect(f"file:{Path(args.db).resolve().as_posix()}?mode=ro", uri=True)   # read-only
     con.row_factory = sqlite3.Row
     snaps = sb.SnapIndex.from_db(con, min_season=2021)
+    # rule v1.1's 0% fallback: nflverse weekly rosters and injury reports for 2021-2025 (nflverse_raw/, downloaded
+    # 2026-11-12), every tr_snap_counts row and player_week_stats teams; a season without its files decides nothing
+    try:   # a missing file is downloaded, or the check stops naming it -- never a quiet "undetermined"
+        for path in sb.ensure_season_files(REPO_ROOT / "nflverse_raw", range(2021, 2026)):
+            print(f"downloaded {path.name}")
+    except sb.MissingPresenceData as e:
+        sys.exit(f"[STARTER BACK DATA] {e}")
+    presence = sb.Presence().add_db(con, 2021)
+    for season in range(2021, 2026):
+        presence.add_roster_csv(REPO_ROOT / "nflverse_raw" / f"roster_weekly_{season}.csv", season=season)
+        presence.add_injury_csv(REPO_ROOT / "nflverse_raw" / f"injuries_{season}.csv", season=season)
     engine = FeatureEngine(con)
     rows = con.execute("""SELECT l.season, l.week, l.player_id, l.spike_flag, s.pos, s.team FROM labels_player_week l
                           JOIN player_week_stats s USING (season, week, player_id) WHERE l.season BETWEEN 2022 AND 2025
@@ -51,17 +65,21 @@ def main():
         def played(x, s=s, w=w, team=team):
             return snaps.player.get(x, {}).get((s, w), (None,))[0] == team
 
-        flags = sb.starter_back(pid, pos, team, window, (s, w), snaps, played)
+        flags = sb.starter_back(pid, pos, team, window, (s, w), snaps, played, presence)
         key = "flagged" if flags else "unflagged"
         subs = ["all"]
         if flags:
             subs.append("back already" if any(f["returned"] != "not back yet" for f in flags) else "back this week")
+            if all(f["before_window"]["compared"] != "games both played" for f in flags):
+                subs.append("fallback only")
         for sub in subs:
             for k in ((pos, key, sub), ("ALL", key, sub)):
                 cell[k][0] += 1
                 cell[k][1] += r["spike_flag"]
 
-    print(f"LEAD_MIN {sb.LEAD_MIN}, PRE_WINDOW_GAMES {sb.PRE_WINDOW_GAMES}")
+    print(f"LEAD_MIN {sb.LEAD_MIN}, PRE_WINDOW_GAMES {sb.PRE_WINDOW_GAMES}, rule v1.1 (0% fallback: depth-chart absences only)")
+    fb = cell[("ALL", "flagged", "fallback only")]
+    print(f"flagged only through the 0% fallback: {fb[0]} player-weeks, {fb[1]} spikes")
     print("pos  flagged n  spike rate | unflagged n  spike rate | difference (95% CI)  | flagged: back already / back this week")
     for pos in POSITIONS + ("ALL",):
         n1, k1 = cell[(pos, "flagged", "all")]
