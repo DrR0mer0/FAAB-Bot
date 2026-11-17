@@ -71,13 +71,29 @@ PERSISTED_FEATURE_COLS = [
     "trailing_target_share",
     "trailing_air_yards_share",
     "trailing_adot",
+    "starter_absent_asof",
 ]
+
+# starter_absent_asof (2026-11-16, v3 candidate): the as-of replacement for starter_absent_proxy. Same question
+# ("is this player's presumed starter missing this week, and he isn't the starter?"), answered only from what is
+# known BEFORE the games: the injury report (Out/Doubtful) and the week's weekly-roster status -- see
+# model/availability.py. The presumed starter is also picked as-of (_presumed_starter_asof: candidates whose most
+# recent prior game was for this team at this position; deterministic tie-break). NULL when no availability source
+# is attached (FeatureEngine(availability=None)) or the season-week has no roster data. starter_absent_proxy itself
+# is left exactly as it was: the production and shadow models keep reading it, so their scores -- and the weeks 8-14
+# head-to-head pre-registered as decision 17 -- don't move.
 
 # What the live-scoring production model actually trains and scores on
 # (train_production_model.py / odds_xgb_model_production.joblib) --
 # PERSISTED_FEATURE_COLS minus the rejected share_delta_vs_prior_season.
 # 13 features as of the Group 1 promotion (10 original + the 3 above).
-PRODUCTION_FEATURE_COLS = [c for c in PERSISTED_FEATURE_COLS if c != "share_delta_vs_prior_season"]
+PRODUCTION_FEATURE_COLS = [c for c in PERSISTED_FEATURE_COLS if c not in ("share_delta_vs_prior_season", "starter_absent_asof")]
+
+# The v3 candidate (model/train_candidate_v3.py): production's 13 features with the leaky starter_absent_proxy
+# swapped for starter_absent_asof, in the same position. Its "removed" arm (CANDIDATE_V3_REMOVED_COLS, 12 features)
+# is the pre-registered alternative if the as-of feature doesn't earn its place.
+CANDIDATE_V3_FEATURE_COLS = ["starter_absent_asof" if c == "starter_absent_proxy" else c for c in PRODUCTION_FEATURE_COLS]
+CANDIDATE_V3_REMOVED_COLS = [c for c in PRODUCTION_FEATURE_COLS if c != "starter_absent_proxy"]
 
 # Group 1 (receiving-opportunity features): promoted into
 # PERSISTED_FEATURE_COLS and PRODUCTION_FEATURE_COLS above. Kept as its own
@@ -186,9 +202,13 @@ RED_ZONE_OPPORTUNITY_FEATURES = [
 
 
 class FeatureEngine:
-    def __init__(self, con: sqlite3.Connection):
+    def __init__(self, con: sqlite3.Connection, availability=None):
         con.row_factory = sqlite3.Row
         self.con = con
+        # Optional pre-game availability source (model/availability.py) for starter_absent_asof. None -> that
+        # feature is NULL; every other feature is unaffected. score_week.py attaches one after resolving the week's
+        # injury report (set_availability), generate_player_week_features.py at construction.
+        self.availability = availability
 
         self.stats_seasons = sorted(r[0] for r in con.execute("SELECT DISTINCT season FROM player_week_stats"))
         self.games_seasons = sorted(r[0] for r in con.execute("SELECT DISTINCT season FROM nfl_games"))
@@ -580,6 +600,45 @@ class FeatureEngine:
             if share is not None and share > best_share:
                 best_share, best_pid = share, pid
         return best_pid
+
+    def set_availability(self, availability):
+        self.availability = availability
+
+    def _presumed_starter_asof(self, season, week, team, pos):
+        """As-of version of _presumed_starter, for starter_absent_asof only (_presumed_starter is unchanged).
+        Two differences: (1) a candidate must have played his most recent prior game (strictly before the week) for
+        this team at this position -- _presumed_starter reads the whole season's roster, so it can pick a player who
+        only joined the team later in the season (36 of 715 presumed-starter absences in 2022-2024, checked
+        2026-11-16) and can't see last season's starter at week 1; (2) ties are broken by player_id, not by set
+        iteration order (which varies with Python's string hashing between runs)."""
+        key = (season, week, team, pos)
+        cache = self.__dict__.setdefault("_starter_asof_cache", {})
+        if key in cache:
+            return cache[key]
+        best_pid, best_share = None, -1.0
+        pool = self.roster.get((season, team, pos), set()) | self.roster.get((season - 1, team, pos), set())
+        for pid in sorted(pool):
+            share, last3 = self._trailing_touch_share(pid, season, week)
+            if share is None or not last3:
+                continue
+            if last3[-1][2] != team or last3[-1][3] != pos:
+                continue
+            if share > best_share:
+                best_share, best_pid = share, pid
+        cache[key] = best_pid
+        return best_pid
+
+    def starter_absent_asof(self, season, week, player_id, team, pos):
+        """1 if this player's as-of presumed starter is known before kickoff to miss the week (and he isn't that
+        starter), 0 if not, None if no availability source is attached or it has no data for the week. Positions
+        with no touch signal (K/P/...) -> None, as for starter_absent_proxy."""
+        if self.availability is None or pos in self.no_touch_signal_pos or not self.availability.has_week(season, week):
+            return None
+        starter = self._presumed_starter_asof(season, week, team, pos)
+        if starter is None or starter == player_id:
+            return 0
+        a = self.availability.absent(season, week, starter, team)
+        return None if a is None else (1 if a else 0)
 
     def is_eligible(self, season, week, player_id):
         return len(self._touches_window(player_id, season, week)) >= MIN_PRIOR_GAMES
@@ -1020,6 +1079,7 @@ class FeatureEngine:
             "is_home": is_home,
             "is_bye_return": is_bye_return,
             "starter_absent_proxy": starter_absent_proxy,
+            "starter_absent_asof": self.starter_absent_asof(season, week, player_id, team, pos),
             "share_delta_vs_prior_season": share_delta_vs_prior_season,
             "trailing_target_share": trailing_target_share,
             "trailing_air_yards_share": trailing_air_yards_share,

@@ -658,7 +658,10 @@ def cmd_log(args, con):
         proc = subprocess.run(cmd + ["--injury-designations", str(designations), "--yahoo-status", str(statuses)],
                               capture_output=True, text=True, encoding="utf-8", errors="replace")
     written = [pred_path, pred_path.with_suffix(".md"),
-               pred_path.with_name(pred_path.stem + "_shadow.json"), pred_path.with_name(pred_path.stem + "_shadow.md")]
+               pred_path.with_name(pred_path.stem + "_shadow.json"), pred_path.with_name(pred_path.stem + "_shadow.md"),
+               # v3 candidate (third tracked model, outside the tracker's ledger until promoted): cleaned up on a
+               # failed run like the others, never read by the tracker itself
+               pred_path.with_name(pred_path.stem + "_candidate.json"), pred_path.with_name(pred_path.stem + "_candidate.md")]
     if proc.returncode != 0:
         for p in written:
             p.unlink(missing_ok=True)

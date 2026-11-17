@@ -46,6 +46,22 @@ HALF12_RULES = {
     "fumble_lost": -2,
 }
 
+# The league's own passing TD value (5, not half12's 4); everything else in half12 already matches the league's
+# rules the labels read (half PPR, 6-pt rush/rec TD, -2 INT). Used for the v3 candidate's training labels only,
+# written to their OWN table (--table labels_player_week_league): labels_player_week stays half12, because its
+# fantasy_points_half also feeds opponent_position_matchup, a production/shadow feature -- rewriting it would move
+# those models' live scores in the middle of the decision-17 head-to-head. Sacks, returns and pick-sixes stay out
+# (CLAUDE.md backlog, v3 change set items 2-3).
+LEAGUE_PROFILE_ID = "league_v1"
+LEAGUE_RULES = {**HALF12_RULES, "pass_td": 5}
+BUILTIN_PROFILES = {HALF12_PROFILE_ID: HALF12_RULES, LEAGUE_PROFILE_ID: LEAGUE_RULES}
+
+LABEL_TABLE_SQL = """CREATE TABLE IF NOT EXISTS {table} (
+  season INTEGER NOT NULL, week INTEGER NOT NULL, player_id TEXT NOT NULL,
+  fantasy_points_half REAL, positional_rank_week INTEGER, beat_proj_flag INTEGER, spike_flag INTEGER,
+  PRIMARY KEY (season, week, player_id)
+)"""
+
 # Structural mapping from a scoring-rule key to its player_week_stats column.
 # Not a scoring parameter itself -- the multipliers all come from the profile.
 RULE_TO_COLUMN = {
@@ -95,6 +111,9 @@ def main():
     ap.add_argument("--db", default=str(REPO_ROOT / "faab_history_core_v0_1.db"))
     ap.add_argument("--seasons", nargs="+", type=int, default=[2022])
     ap.add_argument("--profile", default=HALF12_PROFILE_ID)
+    ap.add_argument("--table", default="labels_player_week",
+                    help="label table to (re)write; anything but labels_player_week is created if missing. The v3 "
+                         "candidate's labels: --profile league_v1 --table labels_player_week_league")
     ap.add_argument("--through-week", type=int, default=None,
                     help="label the LATEST season in --seasons only through this week (the last completed one); "
                          "default: every loaded week")
@@ -111,11 +130,22 @@ def main():
     def crosses_gap(prev_season_val, curr_season_val):
         return any(prev_season_val <= g < curr_season_val for g in gap_after)
 
+    # The guards first, before the DB is even opened, so a refused run writes nothing at all.
+    if not args.table.replace("_", "").isalnum():
+        raise SystemExit(f"[ERROR] bad --table name {args.table!r}")
+    if args.table == "labels_player_week" and args.profile != HALF12_PROFILE_ID:
+        raise SystemExit("[ERROR] labels_player_week must stay half12 (opponent_position_matchup reads it); write "
+                         "other profiles to their own --table")
+
     con = sqlite3.connect(args.db)
     con.row_factory = sqlite3.Row
 
-    ensure_scoring_profile(con, HALF12_PROFILE_ID, HALF12_RULES)
+    # Only the profile actually requested is (re)written, so the weekly half12 run makes no write it didn't make before.
+    if args.profile in BUILTIN_PROFILES:
+        ensure_scoring_profile(con, args.profile, BUILTIN_PROFILES[args.profile])
     rules = load_rules(con, args.profile)
+    if args.table != "labels_player_week":
+        con.execute(LABEL_TABLE_SQL.format(table=args.table))
 
     # Regular-season-only: (season, week, team) triples that were playoff
     # games get excluded entirely -- not counted as prior games, no labels written.
@@ -143,7 +173,7 @@ def main():
 
     # Clean slate for these seasons: previous runs may have written playoff-week
     # labels, or labels under a different cross-season history, that no longer belong.
-    con.execute(f"DELETE FROM labels_player_week WHERE season IN ({placeholders})", seasons)
+    con.execute(f"DELETE FROM {args.table} WHERE season IN ({placeholders})", seasons)
 
     # points[(season,week,player_id)] = fantasy_points_half
     points = {}
@@ -234,7 +264,7 @@ def main():
         ))
 
     con.executemany(
-        """INSERT OR REPLACE INTO labels_player_week
+        f"""INSERT OR REPLACE INTO {args.table}
            (season, week, player_id, fantasy_points_half, positional_rank_week, beat_proj_flag, spike_flag)
            VALUES (?,?,?,?,?,?,?)""",
         label_rows,
@@ -243,7 +273,7 @@ def main():
 
     names = {row["player_id"]: row["full_name"] for row in con.execute("SELECT player_id, full_name FROM ref_players")}
 
-    print(f"[DONE] seasons {seasons}: {len(label_rows)} labels_player_week rows written using profile '{args.profile}'")
+    print(f"[DONE] seasons {seasons}: {len(label_rows)} {args.table} rows written using profile '{args.profile}'")
 
     print("\nplayer_week_stats and nfl_games rows per season:")
     for s in seasons:

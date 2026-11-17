@@ -8,7 +8,8 @@ import argparse
 import sqlite3
 from pathlib import Path
 
-from features_lib import PERSISTED_FEATURE_COLS, FeatureEngine
+from availability import Availability
+from features_lib import PERSISTED_FEATURE_COLS, FeatureEngine, norm_team
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -16,11 +17,38 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default=str(REPO_ROOT / "faab_history_core_v0_1.db"))
+    ap.add_argument("--availability-raw-dir", default=None,
+                    help="compute starter_absent_asof from nflverse injuries_<season>.csv + roster_weekly_<season>.csv "
+                         "in this folder (normally nflverse_raw); without it the column is written NULL")
+    ap.add_argument("--download-missing", action="store_true",
+                    help="with --availability-raw-dir: first download any missing season file (starter_back."
+                         "ensure_season_files, same nflverse release URLs)")
     args = ap.parse_args()
 
     con = sqlite3.connect(args.db)
     con.row_factory = sqlite3.Row
-    engine = FeatureEngine(con)
+
+    # Additive schema change: starter_absent_asof (v3 candidate). Old models select their own columns by name.
+    existing_cols = {r[1] for r in con.execute("PRAGMA table_info(player_week_features)")}
+    for c in PERSISTED_FEATURE_COLS:
+        if c not in existing_cols:
+            con.execute(f"ALTER TABLE player_week_features ADD COLUMN {c} INTEGER")
+            print(f"[INFO] added column player_week_features.{c}")
+    con.commit()
+
+    availability = None
+    if args.availability_raw_dir:
+        seasons_all = sorted(r[0] for r in con.execute("SELECT DISTINCT season FROM player_week_stats"))
+        if args.download_missing:
+            # Completed seasons only: the in-progress season's injury report is the live run's business (tracker's
+            # raw/injuries copies), and a partial file here would be read as a "prior season" next year.
+            import starter_back
+            got = starter_back.ensure_season_files(args.availability_raw_dir, [s for s in seasons_all if s < max(seasons_all)])
+            print(f"[INFO] downloaded {len(got)} missing nflverse file(s): {[p.name for p in got]}")
+        availability = Availability.from_nflverse(args.availability_raw_dir, seasons_all, norm_team=norm_team)
+        print(f"[INFO] starter_absent_asof: availability loaded for seasons {availability.loaded_seasons}"
+              + (f"; MISSING (feature NULL there): {availability.missing}" if availability.missing else ""))
+    engine = FeatureEngine(con, availability=availability)
 
     seasons = engine.stats_seasons
     print(f"[INFO] positions with no touch signal, found in data: {sorted(engine.no_touch_signal_pos)}")

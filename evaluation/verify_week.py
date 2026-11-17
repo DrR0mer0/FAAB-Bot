@@ -310,6 +310,10 @@ def main():
 
     pred_path = Path(args.predictions_dir) / f"{args.season}_week{args.week:02d}.json"
     shadow_path = Path(args.predictions_dir) / f"{args.season}_week{args.week:02d}_shadow.json"
+    # v3 candidate (third tracked model; start week in docs/starter_absent_asof_plan.md, section 4): verified the same way, against the same half12
+    # labels as production and shadow so the comparison is like for like, and logged under its own "candidate" key.
+    # It doesn't enter the decision-17 production/shadow head-to-head.
+    candidate_path = Path(args.predictions_dir) / f"{args.season}_week{args.week:02d}_candidate.json"
     if not pred_path.exists():
         raise SystemExit(
             f"[ERROR] No committed prediction file at {pred_path}. "
@@ -382,6 +386,8 @@ def main():
                                          loaded_seasons, con, args)
     shadow_result = verify_prediction_file(shadow_path, labels_this_week, base_rate_df, base_rate_rosterable_df,
                                            loaded_seasons, con, args)
+    candidate_result = verify_prediction_file(candidate_path, labels_this_week, base_rate_df, base_rate_rosterable_df,
+                                              loaded_seasons, con, args)
 
     con.close()
 
@@ -399,6 +405,8 @@ def main():
     print_result(prod_result, "PRODUCTION")
     if shadow_result:
         print_result(shadow_result, "SHADOW")
+    if candidate_result:
+        print_result(candidate_result, "CANDIDATE")
 
     # ---- log ----
     log_path = Path(args.log)
@@ -416,6 +424,8 @@ def main():
     }
     if shadow_result:
         week_entry["shadow"] = log_entry_for(shadow_result)
+    if candidate_result:
+        week_entry["candidate"] = log_entry_for(candidate_result)
     log["weeks"].append(week_entry)
     log["weeks"].sort(key=lambda w: (w["season"], w["week"]))
     with open(log_path, "w", encoding="utf-8") as f:
@@ -452,6 +462,22 @@ def main():
         print(f"  Production: {s_hits10}/{s_n10}" + (f" = {s_p10:.4f}" if s_p10 is not None else ""))
         print(f"  Shadow:     {sh_hits10}/{sh_n10}" + (f" = {sh_p10:.4f}" if sh_p10 is not None else ""))
 
+    weeks_with_candidate = [w for w in log["weeks"] if "candidate" in w]
+    candidate_cum = None
+    if weeks_with_candidate:
+        def _cum(entries):
+            h = sum(e["precision_at_10"]["hits"] for e in entries)
+            n = sum(e["precision_at_10"]["n"] for e in entries)
+            return {"hits": h, "n": n, "precision": (h / n if n else None)}
+        candidate_cum = {"n_weeks": len(weeks_with_candidate),
+                         "production": _cum(weeks_with_candidate),
+                         "shadow": _cum([w["shadow"] for w in weeks_with_candidate if "shadow" in w]),
+                         "candidate": _cum([w["candidate"] for w in weeks_with_candidate])}
+        print(f"\n=== Cumulative precision@10 over the {len(weeks_with_candidate)} week(s) with a CANDIDATE file ===")
+        for k in ("production", "shadow", "candidate"):
+            c = candidate_cum[k]
+            print(f"  {k.capitalize():10}  {c['hits']}/{c['n']}" + (f" = {c['precision']:.4f}" if c["precision"] is not None else ""))
+
     # ---- markdown report ----
     md_path = Path(args.predictions_dir) / f"{args.season}_week{args.week:02d}_verified.md"
     lines = [
@@ -474,11 +500,20 @@ def main():
             + f", shadow {shadow_cum['shadow']['hits']}/{shadow_cum['shadow']['n']}"
             + (f" = {shadow_cum['shadow']['precision']:.4f}" if shadow_cum['shadow']['precision'] is not None else "")
         )
+    if candidate_cum:
+        lines.append(
+            f"- Cumulative with the v3 candidate (precision@10, {candidate_cum['n_weeks']} week(s) with a candidate file): "
+            + ", ".join(f"{k} {candidate_cum[k]['hits']}/{candidate_cum[k]['n']}"
+                        + (f" = {candidate_cum[k]['precision']:.4f}" if candidate_cum[k]['precision'] is not None else "")
+                        for k in ("production", "shadow", "candidate")))
     lines.append("")
     lines += markdown_for_result(prod_result, "PRODUCTION")
     if shadow_result:
         lines.append("")
         lines += markdown_for_result(shadow_result, "SHADOW")
+    if candidate_result:
+        lines.append("")
+        lines += markdown_for_result(candidate_result, "CANDIDATE")
 
     with open(md_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")

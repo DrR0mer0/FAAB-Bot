@@ -215,6 +215,7 @@ from zoneinfo import ZoneInfo
 import joblib
 import numpy as np
 
+from availability import ABSENT_ROSTER_STATUSES, Availability
 from features_lib import MIN_PRIOR_GAMES, PERSISTED_FEATURE_COLS, FeatureEngine
 from model_metadata import read_metadata
 
@@ -798,6 +799,39 @@ def check_roster_staleness(path, season, week):
         print(f"{banner}\n")
 
 
+CANDIDATE_SKIPPED_TAG = "[CANDIDATE SKIPPED]"
+
+
+def candidate_outputs(json_out_path):
+    """The v3 candidate's two files next to a production --json-out: <stem>_candidate.json and .md."""
+    j = Path(json_out_path).with_name(Path(json_out_path).stem + "_candidate" + Path(json_out_path).suffix)
+    return [j, j.with_suffix(".md")]
+
+
+def run_candidate_step(step, json_out_path):
+    """Run the v3 candidate's whole step (`step()`, a no-argument callable) after production and shadow are written.
+    Any exception is caught: a loud CANDIDATE_SKIPPED_TAG warning on stderr, any partial _candidate file removed, and
+    the run carries on -- production and shadow are already on disk and untouched, and the exit status is unchanged.
+    Returns True if the step completed."""
+    try:
+        step()
+        return True
+    except Exception as e:  # noqa: BLE001 -- by design: the candidate must never take down a production run
+        removed = []
+        for p in (candidate_outputs(json_out_path) if json_out_path else []):
+            if p.exists():
+                try:
+                    p.unlink()
+                    removed.append(p.name)
+                except OSError:
+                    pass
+        bar = "!" * 78
+        print(f"{bar}\n{CANDIDATE_SKIPPED_TAG} the v3 candidate step failed and was skipped: {type(e).__name__}: {e}"
+              f"\n  production and shadow output are unaffected; partial candidate files removed: {removed or 'none'}"
+              f"\n{bar}", file=sys.stderr)
+        return False
+
+
 def load_and_score(model_path, label, stable):
     """Loads a model bundle, scores the shared `stable` candidate pool with
     it, and returns (model_commit, model_meta, feature_cols, proba, ranked)
@@ -949,6 +983,10 @@ def main():
                      help="also score the same candidate pool with this model, for a head-to-head "
                           "tracked in verify_week.py; skipped with a warning if the file isn't present locally")
     ap.add_argument("--no-shadow", action="store_true", help="skip shadow scoring even if --shadow-model exists")
+    ap.add_argument("--candidate-model", default=str(REPO_ROOT / "odds_xgb_model_candidate_v3.joblib"),
+                    help="a third tracked model (v3 candidate: starter_absent_proxy leak fixed) scored on the same pool, "
+                         "written as <json-out>_candidate.json/.md; skipped quietly if the file isn't present")
+    ap.add_argument("--no-candidate", action="store_true", help="skip candidate scoring even if the model exists")
     ap.add_argument("--season", type=int, required=True)
     ap.add_argument("--week", type=int, required=True)
     ap.add_argument("--top", type=int, default=25)
@@ -1474,6 +1512,46 @@ def main():
     if not args.no_shadow:
         shadow_json_out = json_out_path.with_name(json_out_path.stem + "_shadow" + json_out_path.suffix) if json_out_path else None
         run_pass(args.shadow_model, "SHADOW", shadow_json_out, baseline_shadow_path)
+
+    # The v3 candidate (third tracked model; production and shadow never read starter_absent_asof). Its WHOLE step --
+    # availability, the feature, the scoring pass and the JSON additions -- runs only after production and shadow are
+    # written, inside run_candidate_step: any error there prints CANDIDATE_SKIPPED_TAG, removes partial _candidate
+    # files and lets this run finish as if there were no candidate model (a scheduled `log` must never fail on it).
+    # The presumed starter's availability is this run's own sources: the starter-back check (designations, weekly
+    # roster, Yahoo overrides -- the same the pool rule used) plus availability.ABSENT_ROSTER_STATUSES, the status set
+    # the historical training values use.
+    if not args.no_candidate and os.path.exists(args.candidate_model):
+        def candidate_step():
+            def candidate_available(x, team):
+                status = weekly_status_of.get(x)
+                if status in ABSENT_ROSTER_STATUSES and not yahoo_status.overrides(status, yahoo_of.get(x)):
+                    return False
+                return teammate_available(x, team)
+
+            has_roster = bool(roster_team_of or roster_latest)
+            engine.set_availability(Availability.from_live(args.season, args.week, candidate_available, has_data=has_roster))
+            n_flag = 0
+            for pid, feat in stable:
+                team = norm_team(roster_team_of.get(pid) or feat["_team"])
+                feat["starter_absent_asof"] = engine.starter_absent_asof(args.season, args.week, pid, team, feat["_pos"])
+                n_flag += feat["starter_absent_asof"] == 1
+            asof_source = {"injury_source": injury_rule.get("source"), "injury_provided_by": injury_rule.get("provided_by"),
+                           "weekly_roster": Path(weekly_roster_path).name if has_roster else None,
+                           "yahoo_status": bool(yahoo_of), "absent_roster_statuses": sorted(ABSENT_ROSTER_STATUSES),
+                           "n_scored_with_starter_absent": int(n_flag)}
+            print(f"[INFO] starter_absent_asof (candidate only): {n_flag} of {len(stable)} scored players have a presumed "
+                  f"starter known out (injury source {injury_rule.get('source')}"
+                  f"{'' if has_roster else '; NO weekly roster -- feature NULL for everyone'})")
+            cand_json_out = candidate_outputs(json_out_path)[0] if json_out_path else None
+            baseline_candidate_path = candidate_outputs(baseline_production_path)[0]
+            run_pass(args.candidate_model, "CANDIDATE", cand_json_out, baseline_candidate_path)
+            if cand_json_out is not None and cand_json_out.exists():
+                out = json.loads(cand_json_out.read_text(encoding="utf-8"))
+                out["starter_absent_asof_source"] = asof_source
+                out["scored_pool_starter_absent_asof"] = {pid: feat.get("starter_absent_asof") for pid, feat in stable}
+                cand_json_out.write_text(json.dumps(out, indent=2), encoding="utf-8")
+
+        run_candidate_step(candidate_step, json_out_path)
 
     con.close()
 

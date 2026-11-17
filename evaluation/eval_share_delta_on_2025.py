@@ -13,8 +13,27 @@ from xgboost import XGBClassifier
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "model"))
-from features_lib import PERSISTED_FEATURE_COLS as FEATURE_COLS  # this evaluation deliberately uses the full share_delta-inclusive set
 from model_metadata import write_metadata
+
+# This evaluation deliberately uses the full share_delta-inclusive set -- pinned (2026-11-17) to the 14 columns
+# PERSISTED_FEATURE_COLS held when it ran, so a later persisted column (starter_absent_asof, v3 candidate) can't
+# silently change what a re-run trains on.
+FEATURE_COLS = [
+    "trailing_touches_avg",
+    "trailing_touches_trend",
+    "trailing_team_touch_share",
+    "opponent_position_matchup",
+    "experience_seasons",
+    "games_played_this_season",
+    "is_short_week",
+    "is_home",
+    "is_bye_return",
+    "starter_absent_proxy",
+    "share_delta_vs_prior_season",
+    "trailing_target_share",
+    "trailing_air_yards_share",
+    "trailing_adot",
+]
 
 TRAIN_SEASONS = [s for s in range(2010, 2025) if s != 2019]  # 2010-2024, no 2019
 TEST_SEASONS = [2025]
