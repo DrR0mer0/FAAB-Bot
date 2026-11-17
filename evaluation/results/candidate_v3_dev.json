@@ -1,0 +1,325 @@
+{
+  "stage": "dev",
+  "train_seasons": [
+    2010,
+    2011,
+    2012,
+    2013,
+    2014,
+    2015,
+    2016,
+    2017,
+    2018,
+    2020,
+    2021,
+    2022,
+    2023
+  ],
+  "test_season": 2024,
+  "label_profile": "league_v1",
+  "run_at": "2026-11-17T17:24:59.916728+00:00",
+  "data_guards": {
+    "2010": {
+      "n": 3343,
+      "asof_null_rate": 1.0,
+      "played_absent_rate": 0.0,
+      "availability_unknown_rate": 1.0,
+      "guarded": false
+    },
+    "2011": {
+      "n": 4374,
+      "asof_null_rate": 1.0,
+      "played_absent_rate": 0.0,
+      "availability_unknown_rate": 1.0,
+      "guarded": false
+    },
+    "2012": {
+      "n": 4358,
+      "asof_null_rate": 1.0,
+      "played_absent_rate": 0.0,
+      "availability_unknown_rate": 1.0,
+      "guarded": false
+    },
+    "2013": {
+      "n": 4313,
+      "asof_null_rate": 1.0,
+      "played_absent_rate": 0.0,
+      "availability_unknown_rate": 1.0,
+      "guarded": false
+    },
+    "2014": {
+      "n": 4460,
+      "asof_null_rate": 1.0,
+      "played_absent_rate": 0.0,
+      "availability_unknown_rate": 1.0,
+      "guarded": false
+    },
+    "2015": {
+      "n": 4494,
+      "asof_null_rate": 1.0,
+      "played_absent_rate": 0.0,
+      "availability_unknown_rate": 1.0,
+      "guarded": false
+    },
+    "2016": {
+      "n": 4474,
+      "asof_null_rate": 0.0,
+      "played_absent_rate": 0.002235136343316942,
+      "availability_unknown_rate": 0.0,
+      "guarded": true
+    },
+    "2017": {
+      "n": 4533,
+      "asof_null_rate": 0.0,
+      "played_absent_rate": 0.00022060445621001543,
+      "availability_unknown_rate": 0.0,
+      "guarded": true
+    },
+    "2018": {
+      "n": 4401,
+      "asof_null_rate": 0.0,
+      "played_absent_rate": 0.0,
+      "availability_unknown_rate": 0.0,
+      "guarded": true
+    },
+    "2020": {
+      "n": 3471,
+      "asof_null_rate": 0.0,
+      "played_absent_rate": 0.0,
+      "availability_unknown_rate": 0.0,
+      "guarded": true
+    },
+    "2021": {
+      "n": 4775,
+      "asof_null_rate": 0.0,
+      "played_absent_rate": 0.0002094240837696335,
+      "availability_unknown_rate": 0.0,
+      "guarded": true
+    },
+    "2022": {
+      "n": 4844,
+      "asof_null_rate": 0.0,
+      "played_absent_rate": 0.0,
+      "availability_unknown_rate": 0.0,
+      "guarded": true
+    },
+    "2023": {
+      "n": 4827,
+      "asof_null_rate": 0.0,
+      "played_absent_rate": 0.00020716801325875285,
+      "availability_unknown_rate": 0.0,
+      "guarded": true
+    },
+    "2024": {
+      "n": 4883,
+      "asof_null_rate": 0.0,
+      "played_absent_rate": 0.0,
+      "availability_unknown_rate": 0.0,
+      "guarded": true
+    }
+  },
+  "results": {
+    "live": {
+      "arm": "live",
+      "features": [
+        "trailing_touches_avg",
+        "trailing_touches_trend",
+        "trailing_team_touch_share",
+        "opponent_position_matchup",
+        "experience_seasons",
+        "games_played_this_season",
+        "is_short_week",
+        "is_home",
+        "is_bye_return",
+        "starter_absent_proxy",
+        "trailing_target_share",
+        "trailing_air_yards_share",
+        "trailing_adot"
+      ],
+      "null_at_score_time": [
+        "starter_absent_proxy"
+      ],
+      "pooled_mean_p10": 0.2944444444444445,
+      "pooled_mean_p25": 0.27777777777777785,
+      "p10_by_pos": {
+        "QB": 0.25555555555555554,
+        "RB": 0.2388888888888889,
+        "TE": 0.2222222222222222,
+        "WR": 0.2722222222222222
+      },
+      "p10_hits_by_pos": {
+        "QB": [
+          46,
+          180
+        ],
+        "RB": [
+          43,
+          180
+        ],
+        "TE": [
+          40,
+          180
+        ],
+        "WR": [
+          49,
+          180
+        ]
+      },
+      "pr_auc": 0.2338369378805365,
+      "calibration": {
+        "top25_mean_score": 0.7194928526878357,
+        "top25_realized": 0.2777777777777778,
+        "pool_mean_score": 0.48659417033195496,
+        "pool_realized": 0.13426345352418917
+      },
+      "importances": {
+        "trailing_team_touch_share": 0.7782207131385803,
+        "opponent_position_matchup": 0.07859081029891968,
+        "trailing_target_share": 0.051619935780763626,
+        "trailing_air_yards_share": 0.02527943253517151,
+        "trailing_touches_avg": 0.013647845946252346,
+        "starter_absent_proxy": 0.012802601791918278,
+        "trailing_adot": 0.007415493484586477,
+        "games_played_this_season": 0.007069433573633432,
+        "trailing_touches_trend": 0.006568053271621466,
+        "experience_seasons": 0.006011114921420813,
+        "is_bye_return": 0.00527745159342885,
+        "is_home": 0.005156922619789839,
+        "is_short_week": 0.0023402399383485317
+      }
+    },
+    "removed": {
+      "arm": "removed",
+      "features": [
+        "trailing_touches_avg",
+        "trailing_touches_trend",
+        "trailing_team_touch_share",
+        "opponent_position_matchup",
+        "experience_seasons",
+        "games_played_this_season",
+        "is_short_week",
+        "is_home",
+        "is_bye_return",
+        "trailing_target_share",
+        "trailing_air_yards_share",
+        "trailing_adot"
+      ],
+      "null_at_score_time": [],
+      "pooled_mean_p10": 0.3,
+      "pooled_mean_p25": 0.26888888888888896,
+      "p10_by_pos": {
+        "QB": 0.2777777777777778,
+        "RB": 0.2833333333333333,
+        "TE": 0.21666666666666667,
+        "WR": 0.29444444444444445
+      },
+      "p10_hits_by_pos": {
+        "QB": [
+          50,
+          180
+        ],
+        "RB": [
+          51,
+          180
+        ],
+        "TE": [
+          39,
+          180
+        ],
+        "WR": [
+          53,
+          180
+        ]
+      },
+      "pr_auc": 0.23883028963178432,
+      "calibration": {
+        "top25_mean_score": 0.8749802112579346,
+        "top25_realized": 0.2688888888888889,
+        "pool_mean_score": 0.6837343573570251,
+        "pool_realized": 0.13426345352418917
+      },
+      "importances": {
+        "trailing_team_touch_share": 0.7994589805603027,
+        "opponent_position_matchup": 0.07041522115468979,
+        "trailing_target_share": 0.04816528782248497,
+        "trailing_air_yards_share": 0.027231205254793167,
+        "trailing_touches_avg": 0.013241754844784737,
+        "trailing_adot": 0.0076875947415828705,
+        "games_played_this_season": 0.006970672868192196,
+        "trailing_touches_trend": 0.006787175312638283,
+        "is_bye_return": 0.006059208419173956,
+        "experience_seasons": 0.006050370167940855,
+        "is_home": 0.005781055893748999,
+        "is_short_week": 0.002151462947949767
+      }
+    },
+    "asof": {
+      "arm": "asof",
+      "features": [
+        "trailing_touches_avg",
+        "trailing_touches_trend",
+        "trailing_team_touch_share",
+        "opponent_position_matchup",
+        "experience_seasons",
+        "games_played_this_season",
+        "is_short_week",
+        "is_home",
+        "is_bye_return",
+        "starter_absent_asof",
+        "trailing_target_share",
+        "trailing_air_yards_share",
+        "trailing_adot"
+      ],
+      "null_at_score_time": [],
+      "pooled_mean_p10": 0.32222222222222224,
+      "pooled_mean_p25": 0.2666666666666667,
+      "p10_by_pos": {
+        "QB": 0.28888888888888886,
+        "RB": 0.24444444444444444,
+        "TE": 0.2222222222222222,
+        "WR": 0.28888888888888886
+      },
+      "p10_hits_by_pos": {
+        "QB": [
+          52,
+          180
+        ],
+        "RB": [
+          44,
+          180
+        ],
+        "TE": [
+          40,
+          180
+        ],
+        "WR": [
+          52,
+          180
+        ]
+      },
+      "pr_auc": 0.23685840374908124,
+      "calibration": {
+        "top25_mean_score": 0.8770524859428406,
+        "top25_realized": 0.26666666666666666,
+        "pool_mean_score": 0.6832989454269409,
+        "pool_realized": 0.13426345352418917
+      },
+      "importances": {
+        "trailing_team_touch_share": 0.7975031733512878,
+        "opponent_position_matchup": 0.07157521694898605,
+        "trailing_target_share": 0.03927771374583244,
+        "trailing_air_yards_share": 0.027974113821983337,
+        "trailing_touches_avg": 0.014306025579571724,
+        "trailing_adot": 0.007850640453398228,
+        "starter_absent_asof": 0.007492010481655598,
+        "games_played_this_season": 0.006883132271468639,
+        "trailing_touches_trend": 0.006706464570015669,
+        "is_home": 0.006520774215459824,
+        "experience_seasons": 0.006048313807696104,
+        "is_bye_return": 0.005825646687299013,
+        "is_short_week": 0.002036921912804246
+      }
+    }
+  },
+  "pick": "removed"
+}
