@@ -799,6 +799,33 @@ def check_roster_staleness(path, season, week):
         print(f"{banner}\n")
 
 
+def candidate_available(x, team, week, roster_team_of, weekly_status_of, roster_latest, roster_teams_in_week, yahoo_of,
+                        injury_out):
+    """The v3 candidate's live "is this presumed starter available for `team` this week?" (starter_absent_asof). The
+    starter-back check (starter_back_available) plus two differences that keep it on the training data's meaning
+    (model/availability.py):
+      * ABSENT_ROSTER_STATUSES, the status set history uses, is absent (unless Yahoo overrules a long-term status);
+      * a newest weekly-roster row of INA counts as ON his team, as in training, where INA is never absent. Midweek the
+        newest row is usually LAST week's, so the starter-back check -- which only gives a team to ACT/DEV/RES rows --
+        would read last week's game-day inactive list as "out this week" (2026 week 11: 15 of 50 flags, DeVonta Smith's
+        6 among them). He is still absent if off a roster for the week, or designated Out/Doubtful.
+    The starter-back display flag keeps its own check, unchanged."""
+    status = weekly_status_of.get(x)
+    if status in ABSENT_ROSTER_STATUSES and not yahoo_status.overrides(status, yahoo_of.get(x)):
+        return False
+    if status == "INA":
+        if not roster_team_of and not roster_latest:
+            return False
+        if roster_latest and off_roster_reason(x, roster_latest, roster_teams_in_week, week):
+            return False
+        if x in injury_out:
+            return False
+        row = roster_latest.get(x)
+        return row is not None and row[2] is not None and norm_team(row[2]) == team
+    return starter_back_available(x, team, week, roster_team_of, weekly_status_of, roster_latest, roster_teams_in_week,
+                                  yahoo_of, injury_out)
+
+
 CANDIDATE_SKIPPED_TAG = "[CANDIDATE SKIPPED]"
 
 
@@ -1519,17 +1546,15 @@ def main():
     # files and lets this run finish as if there were no candidate model (a scheduled `log` must never fail on it).
     # The presumed starter's availability is this run's own sources: the starter-back check (designations, weekly
     # roster, Yahoo overrides -- the same the pool rule used) plus availability.ABSENT_ROSTER_STATUSES, the status set
-    # the historical training values use.
+    # the historical training values use, with INA counted as on the team as in training (candidate_available).
     if not args.no_candidate and os.path.exists(args.candidate_model):
         def candidate_step():
-            def candidate_available(x, team):
-                status = weekly_status_of.get(x)
-                if status in ABSENT_ROSTER_STATUSES and not yahoo_status.overrides(status, yahoo_of.get(x)):
-                    return False
-                return teammate_available(x, team)
+            def available_now(x, team):
+                return candidate_available(x, team, args.week, roster_team_of, weekly_status_of, roster_latest,
+                                           roster_teams_in_week, yahoo_of, injury_out)
 
             has_roster = bool(roster_team_of or roster_latest)
-            engine.set_availability(Availability.from_live(args.season, args.week, candidate_available, has_data=has_roster))
+            engine.set_availability(Availability.from_live(args.season, args.week, available_now, has_data=has_roster))
             n_flag = 0
             for pid, feat in stable:
                 team = norm_team(roster_team_of.get(pid) or feat["_team"])

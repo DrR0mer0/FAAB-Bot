@@ -126,6 +126,43 @@ class TestCandidateStepIsolation(unittest.TestCase):
             self.assertEqual({f: f.read_bytes() for f in before}, before)
 
 
+class TestCandidateLiveAvailability(unittest.TestCase):
+    """score_week.candidate_available, on the 2026 week-11 midweek case: no week-11 rows yet, so a starter's newest
+    weekly-roster row is last week's."""
+    def _call(self, fn, x="ds", team="PHI", status="INA", latest=(9, "INA", "PHI"), teams_in_week=(), injury_out=()):
+        roster_team_of = {"teammate": "PHI"}                      # load_current_roster: only ACT/DEV/RES rows get a team
+        weekly_status_of = {x: status}
+        roster_latest = {x: latest, "teammate": (10, "ACT", "PHI")}
+        return fn(x, team, 11, roster_team_of, weekly_status_of, roster_latest, set(teams_in_week), {}, set(injury_out))
+
+    def test_devonta_smith_newest_row_ina_counts_as_on_his_team(self):
+        # DeVonta Smith, PHI, week 11 midweek run: newest row week 9 INA (PHI's week 10 was a bye)
+        self.assertTrue(self._call(score_week.candidate_available))
+        self.assertFalse(self._call(score_week.starter_back_available))   # the display flag's own check, unchanged
+
+    def test_ina_is_still_absent_when_off_a_roster_designated_or_on_another_team(self):
+        self.assertFalse(self._call(score_week.candidate_available, teams_in_week={"PHI"}))   # PHI has week-11 rows
+        self.assertFalse(self._call(score_week.candidate_available, injury_out={"ds"}))       # designated Out
+        self.assertFalse(self._call(score_week.candidate_available, latest=(9, "INA", "NYG")))
+
+    def test_the_shared_status_set_is_absent(self):
+        for st in ("RES", "E14", "E01", "DEV", "CUT"):
+            self.assertFalse(self._call(score_week.candidate_available, status=st, latest=(10, st, "PHI")), st)
+
+
+class TestAvailabilityLogLine(unittest.TestCase):
+    def test_it_names_the_missing_half(self):
+        import generate_player_week_features as gpwf
+        fake = SimpleNamespace(missing=["injuries_2026.csv", "roster_weekly_2027.csv", "injuries_2027.csv"])
+        lines = gpwf.availability_summary(fake, [2014, 2016, 2026, 2027])
+        self.assertEqual(lines[0], "weekly roster + injury report for [2016]")
+        self.assertIn("weekly roster only, NO injury report", lines[1])
+        self.assertIn("[2026]: missing ['injuries_2026.csv']", lines[1])
+        self.assertIn("NO weekly roster (feature NULL for the whole season) for [2027]", lines[2])
+        self.assertEqual(lines[3], "NULL by design for [2014] (before 2016: season-level roster files)")
+        self.assertFalse(any("MISSING (feature NULL there)" in ln for ln in lines))
+
+
 class TestTrainingDataGuards(unittest.TestCase):
     def _df(self, season, n, n_null=0):
         import pandas as pd

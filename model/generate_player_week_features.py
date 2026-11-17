@@ -8,10 +8,35 @@ import argparse
 import sqlite3
 from pathlib import Path
 
-from availability import Availability
+from availability import WEEKLY_ROSTER_FIRST_SEASON, Availability
 from features_lib import PERSISTED_FEATURE_COLS, FeatureEngine, norm_team
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def availability_summary(availability, seasons):
+    """What starter_absent_asof can use per season, in words: which half of the source (weekly roster / injury report)
+    is missing where, and which seasons are NULL by design (availability.WEEKLY_ROSTER_FIRST_SEASON)."""
+    missing = set(availability.missing)
+    full, roster_only, none_ = [], [], []
+    for s in seasons:
+        if f"roster_weekly_{s}.csv" in missing:
+            none_.append(s)
+        elif f"injuries_{s}.csv" in missing:
+            roster_only.append(s)
+        else:
+            full.append(s)
+    early = [s for s in seasons if s < WEEKLY_ROSTER_FIRST_SEASON]
+    lines = [f"weekly roster + injury report for {[s for s in full if s >= WEEKLY_ROSTER_FIRST_SEASON]}"]
+    if roster_only:
+        lines.append(f"weekly roster only, NO injury report (Out/Doubtful not seen; reserve list, released, other team "
+                     f"still are) for {roster_only}: missing {[f'injuries_{s}.csv' for s in roster_only]}")
+    if none_:
+        lines.append(f"NO weekly roster (feature NULL for the whole season) for {none_}: missing "
+                     f"{[f'roster_weekly_{s}.csv' for s in none_]}")
+    if early:
+        lines.append(f"NULL by design for {early} (before {WEEKLY_ROSTER_FIRST_SEASON}: season-level roster files)")
+    return lines
 
 
 def main():
@@ -46,8 +71,8 @@ def main():
             got = starter_back.ensure_season_files(args.availability_raw_dir, [s for s in seasons_all if s < max(seasons_all)])
             print(f"[INFO] downloaded {len(got)} missing nflverse file(s): {[p.name for p in got]}")
         availability = Availability.from_nflverse(args.availability_raw_dir, seasons_all, norm_team=norm_team)
-        print(f"[INFO] starter_absent_asof: availability loaded for seasons {availability.loaded_seasons}"
-              + (f"; MISSING (feature NULL there): {availability.missing}" if availability.missing else ""))
+        for line in availability_summary(availability, seasons_all):
+            print(f"[INFO] starter_absent_asof: {line}")
     engine = FeatureEngine(con, availability=availability)
 
     seasons = engine.stats_seasons

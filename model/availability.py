@@ -103,7 +103,8 @@ class Availability:
         weekly roster lags (e.g. a player back from IR before nflverse shows it), which the final historical
         files no longer do.
           available_fn(player_id, team) -> bool  (score_week.py's candidate_available: the starter-back check plus
-                                                 ABSENT_ROSTER_STATUSES, the set history uses)
+                                                 ABSENT_ROSTER_STATUSES, the set history uses, and INA counted as
+                                                 on the team, as history never calls INA absent)
           has_data: False when the run has no weekly roster (the feature is then NULL, as in training)"""
         av = cls()
         av._live = (season, week, available_fn)
