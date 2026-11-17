@@ -837,13 +837,16 @@ def candidate_outputs(json_out_path):
 
 def run_candidate_step(step, json_out_path):
     """Run the v3 candidate's whole step (`step()`, a no-argument callable) after production and shadow are written.
-    Any exception is caught: a loud CANDIDATE_SKIPPED_TAG warning on stderr, any partial _candidate file removed, and
-    the run carries on -- production and shadow are already on disk and untouched, and the exit status is unchanged.
+    Any exception -- SystemExit included -- is caught: a loud CANDIDATE_SKIPPED_TAG warning on stderr, any partial
+    _candidate file removed, and the run carries on -- production and shadow are already on disk and untouched, and the
+    exit status is unchanged.
     Returns True if the step completed."""
     try:
         step()
         return True
-    except Exception as e:  # noqa: BLE001 -- by design: the candidate must never take down a production run
+    # SystemExit too: a sys.exit() in the candidate path would otherwise escape after production and shadow are
+    # written, the run would exit nonzero, and tracker.py log's failure cleanup would delete THEIR files as well.
+    except (Exception, SystemExit) as e:  # noqa: BLE001 -- by design: the candidate must never take down a run
         removed = []
         for p in (candidate_outputs(json_out_path) if json_out_path else []):
             if p.exists():

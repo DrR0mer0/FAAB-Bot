@@ -117,6 +117,30 @@ class TestCandidateStepIsolation(unittest.TestCase):
             self.assertFalse(cand_json.exists() or cand_md.exists())
             self.assertEqual({f: f.read_bytes() for f in before}, before)
 
+    def test_a_sys_exit_inside_the_step_is_skipped_too_and_the_exit_status_is_unaffected(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            prod, before = self._outputs(d)
+            # In a child process, so a SystemExit that escaped the wrapper would show up as its exit status.
+            script = (
+                "import sys, pathlib\n"
+                f"sys.path[:0] = [{str(REPO_ROOT / 'model')!r}, {str(REPO_ROOT / 'tracker')!r}, {str(REPO_ROOT / 'data')!r}]\n"
+                "import score_week\n"
+                f"prod = pathlib.Path({str(prod)!r})\n"
+                "def step():\n"
+                "    score_week.candidate_outputs(prod)[0].write_text('{partial', encoding='utf-8')\n"
+                "    sys.exit(3)\n"
+                "ok = score_week.run_candidate_step(step, prod)\n"
+                "print('carried on', ok)\n")
+            proc = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, encoding="utf-8",
+                                  errors="replace")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("carried on False", proc.stdout)
+            self.assertIn(score_week.CANDIDATE_SKIPPED_TAG, proc.stderr)
+            self.assertIn("SystemExit: 3", proc.stderr)
+            self.assertFalse(score_week.candidate_outputs(prod)[0].exists())
+            self.assertEqual({f: f.read_bytes() for f in before}, before)
+
     def test_a_working_step_runs_and_reports_true(self):
         with tempfile.TemporaryDirectory() as d:
             prod, before = self._outputs(d)
