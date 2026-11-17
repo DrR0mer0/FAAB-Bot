@@ -116,7 +116,7 @@ Every arm trains on `labels_player_week_league` with the same hyperparameters as
 
 **Also reported, not decisive:** PR-AUC, precision@25, calibration (mean top-25 score against realized) and importances.
 
-**Live:** the candidate is the third tracked model from **2026 week 12 `thu`**. It never replaces production in 2026 unless decision 17 is amended in writing first. Weeks 15–17 are decided between production and shadow only, as already registered.
+**Live:** the candidate is the third tracked model from **2026 week 11 `thu`** (the first `log` run after the merge into `v2` on 2026-11-17; the draft said week 12 `thu`). It never replaces production in 2026 unless decision 17 is amended in writing first. Weeks 15–17 are decided between production and shadow only, as already registered.
 
 ## 5. Run order
 
@@ -187,3 +187,11 @@ It splits the Walker problem in two:
 - **Train/serve gap, stated up front.** Training sees probabilities built from designations; live runs see sharper ones built from ESPN and Yahoo as well. The gap is explicit and can be measured week by week, and that's the trade being made.
 - **Shown when it fires.** Next to a ranked player, a line such as "Walker likely out (ESPN Out, no practice all week) → about 45% of KC's RB touches open; Johnson is next in line." That's display only, and it's where free-text news fits later: in the explanation and the planned chat layer, not in the ranking.
 - **Test.** A pre-registered group test against v3's final model, with precision@10 per position and the label-mechanism check, on the same discipline as every other feature group.
+
+## 9. Outcome (2026-11-17)
+
+- **Dev picked `removed`.** `asof` beat it on pooled precision@10 (0.322 against 0.300) but was lower at RB (0.244 against 0.283) and WR (0.289 against 0.294).
+- **Test (2025):** `removed` 0.250 against `live` 0.244.
+- **Final model:** `removed`, trained 2010–2025.
+- **Records:** `evaluation/results/candidate_v3_dev.json` and `candidate_v3_test.json`; the model metadata is `odds_xgb_model_candidate_v3.meta.json`.
+- **Live (week 11, first check):** a starter whose newest weekly-roster row is `INA` counts as on his team, the same as in history.
