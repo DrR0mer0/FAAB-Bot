@@ -1265,6 +1265,157 @@
           "at_25": 0.3292307692307692
         }
       }
+    },
+    {
+      "season": 2026,
+      "week": 10,
+      "verified_at": "2026-11-17T15:52:43.934105+00:00",
+      "base_rate": 0.05385427666314678,
+      "base_rate_rosterable": {
+        "positions": [
+          "QB",
+          "RB",
+          "TE",
+          "WR"
+        ],
+        "n_eligible": 300,
+        "n_spiked": 51,
+        "rate": 0.17
+      },
+      "prediction_file": "predictions\\2026_week10.json",
+      "model": {
+        "path": "C:\\FAAB\\history\\odds_xgb_model_production.joblib",
+        "filename": "odds_xgb_model_production.joblib",
+        "git_commit": "7f21e5c966e0d82d049181e3965d661425e01643",
+        "role": "production"
+      },
+      "precision_at_10": {
+        "hits": 3,
+        "n": 10,
+        "precision": 0.3
+      },
+      "precision_at_25": {
+        "hits": 5,
+        "n": 25,
+        "precision": 0.2
+      },
+      "per_position": {
+        "k": 10,
+        "QB": {
+          "k": 10,
+          "hits": 2,
+          "n": 10,
+          "precision": 0.2,
+          "base_rate": 0.28125,
+          "n_eligible": 32,
+          "n_spiked": 9,
+          "lift": 0.7111111111111111
+        },
+        "RB": {
+          "k": 10,
+          "hits": 3,
+          "n": 10,
+          "precision": 0.3,
+          "base_rate": 0.17105263157894737,
+          "n_eligible": 76,
+          "n_spiked": 13,
+          "lift": 1.7538461538461538
+        },
+        "WR": {
+          "k": 10,
+          "hits": 2,
+          "n": 10,
+          "precision": 0.2,
+          "base_rate": 0.1951219512195122,
+          "n_eligible": 123,
+          "n_spiked": 24,
+          "lift": 1.025
+        },
+        "TE": {
+          "k": 10,
+          "hits": 1,
+          "n": 10,
+          "precision": 0.1,
+          "base_rate": 0.07246376811594203,
+          "n_eligible": 69,
+          "n_spiked": 5,
+          "lift": 1.3800000000000001
+        }
+      },
+      "n_dnp": 2,
+      "n_no_label": 0,
+      "lift_rosterable": {
+        "at_10": 1.764705882352941,
+        "at_25": 1.1764705882352942
+      },
+      "shadow": {
+        "prediction_file": "predictions\\2026_week10_shadow.json",
+        "model": {
+          "path": "C:\\FAAB\\history\\odds_xgb_model_production_10feature.joblib",
+          "filename": "odds_xgb_model_production_10feature.joblib",
+          "git_commit": "262a04fda4a39cb4c16e568f1d28034a399169e7",
+          "role": "superseded_production"
+        },
+        "precision_at_10": {
+          "hits": 3,
+          "n": 10,
+          "precision": 0.3
+        },
+        "precision_at_25": {
+          "hits": 5,
+          "n": 25,
+          "precision": 0.2
+        },
+        "per_position": {
+          "k": 10,
+          "QB": {
+            "k": 10,
+            "hits": 3,
+            "n": 10,
+            "precision": 0.3,
+            "base_rate": 0.28125,
+            "n_eligible": 32,
+            "n_spiked": 9,
+            "lift": 1.0666666666666667
+          },
+          "RB": {
+            "k": 10,
+            "hits": 4,
+            "n": 10,
+            "precision": 0.4,
+            "base_rate": 0.17105263157894737,
+            "n_eligible": 76,
+            "n_spiked": 13,
+            "lift": 2.3384615384615386
+          },
+          "WR": {
+            "k": 10,
+            "hits": 1,
+            "n": 10,
+            "precision": 0.1,
+            "base_rate": 0.1951219512195122,
+            "n_eligible": 123,
+            "n_spiked": 24,
+            "lift": 0.5125
+          },
+          "TE": {
+            "k": 10,
+            "hits": 2,
+            "n": 10,
+            "precision": 0.2,
+            "base_rate": 0.07246376811594203,
+            "n_eligible": 69,
+            "n_spiked": 5,
+            "lift": 2.7600000000000002
+          }
+        },
+        "n_dnp": 2,
+        "n_no_label": 0,
+        "lift_rosterable": {
+          "at_10": 1.764705882352941,
+          "at_25": 1.1764705882352942
+        }
+      }
     }
   ]
 }
